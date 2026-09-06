@@ -4,6 +4,7 @@ pub mod buildings;
 pub mod citygen;
 pub mod decals;
 pub mod facade;
+pub mod lots;
 pub mod markings;
 pub mod material;
 pub mod mayhem;
@@ -110,6 +111,7 @@ fn generate_city(
         &mut materials,
         &mut meshes,
     ));
+    commands.insert_resource(lots::build_assets(&mut meshes, &mut materials, &mut images));
     commands.insert_resource(vegetation::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(markings::build_assets(
         &mut meshes,

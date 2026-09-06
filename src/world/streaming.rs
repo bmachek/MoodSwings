@@ -145,6 +145,7 @@ pub struct BuildingKits<'w> {
     roofs: Res<'w, crate::world::rooftop::RoofKit>,
     shells: Res<'w, crate::world::shell::ShellKit>,
     signs: Res<'w, crate::world::signage::SignKit>,
+    lots: Res<'w, crate::world::lots::LotKit>,
 }
 
 pub fn update_streaming(
@@ -177,6 +178,7 @@ pub fn update_streaming(
         roofs: &kits.roofs,
         shells: &kits.shells,
         signs: &kits.signs,
+        lots: &kits.lots,
         seed: config.world_seed,
         lod_scale: config.graphics.lod_scale,
     };

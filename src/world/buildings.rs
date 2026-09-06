@@ -389,6 +389,7 @@ pub struct BlockContext<'a> {
     pub roofs: &'a RoofKit,
     pub shells: &'a ShellKit,
     pub signs: &'a crate::world::signage::SignKit,
+    pub lots: &'a crate::world::lots::LotKit,
     pub seed: u64,
     pub lod_scale: f32,
 }
@@ -440,6 +441,9 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
 
     for building in &block.buildings {
         spawn_building(commands, ctx, block, building, chunk);
+    }
+    for vacant in &block.vacants {
+        crate::world::lots::spawn_lot(commands, ctx.lots, ctx.signs, block, vacant, chunk);
     }
 }
 

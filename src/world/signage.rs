@@ -14,7 +14,6 @@
 //! Freundlichkeit.
 
 use bevy::image::Image;
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 
@@ -181,9 +180,23 @@ fn board_texture(plaque: &Plaque) -> Image {
     })
 }
 
+/// The filling station's board. Not a [`BuildingKind`] — a Tankstelle is a
+/// vacant-lot occupant with a canopy rather than a building — but it hangs
+/// the same kind of painted sign, so it lives in the same kit.
+fn tankstelle_plaque() -> Plaque {
+    Plaque {
+        title: "TANKSTELLE",
+        subline: None,
+        ink: [252, 250, 244, 255],
+        field: [206, 96, 22, 255],
+        letter: 0.58,
+    }
+}
+
 #[derive(Resource)]
 pub struct SignKit {
     boards: Vec<(BuildingKind, Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
+    tankstelle: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
 }
 
 impl SignKit {
@@ -195,6 +208,11 @@ impl SignKit {
             .iter()
             .find(|(k, ..)| *k == kind)
             .map(|(_, mesh, material, size)| (mesh, material, *size))
+    }
+
+    pub fn tankstelle(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
+        let (mesh, material, size) = &self.tankstelle;
+        (mesh, material, *size)
     }
 }
 
@@ -221,27 +239,20 @@ pub fn build_assets(
             )
         })
         .collect();
-    SignKit { boards }
-}
 
-/// The bundle for one hung board, minus its transform.
-pub fn board(
-    kit: &SignKit,
-    kind: BuildingKind,
-) -> Option<(
-    Mesh3d,
-    MeshMaterial3d<StandardMaterial>,
-    NotShadowCaster,
-    Vec2,
-)> {
-    kit.get(kind).map(|(mesh, material, size)| {
-        (
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(material.clone()),
-            NotShadowCaster,
-            size,
-        )
-    })
+    let plaque = tankstelle_plaque();
+    let size = board_size(&plaque);
+    let tankstelle = (
+        meshes.add(Rectangle::new(size.x, size.y)),
+        materials.add(StandardMaterial {
+            base_color_texture: Some(images.add(board_texture(&plaque))),
+            perceptual_roughness: 0.72,
+            ..default()
+        }),
+        size,
+    );
+
+    SignKit { boards, tankstelle }
 }
 
 #[cfg(test)]
