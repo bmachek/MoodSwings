@@ -12,6 +12,7 @@ pub mod road;
 pub mod roadgraph;
 pub mod rooftop;
 pub mod shell;
+pub mod signage;
 pub mod streaming;
 pub mod streetlights;
 pub mod texture;
@@ -104,6 +105,11 @@ fn generate_city(
     commands.insert_resource(rooftop::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(shell::build_assets(&mut meshes));
     commands.insert_resource(decals::build_assets(&mut images, &mut wear));
+    commands.insert_resource(signage::build_assets(
+        &mut images,
+        &mut materials,
+        &mut meshes,
+    ));
     commands.insert_resource(vegetation::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(markings::build_assets(
         &mut meshes,

@@ -135,18 +135,28 @@ impl Default for StreamTimer {
     }
 }
 
+/// The building-side asset kits, bundled: Bevy caps a system at sixteen
+/// parameters and `update_streaming` hit the ceiling the day the signs
+/// arrived. Grouping the kits that only exist to be handed to
+/// [`BlockContext`](crate::world::buildings::BlockContext) is the honest cut.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BuildingKits<'w> {
+    assets: Res<'w, CityAssets>,
+    roofs: Res<'w, crate::world::rooftop::RoofKit>,
+    shells: Res<'w, crate::world::shell::ShellKit>,
+    signs: Res<'w, crate::world::signage::SignKit>,
+}
+
 pub fn update_streaming(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<GameConfig>,
     city: Res<City>,
     index: Res<ChunkIndex>,
-    assets: Res<CityAssets>,
+    kits: BuildingKits,
     paint: Res<MarkingAssets>,
     props: Res<PropAssets>,
     foliage: Res<crate::world::vegetation::FoliageKit>,
-    roofs: Res<crate::world::rooftop::RoofKit>,
-    shells: Res<crate::world::shell::ShellKit>,
     wear: Res<crate::world::decals::WearKit>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
@@ -163,9 +173,10 @@ pub fn update_streaming(
 
     let arriving: Vec<IVec2> = desired.difference(&active.0).copied().collect();
     let ctx = crate::world::buildings::BlockContext {
-        assets: &assets,
-        roofs: &roofs,
-        shells: &shells,
+        assets: &kits.assets,
+        roofs: &kits.roofs,
+        shells: &kits.shells,
+        signs: &kits.signs,
         seed: config.world_seed,
         lod_scale: config.graphics.lod_scale,
     };

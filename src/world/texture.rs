@@ -34,6 +34,65 @@ const FACADE_SIZE: u32 = 512;
 const MASK_SIZE: u32 = 256;
 const GROUND_SIZE: u32 = 256;
 
+// ----------------------------------------------------------------- font ----
+
+/// Glyphs, five wide and seven tall, most significant bit leftmost.
+///
+/// Indexed by [`glyph`]. Digits first so that `'0'..='9'` maps straight onto
+/// the front of the table. This began life as the number-plate font and moved
+/// into the shared kit when the buildings wanted signs: a 5×7 cell is the
+/// smallest that still reads as letters instead of noise, and one hand-drawn
+/// alphabet is exactly enough of them.
+#[rustfmt::skip]
+pub const FONT: [[u8; 7]; 36] = [
+    [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110], // 0
+    [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // 1
+    [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111], // 2
+    [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110], // 3
+    [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010], // 4
+    [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110], // 5
+    [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110], // 6
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000], // 7
+    [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110], // 8
+    [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100], // 9
+    [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001], // A
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110], // B
+    [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110], // C
+    [0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100], // D
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111], // E
+    [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000], // F
+    [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111], // G
+    [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001], // H
+    [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110], // I
+    [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100], // J
+    [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001], // K
+    [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111], // L
+    [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001], // M
+    [0b10001, 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001], // N
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // O
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000], // P
+    [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101], // Q
+    [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001], // R
+    [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110], // S
+    [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100], // T
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110], // U
+    [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100], // V
+    [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001], // W
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001], // X
+    [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100], // Y
+    [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111], // Z
+];
+
+/// The rows of one character, or a blank cell for anything not in the font —
+/// which is what makes a space a space.
+pub fn glyph(character: u8) -> [u8; 7] {
+    match character {
+        b'0'..=b'9' => FONT[(character - b'0') as usize],
+        b'A'..=b'Z' => FONT[(character - b'A') as usize + 10],
+        _ => [0; 7],
+    }
+}
+
 // ---------------------------------------------------------------- noise ----
 
 fn hash(x: u32, y: u32, seed: u32) -> u32 {
@@ -831,5 +890,20 @@ mod tests {
             lit < total / 2,
             "more than half the facade glowing is not a building, it is a lamp"
         );
+    }
+
+    #[test]
+    fn every_glyph_is_drawn_and_none_of_them_overflow_the_cell() {
+        // Five bits wide, so bit 5 and up must be clear — a stray bit there
+        // does not fail visibly, it just bleeds a pixel into the next letter.
+        for (index, rows) in FONT.iter().enumerate() {
+            assert!(rows.iter().any(|&row| row != 0), "glyph {index} is blank");
+            for (line, &row) in rows.iter().enumerate() {
+                assert!(
+                    row < 0b100000,
+                    "glyph {index} row {line} is wider than five cells"
+                );
+            }
+        }
     }
 }
