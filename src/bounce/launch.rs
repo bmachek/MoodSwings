@@ -57,19 +57,42 @@ pub struct KnockedDown {
     pub left: f32,
 }
 
-/// Throws somebody off their feet.
+/// On anybody who is never knocked off their feet.
+///
+/// A throw still lands in full — being punted across a junction is the game —
+/// but rotation stays locked, so the flight is taken bolt upright and ends
+/// mid-stride, dignity intact. Worn by the player: the camera is bolted a
+/// metre and a half above their navel, and a view that cartwheeled with its
+/// owner was motion sickness rather than comedy. A marker rather than a
+/// player check, because sooner or later some citizen will be too dignified
+/// to tumble too.
+#[derive(Component)]
+pub struct NeverTumbles;
+
+/// Throws somebody off their feet — or, if they [`NeverTumbles`], merely off
+/// the ground.
 ///
 /// The one way anybody in this city is ever knocked over, whether it was a car
 /// that did it or a neighbour with a score to settle. Kept in one place because
-/// the three components have to come off and go back on together: with
-/// `LockedAxes` left on, a launched flummi slides along the pavement bolt
-/// upright, and without [`KnockedDown`] nothing ever stands it back up.
-pub fn launch(commands: &mut Commands, victim: Entity, velocity: &mut LinearVelocity, throw: Vec3) {
+/// the components have to come off and go back on together: with `LockedAxes`
+/// left on, a launched flummi slides along the pavement bolt upright, and
+/// without [`KnockedDown`] nothing ever stands it back up. The steadfast keep
+/// their `LockedAxes` but take [`KnockedDown`] all the same — it is the
+/// recovery timer that hands control back, and the shield that stops a car
+/// resting against somebody launching them sixty times a second.
+pub fn launch(
+    commands: &mut Commands,
+    victim: Entity,
+    velocity: &mut LinearVelocity,
+    throw: Vec3,
+    tumbles: bool,
+) {
     velocity.0 = throw;
-    commands
-        .entity(victim)
-        .insert((KnockedDown { left: DOWN_TIME }, Launched))
-        .remove::<LockedAxes>();
+    let mut victim = commands.entity(victim);
+    victim.insert((KnockedDown { left: DOWN_TIME }, Launched));
+    if tumbles {
+        victim.remove::<LockedAxes>();
+    }
 }
 
 /// Upward part of any throw, in m/s. Exposed because a ram wants the same arc
@@ -135,7 +158,7 @@ fn run_over_anybody(
     mut commands: Commands,
     vehicles: Query<(&Transform, &LinearVelocity, &VehicleSpec), With<Vehicle>>,
     mut victims: Query<
-        (Entity, &Transform, &mut LinearVelocity),
+        (Entity, &Transform, &mut LinearVelocity, Has<NeverTumbles>),
         (
             With<Bouncer>,
             Without<Vehicle>,
@@ -155,7 +178,7 @@ fn run_over_anybody(
         return;
     }
 
-    for (victim, transform, mut velocity) in &mut victims {
+    for (victim, transform, mut velocity, steadfast) in &mut victims {
         for (car, car_velocity, spec) in &moving {
             let local = car.rotation.inverse() * (transform.translation - car.translation);
             if !brushes(local, spec.half_extents) {
@@ -189,6 +212,7 @@ fn run_over_anybody(
                 victim,
                 &mut velocity,
                 *away * (closing * KNOCKBACK) + Vec3::Y * LAUNCH_UP,
+                !steadfast,
             );
 
             info!("run over at {closing:.1} m/s, launched with {wallop:.1} m/s of wallop");
@@ -329,6 +353,53 @@ mod tests {
         assert!(
             fast > slow * 2.0,
             "and one at 20 m/s sends them a great deal further"
+        );
+    }
+
+    fn launched(tumbles: bool) -> (App, Entity) {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let victim = app
+            .world_mut()
+            .spawn((LockedAxes::ROTATION_LOCKED, LinearVelocity::ZERO))
+            .id();
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut velocities: Query<&mut LinearVelocity>| {
+                    let mut velocity = velocities.get_mut(victim).unwrap();
+                    launch(&mut commands, victim, &mut velocity, Vec3::Y * 5.0, tumbles);
+                },
+            )
+            .unwrap();
+        (app, victim)
+    }
+
+    #[test]
+    fn the_steadfast_fly_without_ever_tipping_over() {
+        let (app, victim) = launched(false);
+        let world = app.world();
+        assert!(
+            world.get::<LockedAxes>(victim).is_some(),
+            "rotation must stay locked on somebody who never tumbles"
+        );
+        assert!(
+            world.get::<KnockedDown>(victim).is_some(),
+            "but the recovery timer must run, or control never comes back"
+        );
+        assert!(world.get::<Launched>(victim).is_some());
+        assert_eq!(
+            world.get::<LinearVelocity>(victim).unwrap().0,
+            Vec3::Y * 5.0,
+            "the throw itself is not softened"
+        );
+    }
+
+    #[test]
+    fn everybody_else_goes_head_over_heels() {
+        let (app, victim) = launched(true);
+        assert!(
+            app.world().get::<LockedAxes>(victim).is_none(),
+            "a tumbling victim must be free to cartwheel"
         );
     }
 

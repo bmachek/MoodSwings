@@ -83,9 +83,12 @@ fn spawn_player(
         Visibility::default(),
         RigidBody::Dynamic,
         Collider::capsule(CAPSULE_RADIUS, CAPSULE_LENGTH),
-        // Upright while in charge of themselves. `bounce::launch` takes this
-        // off when somebody is thrown, which is when tumbling is the point.
+        // Upright, and — unlike the crowd — upright even mid-launch: the car
+        // still throws the player across the junction, but the camera is
+        // bolted to this body and a view that cartwheels with it is motion
+        // sickness rather than comedy. The crowd does the tumbling.
         LockedAxes::ROTATION_LOCKED,
+        crate::bounce::launch::NeverTumbles,
         Bouncer::new(STAND_HEIGHT),
         // An ordinary citizen rather than a special case, so that the player's
         // own face sours in a bad-tempered crowd and cheers up in a good one.

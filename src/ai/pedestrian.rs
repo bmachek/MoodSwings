@@ -35,10 +35,9 @@ use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
 use crate::world::roadgraph::NodeId;
 
-const POPULATION: usize = 45;
-const SPAWN_MIN: f32 = 25.0;
-const SPAWN_MAX: f32 = 110.0;
-const DESPAWN: f32 = 165.0;
+// Population, spawn ring, speeds and personal space are `GameConfig::crowd`
+// now: the dev panel tunes a crowd, and archetype work will want to lean on
+// the same dials. What stays here is geometry.
 
 /// How far past the kerb the pavement centre sits.
 const PAVEMENT_OFFSET: f32 = 1.9;
@@ -46,12 +45,6 @@ const RADIUS: f32 = 0.32;
 const HEIGHT: f32 = 1.05;
 /// Distance from the capsule's centre to its lowest point.
 const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
-
-const WALK_SPEED: f32 = 1.5;
-pub const FLEE_SPEED: f32 = 5.4;
-/// A vehicle closer than this and moving fast enough is worth running from.
-const SCARE_RADIUS: f32 = 14.0;
-const SCARE_SPEED: f32 = 6.0;
 
 /// Pace multiplier at the angry end of the scale: a Wutbürger at rock bottom
 /// storms down the pavement half again as fast as they would stroll it.
@@ -148,6 +141,12 @@ impl Plugin for PedestrianPlugin {
                 (
                     maintain_population,
                     walk_pavements,
+                    // After the intent, before anything reads it: the lean
+                    // away from the neighbours is part of walking, not an
+                    // override, so it lives inside `Walking` rather than
+                    // after it — a grudge or a flee that runs later still
+                    // wins outright, which is exactly right for both.
+                    give_way,
                     super::figure::pace_pedestrians,
                     super::figure::pace_player,
                     super::figure::animate,
@@ -205,6 +204,7 @@ fn maintain_population(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<PedestrianTimer>,
+    config: Res<GameConfig>,
     city: Res<City>,
     assets: Res<PedestrianAssets>,
     figures: Res<super::figure::FigureAssets>,
@@ -220,16 +220,17 @@ fn maintain_population(
     }
     let Ok(player) = players.single() else { return };
     let focus = player.translation.xz();
+    let crowd = &config.crowd;
 
     let mut alive = 0usize;
     for (entity, transform) in &pedestrians {
-        if transform.translation.xz().distance(focus) > DESPAWN {
+        if transform.translation.xz().distance(focus) > crowd.despawn {
             commands.entity(entity).despawn();
         } else {
             alive += 1;
         }
     }
-    if alive >= POPULATION {
+    if alive >= crowd.population {
         return;
     }
 
@@ -242,14 +243,14 @@ fn maintain_population(
                 .node(edge.a)
                 .pos
                 .midpoint(city.graph.node(edge.b).pos);
-            (SPAWN_MIN..SPAWN_MAX).contains(&midpoint.distance(focus))
+            (crowd.spawn_min..crowd.spawn_max).contains(&midpoint.distance(focus))
         })
         .collect();
     if candidates.is_empty() {
         return;
     }
 
-    while alive < POPULATION {
+    while alive < crowd.population {
         let edge = candidates[rng.0.random_range(0..candidates.len())];
         let (from, to) = if rng.0.random_range(0.0..1.0) < 0.5 {
             (edge.a, edge.b)
@@ -284,7 +285,9 @@ fn maintain_population(
                 from,
                 to,
                 side,
-                speed: rng.0.random_range(1.1..1.9),
+                speed: rng
+                    .0
+                    .random_range(crowd.walk_speed - 0.4..crowd.walk_speed + 0.4),
                 panic: 0.0,
                 current_speed: 0.0,
             },
@@ -321,11 +324,12 @@ fn walk_pavements(
     >,
 ) {
     let dt = time.delta_secs();
+    let crowd = &config.crowd;
 
     // Anything moving fast enough to be worth running from.
     let threats: Vec<(Vec2, f32)> = vehicles
         .iter()
-        .filter(|(_, velocity)| velocity.length() > SCARE_SPEED)
+        .filter(|(_, velocity)| velocity.length() > crowd.scare_speed)
         .map(|(transform, velocity)| (transform.translation.xz(), velocity.length()))
         .collect();
 
@@ -379,7 +383,7 @@ fn walk_pavements(
         pedestrian.panic = (pedestrian.panic - dt).max(0.0);
         for (threat, _) in &threats {
             let away = position - *threat;
-            if away.length() < SCARE_RADIUS {
+            if away.length() < crowd.scare_radius {
                 pedestrian.panic = 1.6;
                 heading = (heading + away.normalize_or_zero() * 2.0).normalize_or_zero();
             }
@@ -387,9 +391,9 @@ fn walk_pavements(
 
         let speed = if pedestrian.panic > 0.0 {
             // Panic overrides temperament: a trudge does not outrun a car.
-            FLEE_SPEED
+            crowd.flee_speed
         } else {
-            pedestrian.speed.min(WALK_SPEED * 1.3) * stride(mood.value)
+            pedestrian.speed.min(crowd.walk_speed * 1.3) * stride(mood.value)
         };
         // The mood is in the body as well as on the face: the hop the bounce
         // controller takes at the bottom of every arc is scaled here, every
@@ -424,6 +428,40 @@ fn walk_pavements(
             speed,
             panic
         );
+    }
+}
+
+/// Leans every citizen's intent away from the neighbours crowding it.
+///
+/// The first crowd-on-crowd steering this city has had: without it two
+/// flummis walking the same pavement the opposite way met chest to chest and
+/// left the solver to grind them past each other. The lean bends paths a
+/// stride early instead, and it is deliberately *only* a lean — see
+/// `CrowdConfig::separation_radius` for why contact must stay possible.
+///
+/// One query, iterated twice — a read pass into a snapshot, then the write
+/// pass — rather than two queries that both touch `Transform`, which is the
+/// panic the schedule trap in CLAUDE.md is about.
+fn give_way(
+    config: Res<GameConfig>,
+    mut pedestrians: Query<(&Transform, &mut Bouncer), (With<Pedestrian>, Without<Launched>)>,
+) {
+    let crowd = &config.crowd;
+    if crowd.separation_push <= 0.0 {
+        return;
+    }
+
+    let positions: Vec<Vec2> = pedestrians
+        .iter()
+        .map(|(transform, _)| transform.translation.xz())
+        .collect();
+
+    for (transform, mut bouncer) in &mut pedestrians {
+        let me = transform.translation.xz();
+        let push = super::steering::separation(me, &positions, crowd.separation_radius);
+        if push != Vec2::ZERO {
+            bouncer.desired += push * crowd.separation_push;
+        }
     }
 }
 
@@ -465,12 +503,13 @@ mod tests {
     fn no_mood_walks_anybody_faster_than_a_flee_or_a_chase() {
         // Storming is a manner, not an escape: a furious stroller must stay
         // catchable by a grudge and slower than somebody actually running.
+        let crowd = GameConfig::default().crowd;
         let fastest = (0..=40)
             .map(|step| stride(-1.0 + step as f32 / 20.0))
             .fold(0.0f32, f32::max)
-            * WALK_SPEED
+            * crowd.walk_speed
             * 1.3;
-        assert!(fastest < FLEE_SPEED);
+        assert!(fastest < crowd.flee_speed);
         assert!(fastest < GameConfig::default().mood.grudge_speed);
     }
 

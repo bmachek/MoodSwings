@@ -95,6 +95,9 @@ fn tuning_panel(
             bounce_section(ui, &mut config);
 
             ui.separator();
+            crowd_section(ui, &mut config, &crowd);
+
+            ui.separator();
             mood_section(ui, &mut commands, &mut config, &mut tempers, &city, &crowd);
 
             ui.separator();
@@ -153,6 +156,33 @@ fn bounce_section(ui: &mut egui::Ui, config: &mut GameConfig) {
     ui.add(egui::Slider::new(&mut b.player_hop_scale, 0.0..=1.5).text("player hop"));
     ui.add(egui::Slider::new(&mut b.npc_spring_max, 1.0..=2.5).text("npc spring max"));
     ui.add(egui::Slider::new(&mut b.squash, 0.0..=0.8).text("squash"));
+}
+
+/// The crowd's dials, and how many of it there currently are.
+///
+/// Population and the spawn ring only apply to flummis spawned from now on —
+/// the count converges within a couple of `maintain_population` ticks, so no
+/// re-roll button is needed here. The separation pair is live everywhere at
+/// once, which is what makes it tunable at all: watch a busy pavement while
+/// dragging it and the moment the crowd stops bopping is the moment it has
+/// been pushed too far.
+fn crowd_section(
+    ui: &mut egui::Ui,
+    config: &mut GameConfig,
+    crowd: &Query<Entity, With<Pedestrian>>,
+) {
+    ui.label(egui::RichText::new("crowd").strong());
+    ui.label(format!("{} walking", crowd.iter().count()));
+
+    let c = &mut config.crowd;
+    let mut population = c.population as u32;
+    ui.add(egui::Slider::new(&mut population, 0..=200).text("population"));
+    c.population = population as usize;
+    ui.add(egui::Slider::new(&mut c.walk_speed, 0.5..=4.0).text("walk m/s"));
+    ui.add(egui::Slider::new(&mut c.flee_speed, 2.0..=10.0).text("flee m/s"));
+    ui.add(egui::Slider::new(&mut c.scare_radius, 2.0..=40.0).text("scare m"));
+    ui.add(egui::Slider::new(&mut c.separation_radius, 0.0..=3.0).text("elbow room m"));
+    ui.add(egui::Slider::new(&mut c.separation_push, 0.0..=4.0).text("give way m/s"));
 }
 
 fn mood_section(
