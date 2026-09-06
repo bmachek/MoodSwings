@@ -107,12 +107,78 @@ pub struct Street {
     pub arterial: bool,
 }
 
+/// What a building is for.
+///
+/// Two regimes share the enum. The common kinds are a pure function of
+/// (seed, footprint) — see [`common_kind`] — so assigning them draws nothing
+/// from any stream and cannot move a single lot, height or palette that
+/// `stream::BUILDINGS` already decided. The civic kinds are stamped on by
+/// [`zone_civics`], a pass over the *finished* layout with its own
+/// `stream::ZONING`, for the same reason: a new civic building must never
+/// reshuffle the city around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuildingKind {
+    Apartments,
+    Offices,
+    Supermarket,
+    Restaurant,
+    Hotel,
+    // Civic, from here on: one-offs the zoning pass places.
+    TownHall,
+    FireStation,
+    /// A city with no police still has the building. The sign explains:
+    /// „wegen anhaltender Freundlichkeit geschlossen".
+    PoliceStation,
+    Barracks,
+    ParkingGarage,
+}
+
+impl BuildingKind {
+    /// Placed by the zoning pass rather than the common draw.
+    pub fn is_civic(self) -> bool {
+        matches!(
+            self,
+            BuildingKind::TownHall
+                | BuildingKind::FireStation
+                | BuildingKind::PoliceStation
+                | BuildingKind::Barracks
+                | BuildingKind::ParkingGarage
+        )
+    }
+}
+
+/// What a lot the vacancy roll left empty is used for.
+///
+/// Vacant lots used to be nothing at all — the roll simply dropped them, and
+/// the city was pocked with bare paving. The roll is unchanged (it draws from
+/// `stream::BUILDINGS`, and moving it would reshuffle every lot downstream);
+/// what changed is that the lot is now *recorded*, with a purpose derived from
+/// its own footprint hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VacantUse {
+    ParkingLot,
+    /// Only on lots fronting an arterial: a filling station with no traffic
+    /// past its door is a lemonade stand.
+    GasStation,
+    /// A basketball court or kickabout cage — the street-sports venue.
+    Court,
+    /// Genuinely nothing. A city needs a few.
+    Yard,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VacantLot {
+    pub rect: Rect,
+    pub purpose: VacantUse,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Building {
     pub footprint: Rect,
     pub height: f32,
     /// Index into the district's material palette.
     pub palette: u8,
+    pub kind: BuildingKind,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +187,10 @@ pub struct Block {
     pub area: Rect,
     pub district: District,
     pub buildings: Vec<Building>,
+    /// Lots the vacancy roll left empty, now put to use.
+    pub vacants: Vec<VacantLot>,
+    /// Whether each bounding street is an arterial: -x, +x, -z, +z.
+    pub arterial: [bool; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +230,13 @@ impl CityLayout {
                 mix(building.footprint.min.x);
                 mix(building.footprint.min.y);
                 mix(building.height);
+                // Deliberately in the digest: a zoning change is a different
+                // city, and the determinism tests should say so.
+                mix(building.kind as u8 as f32);
+            }
+            for vacant in &b.vacants {
+                mix(vacant.rect.min.x);
+                mix(vacant.purpose as u8 as f32);
             }
         }
         h
@@ -172,7 +249,8 @@ pub fn generate(seed: u64, half_extent: f32) -> CityLayout {
     let z_streets = streets(&mut road_rng, half_extent);
 
     let graph = build_graph(&x_streets, &z_streets);
-    let blocks = build_blocks(seed, &x_streets, &z_streets);
+    let mut blocks = build_blocks(seed, &x_streets, &z_streets);
+    zone_civics(seed, &mut blocks);
 
     CityLayout {
         seed,
@@ -285,11 +363,15 @@ fn build_blocks(seed: u64, x_streets: &[Street], z_streets: &[Street]) -> Vec<Bl
             }
 
             let district = district_for(area.center(), &mut rng);
-            let buildings = lay_out_buildings(area, district, &mut building_rng);
+            let arterial = [left.arterial, right.arterial, near.arterial, far.arterial];
+            let (buildings, vacants) =
+                lay_out_buildings(seed, area, district, arterial, &mut building_rng);
             blocks.push(Block {
                 area,
                 district,
                 buildings,
+                vacants,
+                arterial,
             });
         }
     }
@@ -311,14 +393,20 @@ fn district_for(center: Vec2, rng: &mut ChaCha8Rng) -> District {
     }
 }
 
-fn lay_out_buildings(area: Rect, district: District, rng: &mut ChaCha8Rng) -> Vec<Building> {
+fn lay_out_buildings(
+    seed: u64,
+    area: Rect,
+    district: District,
+    arterial: [bool; 4],
+    rng: &mut ChaCha8Rng,
+) -> (Vec<Building>, Vec<VacantLot>) {
     if district == District::Park {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     let buildable = area.inset(SIDEWALK_WIDTH);
     if !buildable.is_valid() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     let mut lots = Vec::new();
@@ -327,24 +415,256 @@ fn lay_out_buildings(area: Rect, district: District, rng: &mut ChaCha8Rng) -> Ve
     let (min_h, max_h) = district.height_range();
     let vacancy = district.vacancy();
 
-    lots.into_iter()
-        .filter_map(|lot| {
-            if rng.random_range(0.0..1.0) < vacancy {
-                return None;
-            }
-            // Setback keeps neighbours from sharing a face, so the massing
-            // still reads as separate buildings from street level.
-            let footprint = lot.inset(rng.random_range(0.6..2.2));
-            if !footprint.is_valid() {
-                return None;
-            }
-            Some(Building {
-                footprint,
-                height: rng.random_range(min_h..max_h),
-                palette: rng.random_range(0..PALETTE_SIZE),
-            })
+    let mut buildings = Vec::new();
+    let mut vacants = Vec::new();
+    for lot in lots {
+        // The vacancy roll is unchanged and stays in this stream: moving or
+        // skipping it would reshuffle every lot, height and palette after it.
+        if rng.random_range(0.0..1.0) < vacancy {
+            vacants.push(VacantLot {
+                rect: lot,
+                purpose: vacant_purpose(seed, &lot, &buildable, arterial),
+            });
+            continue;
+        }
+        // Setback keeps neighbours from sharing a face, so the massing
+        // still reads as separate buildings from street level.
+        let footprint = lot.inset(rng.random_range(0.6..2.2));
+        if !footprint.is_valid() {
+            continue;
+        }
+        buildings.push(Building {
+            footprint,
+            height: rng.random_range(min_h..max_h),
+            palette: rng.random_range(0..PALETTE_SIZE),
+            kind: common_kind(seed, &footprint, district),
+        });
+    }
+    (buildings, vacants)
+}
+
+/// A deterministic roll in 0..1 for one footprint, salted per question.
+///
+/// The `rooftop::seed_for` idea: quantise the centre to a centimetre so a
+/// float that comes back from generation one ulp different cannot flip the
+/// answer, then hash. Salted so that "what kind of building" and "what is
+/// this vacant lot for" are independent questions about the same rectangle.
+fn footprint_roll(seed: u64, rect: &Rect, salt: u64) -> f32 {
+    let center = rect.center();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ seed ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    for v in [
+        (center.x * 100.0).round() as i64 as u64,
+        (center.y * 100.0).round() as i64 as u64,
+    ] {
+        h ^= v;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+        h ^= h >> 29;
+    }
+    // The top bits are the well-mixed ones.
+    (h >> 40) as f32 / (1u64 << 24) as f32
+}
+
+mod salt {
+    pub const KIND: u64 = 1;
+    pub const VACANT: u64 = 2;
+}
+
+/// The everyday mix of a district, as (kind, share) with shares summing to 1.
+///
+/// Downtown is offices with hotels among them; the further out, the more of
+/// the city is simply lived in. Corner shops and restaurants are seasoned
+/// through every district rather than zoned into one, because a supermarket
+/// you can never stumble across is a supermarket that may as well not exist.
+fn common_kinds(district: District) -> &'static [(BuildingKind, f32)] {
+    use BuildingKind::*;
+    match district {
+        District::Downtown => &[
+            (Offices, 0.50),
+            (Hotel, 0.15),
+            (Apartments, 0.15),
+            (Restaurant, 0.10),
+            (Supermarket, 0.10),
+        ],
+        District::Midtown => &[
+            (Apartments, 0.38),
+            (Offices, 0.30),
+            (Restaurant, 0.12),
+            (Supermarket, 0.12),
+            (Hotel, 0.08),
+        ],
+        District::Residential => &[
+            (Apartments, 0.68),
+            (Supermarket, 0.12),
+            (Restaurant, 0.10),
+            (Offices, 0.06),
+            (Hotel, 0.04),
+        ],
+        District::Industrial => &[
+            (Offices, 0.45),
+            (Supermarket, 0.20),
+            (Apartments, 0.20),
+            (Restaurant, 0.10),
+            (Hotel, 0.05),
+        ],
+        District::Park => &[(Apartments, 1.0)],
+    }
+}
+
+/// The common kind of one building: a pure function of (seed, footprint).
+pub fn common_kind(seed: u64, footprint: &Rect, district: District) -> BuildingKind {
+    let mut roll = footprint_roll(seed, footprint, salt::KIND);
+    for (kind, share) in common_kinds(district) {
+        if roll < *share {
+            return *kind;
+        }
+        roll -= share;
+    }
+    BuildingKind::Apartments
+}
+
+/// What one vacant lot is for: a pure function of (seed, lot).
+fn vacant_purpose(seed: u64, lot: &Rect, buildable: &Rect, arterial: [bool; 4]) -> VacantUse {
+    let size = lot.size();
+    let roll = footprint_roll(seed, lot, salt::VACANT);
+
+    // Fronting means the lot's own edge lies on the buildable perimeter on a
+    // side whose street is an arterial — subdivision cuts lots flush to the
+    // perimeter, so touching it is fronting it.
+    let eps = 0.1;
+    let fronts_arterial = (arterial[0] && lot.min.x < buildable.min.x + eps)
+        || (arterial[1] && lot.max.x > buildable.max.x - eps)
+        || (arterial[2] && lot.min.y < buildable.min.y + eps)
+        || (arterial[3] && lot.max.y > buildable.max.y - eps);
+
+    if fronts_arterial && size.min_element() > 12.0 && roll < 0.30 {
+        return VacantUse::GasStation;
+    }
+    if size.min_element() > 14.0 && roll > 0.72 {
+        return VacantUse::Court;
+    }
+    if size.min_element() > 8.0 && roll > 0.30 {
+        return VacantUse::ParkingLot;
+    }
+    VacantUse::Yard
+}
+
+/// Stamps the civic one-offs onto the finished layout.
+///
+/// Runs after every lot, height and palette is already drawn, with its own
+/// `stream::ZONING` — so adding a civic kind, or retuning how many there are,
+/// changes *which buildings get a new sign* and nothing else about the city.
+/// Heights are rewritten for the claimed buildings, because a fire station
+/// drawn as a 40 m slab is a fire station nobody recognises.
+fn zone_civics(seed: u64, blocks: &mut [Block]) {
+    use BuildingKind::*;
+    let mut rng = stream_for(seed, stream::ZONING);
+
+    // Every candidate, largest footprint first. Ties broken by position so
+    // the order — and with it every claim below — is fully deterministic.
+    let mut candidates: Vec<(usize, usize)> = blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, block)| (0..block.buildings.len()).map(move |bj| (bi, bj)))
+        .collect();
+    let area_of = |blocks: &[Block], (bi, bj): (usize, usize)| {
+        let s = blocks[bi].buildings[bj].footprint.size();
+        s.x * s.y
+    };
+    candidates.sort_by(|a, b| {
+        let (aa, ab) = (area_of(blocks, *a), area_of(blocks, *b));
+        ab.total_cmp(&aa).then_with(|| {
+            let (fa, fb) = (
+                blocks[a.0].buildings[a.1].footprint.min,
+                blocks[b.0].buildings[b.1].footprint.min,
+            );
+            fa.x.total_cmp(&fb.x).then(fa.y.total_cmp(&fb.y))
         })
-        .collect()
+    });
+
+    let mut claimed: Vec<(usize, usize)> = Vec::new();
+    let claim = |blocks: &mut [Block],
+                 claimed: &mut Vec<(usize, usize)>,
+                 rng: &mut ChaCha8Rng,
+                 kind: BuildingKind,
+                 count: usize,
+                 districts: &[District],
+                 heights: std::ops::Range<f32>,
+                 spread: f32| {
+        let mut placed: Vec<Vec2> = Vec::new();
+        for &(bi, bj) in &candidates {
+            if placed.len() >= count {
+                break;
+            }
+            if claimed.contains(&(bi, bj)) || !districts.contains(&blocks[bi].district) {
+                continue;
+            }
+            let at = blocks[bi].buildings[bj].footprint.center();
+            if placed.iter().any(|p| p.distance(at) < spread) {
+                continue;
+            }
+            let building = &mut blocks[bi].buildings[bj];
+            building.kind = kind;
+            building.height = rng.random_range(heights.clone());
+            claimed.push((bi, bj));
+            placed.push(at);
+        }
+    };
+
+    use District::*;
+    // The town hall is the largest thing downtown; everything civic after it
+    // works down the same size-ordered list, so prominence follows purpose.
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        TownHall,
+        1,
+        &[Downtown],
+        20.0..28.0,
+        0.0,
+    );
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        PoliceStation,
+        1,
+        &[Downtown, Midtown],
+        9.0..13.0,
+        0.0,
+    );
+    // Three fire stations, spread out — a single one would leave most of the
+    // city to burn, if anything here could burn.
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        FireStation,
+        3,
+        &[Midtown, Residential, Industrial],
+        8.0..11.0,
+        350.0,
+    );
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        Barracks,
+        1,
+        &[Industrial],
+        6.0..9.0,
+        0.0,
+    );
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        ParkingGarage,
+        4,
+        &[Downtown, Midtown],
+        14.0..20.0,
+        250.0,
+    );
 }
 
 /// Number of material variants per district.
@@ -468,6 +788,121 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_same_seed_zones_the_same_city() {
+        let (a, b) = (generate(7, 800.0), generate(7, 800.0));
+        let kinds = |city: &CityLayout| -> Vec<BuildingKind> {
+            city.blocks
+                .iter()
+                .flat_map(|block| block.buildings.iter().map(|b| b.kind))
+                .collect()
+        };
+        let purposes = |city: &CityLayout| -> Vec<VacantUse> {
+            city.blocks
+                .iter()
+                .flat_map(|block| block.vacants.iter().map(|v| v.purpose))
+                .collect()
+        };
+        assert_eq!(kinds(&a), kinds(&b));
+        assert_eq!(purposes(&a), purposes(&b));
+    }
+
+    #[test]
+    fn there_is_one_town_hall_and_it_stands_downtown() {
+        let city = layout();
+        let halls: Vec<_> = city
+            .blocks
+            .iter()
+            .filter(|block| {
+                block
+                    .buildings
+                    .iter()
+                    .any(|b| b.kind == BuildingKind::TownHall)
+            })
+            .collect();
+        assert_eq!(halls.len(), 1, "a city has exactly one Rathaus");
+        assert_eq!(halls[0].district, District::Downtown);
+    }
+
+    #[test]
+    fn the_civic_register_is_complete() {
+        let city = layout();
+        let count = |kind: BuildingKind| -> usize {
+            city.blocks
+                .iter()
+                .flat_map(|block| &block.buildings)
+                .filter(|b| b.kind == kind)
+                .count()
+        };
+        assert_eq!(count(BuildingKind::TownHall), 1);
+        assert_eq!(count(BuildingKind::PoliceStation), 1);
+        assert_eq!(count(BuildingKind::FireStation), 3);
+        assert_eq!(count(BuildingKind::Barracks), 1);
+        assert_eq!(count(BuildingKind::ParkingGarage), 4);
+    }
+
+    #[test]
+    fn a_gas_station_only_stands_on_an_arterial_lot() {
+        let mut stations = 0;
+        for block in &layout().blocks {
+            let buildable = block.area.inset(SIDEWALK_WIDTH);
+            for vacant in &block.vacants {
+                if vacant.purpose != VacantUse::GasStation {
+                    continue;
+                }
+                stations += 1;
+                let lot = vacant.rect;
+                let eps = 0.1;
+                let fronts = (block.arterial[0] && lot.min.x < buildable.min.x + eps)
+                    || (block.arterial[1] && lot.max.x > buildable.max.x - eps)
+                    || (block.arterial[2] && lot.min.y < buildable.min.y + eps)
+                    || (block.arterial[3] && lot.max.y > buildable.max.y - eps);
+                assert!(fronts, "gas station on a back lot: {lot:?}");
+            }
+        }
+        assert!(
+            stations > 0,
+            "the default seed should manage one filling station"
+        );
+    }
+
+    #[test]
+    fn common_kinds_are_a_pure_function_of_the_footprint() {
+        let rect = Rect::new(Vec2::new(10.0, 20.0), Vec2::new(30.0, 44.0));
+        assert_eq!(
+            common_kind(7, &rect, District::Midtown),
+            common_kind(7, &rect, District::Midtown),
+        );
+        // And every district's shares cover the whole roll, so no roll can
+        // fall off the end of the table into the fallback.
+        for district in [
+            District::Downtown,
+            District::Midtown,
+            District::Residential,
+            District::Industrial,
+        ] {
+            let total: f32 = common_kinds(district).iter().map(|(_, share)| share).sum();
+            assert!(
+                (total - 1.0).abs() < 1e-5,
+                "{district:?} shares sum to {total}"
+            );
+        }
+    }
+
+    #[test]
+    fn vacant_lots_have_lives_now() {
+        let city = layout();
+        let vacants: usize = city.blocks.iter().map(|b| b.vacants.len()).sum();
+        assert!(vacants > 20, "vacancy rolls should leave lots: {vacants}");
+        let parking = city
+            .blocks
+            .iter()
+            .flat_map(|b| &b.vacants)
+            .filter(|v| v.purpose == VacantUse::ParkingLot)
+            .count();
+        assert!(parking > 5, "most vacants should be parking: {parking}");
     }
 
     #[test]
