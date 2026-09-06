@@ -37,9 +37,33 @@ pub struct TimeOfDay {
 #[derive(Component)]
 pub struct Sun;
 
-/// -1 at midnight, 0 at sunrise/sunset, +1 at noon.
+/// Unit vector from the city up towards the sun.
+///
+/// The one parameterisation of where the sun is. `apply_sky` points the light
+/// along it, and [`sun_elevation`] is its `y` — so the grade, the fog, the
+/// exposure and the shadows can never disagree with the disc the atmosphere
+/// draws. They used to: the transform was built from an angle here, the rest of
+/// the pipeline from `sin` of the same angle, and the constant +Z lean below
+/// meant the two answers differed at every hour except sunrise and sunset.
+///
+/// The +Z component is a declination: the sun crosses the sky to one side of
+/// overhead, peaking at about 71°, so noon shadows lean instead of vanishing
+/// under their buildings — and `looking_to`'s up-vector never degenerates.
+pub fn sun_direction(hours: f32) -> Dir3 {
+    let angle = (hours - 6.0) / 12.0 * PI;
+    Dir3::new(Vec3::new(angle.cos(), angle.sin(), 0.35))
+        .expect("the declination keeps the direction away from zero")
+}
+
+/// About -0.94 at midnight, 0 at sunrise/sunset, +0.94 at noon.
+///
+/// Not ±1 at the extremes: this is the *geometric* `y` of [`sun_direction`],
+/// declination and all, not the sine it used to be. Everything keyed to it —
+/// the twilight ramps, the warmth bands — shifts by that six percent, which is
+/// under four game-minutes at the horizon and buys the guarantee that the value
+/// being ramped on is the elevation of the sun actually being drawn.
 pub fn sun_elevation(hours: f32) -> f32 {
-    ((hours - 6.0) / 12.0 * PI).sin()
+    sun_direction(hours).y
 }
 
 /// 0 at night, 1 in full day, with a soft ramp through twilight.
@@ -206,29 +230,38 @@ fn apply_sky(
     // redistributes sunlight — so with the sun down there is nothing for it to
     // redistribute, and an overcast night is exactly as dark as a clear one.
     // Boosting the floor as well washed the whole night street pale grey.
-    ambient.brightness = 180.0 + 260.0 * day * skylight_gain(cover);
+    //
+    // The floor is higher than it once was because it inherited a job: the sun
+    // used to keep a 300 lx floor all night from a clamped, slowly circling
+    // position, and part of what that phantom beam did was keep night facades
+    // readable. That light belongs here, where it has no direction.
+    ambient.brightness = 240.0 + 260.0 * day * skylight_gain(cover);
 
-    let angle = (hours - 6.0) / 12.0 * PI;
-    let distance = 400.0;
-    let position = Vec3::new(
-        angle.cos() * distance,
-        angle.sin() * distance,
-        0.35 * distance,
-    );
+    let dir = sun_direction(hours);
+    // The beam dies *at* the horizon, not with the daylight. Civil twilight is
+    // sky light, and the atmosphere and ambient carry it; a below-horizon
+    // DirectionalLight with its shadows off would shine through the city from
+    // underneath. The short ramp is so the last of the direct light fades over
+    // a few game-minutes instead of switching off.
+    let beam = (sun_elevation(hours) / 0.03).clamp(0.0, 1.0);
 
     for (mut transform, mut light) in &mut sun {
-        // Keep the sun above the horizon even at night so shadow cascades stay
-        // sane; brightness rather than position is what sells nightfall.
-        let eye = if position.y < 20.0 {
-            Vec3::new(position.x, 20.0, position.z)
-        } else {
-            position
-        };
-        *transform = Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y);
+        // Honestly below the horizon at night. This used to clamp the sun to
+        // 2.9° above it "so shadow cascades stay sane", which left the azimuth
+        // sweeping on through the night — the atmosphere drew a twilight glow
+        // that circled the city until dawn, and the disc bloomed a halo from
+        // whichever direction it had reached. The cascades are kept sane by
+        // switching the shadow maps off with the beam instead.
+        *transform = Transform::from_translation(dir * 400.0).looking_to(-dir, Vec3::Y);
         // Lux, for real. Direct sunlight is about a hundred thousand of them,
-        // and the camera is metered for exactly that — see `render`.
-        light.illuminance = (300.0 + 110_000.0 * day) * sunlight_through(cover);
+        // and the camera is metered for exactly that — see `render`. No floor:
+        // at zero the disc and the volumetric shafts extinguish themselves,
+        // which is what lets the night sky belong to the lamps. The "not pitch
+        // black" duty the old 300 lx floor did from a phantom direction is
+        // ambient's now, above.
+        light.illuminance = 110_000.0 * day * beam * sunlight_through(cover);
         light.color = sun_color(hours, cover);
+        light.shadow_maps_enabled = beam > 0.0;
     }
 
     // Fog hides the far edge of the streamed area, so chunks pop in inside haze
@@ -294,10 +327,31 @@ mod tests {
 
     #[test]
     fn sun_is_up_at_noon_and_down_at_midnight() {
-        assert!(sun_elevation(12.0) > 0.99);
-        assert!(sun_elevation(0.0) < -0.99);
+        // Not ±1 at the extremes: the declination caps the arc at about 71°.
+        assert!(sun_elevation(12.0) > 0.9);
+        assert!(sun_elevation(0.0) < -0.9);
         assert!(sun_elevation(6.0).abs() < 1e-5);
         assert!(sun_elevation(18.0).abs() < 1e-5);
+    }
+
+    /// The regression the halo bug taught. The sun used to be clamped 2.9°
+    /// above the horizon all night while its azimuth swept on, so the
+    /// atmosphere glowed from a direction that circled the city until dawn.
+    #[test]
+    fn the_night_sun_is_honestly_below_the_horizon() {
+        for h in [19.0, 21.5, 0.0, 3.0, 5.0] {
+            assert!(sun_elevation(h) < 0.0, "sun should be down at {h}h");
+        }
+    }
+
+    /// The elevation everything ramps on is the `y` of the direction the light
+    /// is actually pointed along — one parameterisation, no second opinion.
+    #[test]
+    fn the_elevation_is_the_direction_being_drawn() {
+        for h in 0..24 {
+            let h = h as f32;
+            assert_eq!(sun_elevation(h), sun_direction(h).y);
+        }
     }
 
     #[test]

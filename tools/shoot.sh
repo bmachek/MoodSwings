@@ -41,6 +41,14 @@ FRAMINGS=(
     "street|--at-node 300 --eye 1.7 --hour 16"
     "dusk|--at-node 300 --eye 1.7 --hour 19.4"
     "night|--at-node 300 --eye 1.7 --hour 22.5"
+    # Two opposed views at the same night hour, into where the sun rises (+X)
+    # and where it set (-X). The halo bug was a glow whose azimuth circled the
+    # city overnight; only a pair of framings looking opposite ways at a fixed
+    # hour can show that the night sky no longer glows from anywhere in
+    # particular. Kept close to the face framings' street so the foreground is
+    # a real one.
+    "night-east|--at -4,1.7,3 --look 396,25,3 --hour 21.5"
+    "night-west|--at -4,1.7,3 --look -404,25,3 --hour 21.5"
     "rain|--at-node 300 --eye 1.7 --hour 21.5 --wet 0.9 --cover 1"
     "dawn|--at -163.6,1.7,-744.3 --look 836,25,-604 --hour 6.4"
     "overcast|--at-node 300 --eye 1.7 --hour 13 --cover 1"
