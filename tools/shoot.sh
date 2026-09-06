@@ -45,6 +45,12 @@ FRAMINGS=(
     "dawn|--at -163.6,1.7,-744.3 --look 836,25,-604 --hour 6.4"
     "overcast|--at-node 300 --eye 1.7 --hour 13 --cover 1"
     "facade|--at -163.0,4.5,-759.5 --look -172.6,6.6,-759.5 --hour 15"
+    # A filling station and a stocked parking lot, hard default-seed
+    # coordinates like the dawn framing: `--at-node` cannot know which lots
+    # the vacancy roll left empty, and these are the only framings that show
+    # the vacant-lot furnishing (canopy, pumps, bay paint, parked rows).
+    "gasstation|--at -930,26,-555 --look -964,2,-585 --hour 15"
+    "parkinglot|--at -910,24,-770 --look -937,2,-791 --hour 15"
     "park|--at 522,1.8,-986 --look 610,7,-902 --hour 9"
     # Down onto the carriageway from a first-floor window. The only framing
     # that shows the road *surface*: from head height a decal is four pixels
