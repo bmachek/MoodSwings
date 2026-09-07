@@ -57,7 +57,8 @@ pub mod stream {
     /// `key_for` like the weather, never drawn — a parade at 14:00 on this
     /// seed must be a fact about the seed, reproducible under `--hour`.
     pub const EVENTS: u64 = 17;
-    // 18 stays reserved for the animals, per the same budget.
+    /// The animals: which pedestrian gets a dog, where the cats prowl.
+    pub const ANIMALS: u64 = 18;
     /// Cyclists: where on the network they appear and what they wear. Their
     /// own stream for the usual reason — retuning how many bikes the city
     /// holds must not move a single pedestrian, mood or parked car.

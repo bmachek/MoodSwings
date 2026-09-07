@@ -1,6 +1,7 @@
-//! Agents that inhabit the city: traffic, cyclists, and the crowd on the
-//! pavement.
+//! Agents that inhabit the city: traffic, cyclists, the crowd on the
+//! pavement, and the animals among their feet.
 
+pub mod animal;
 pub mod archetype;
 pub mod cyclist;
 pub mod figure;
@@ -18,6 +19,7 @@ impl Plugin for AiPlugin {
             traffic::TrafficPlugin,
             pedestrian::PedestrianPlugin,
             cyclist::CyclistPlugin,
+            animal::AnimalPlugin,
         ));
     }
 }
