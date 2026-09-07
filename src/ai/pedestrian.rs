@@ -133,6 +133,17 @@ impl PedestrianAssets {
     }
 }
 
+/// A gang member walks where the gang walks.
+///
+/// Groups spawn down one pavement, but every citizen re-rolls its route at
+/// each junction, and five hooligans who each pick their own next street are
+/// five pedestrians, not a gang. So a group has a leader — the first member
+/// spawned — and the rest copy the leader's route whenever it changes. A
+/// leader who despawns (streamed out, mostly) orphans the others into
+/// ordinary citizens, which reads as the gang calling it a night.
+#[derive(Component)]
+pub struct Follows(pub Entity);
+
 /// Everything that decides where the crowd is walking.
 ///
 /// Exported so that anything wanting to override a flummi's intent — somebody
@@ -153,6 +164,8 @@ impl Plugin for PedestrianPlugin {
                 Update,
                 (
                     maintain_population,
+                    // Routes copy before anybody steers along them.
+                    flock,
                     walk_pavements,
                     // After the intent, before anything reads it: the lean
                     // away from the neighbours is part of walking, not an
@@ -299,6 +312,7 @@ fn maintain_population(
         // why it is neither of the two streams drawn from below. A group
         // shares one draw and arrives in single file down the same pavement.
         let archetype = cast.draw(&mut crowd_rng.0);
+        let mut leader: Option<Entity> = None;
         for member in 0..archetype.group_size() {
             // And how old. Drawn per member — a group of missionaries spans
             // the generations — and bent to Adult where the combination
@@ -329,7 +343,7 @@ fn maintain_population(
             // Their own voice, for as long as they are resident. The same
             // stream as the temperament: how somebody sounds is part of who
             // they are, and both are drawn once and never again.
-            let pitch = tempers.0.random_range(0.82..1.28) * age.pitch();
+            let pitch = tempers.0.random_range(0.82..1.28) * age.pitch() * archetype.pitch();
 
             let mut person = commands.spawn((
                 Name::new("Pedestrian"),
@@ -369,6 +383,12 @@ fn maintain_population(
             ));
             if archetype.steadfast() {
                 person.insert(crate::bounce::launch::NeverTumbles);
+            }
+            match leader {
+                None => leader = Some(person.id()),
+                Some(leader) => {
+                    person.insert(Follows(leader));
+                }
             }
             super::figure::dress(
                 &mut person,
@@ -528,6 +548,29 @@ fn walk_pavements(
 /// One query, iterated twice — a read pass into a snapshot, then the write
 /// pass — rather than two queries that both touch `Transform`, which is the
 /// panic the schedule trap in CLAUDE.md is about.
+/// Copies the leader's route onto everybody following one.
+///
+/// Disjoint by construction rather than by luck: a leader is exactly a
+/// pedestrian `Without<Follows>`, so the read and the write can never alias
+/// one component — this is the honest version of the filter trick the
+/// schedule traps warn about, because here the filter *is* the semantics.
+fn flock(
+    leaders: Query<&Pedestrian, Without<Follows>>,
+    mut followers: Query<(&mut Pedestrian, &Follows)>,
+) {
+    for (mut own, follows) in &mut followers {
+        // A despawned leader orphans the gang into ordinary citizens.
+        let Ok(leader) = leaders.get(follows.0) else {
+            continue;
+        };
+        if own.to != leader.to || own.side != leader.side {
+            own.from = leader.from;
+            own.to = leader.to;
+            own.side = leader.side;
+        }
+    }
+}
+
 /// How wide a berth a shy citizen keeps around the player, in metres.
 const SHY_BERTH: f32 = 6.0;
 

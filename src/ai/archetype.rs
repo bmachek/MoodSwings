@@ -39,6 +39,11 @@ pub enum Archetype {
     /// They walk in a saffron line and cheer at everybody. The only gang in
     /// the city whose drive-by raises your mood.
     Missionary,
+    /// Five abreast, one football chant short of a mood. The taunt-spamming
+    /// mirror of the missionaries.
+    Hooligan,
+    /// Four leather jackets that arrive together and hold a grudge together.
+    Rocker,
     /// Faster than a walk, lower than a hop: a glide with a kick in it.
     Skater,
     /// A stick, a shuffle, and all the time in the world.
@@ -50,7 +55,7 @@ pub enum Archetype {
 }
 
 impl Archetype {
-    pub const ALL: [Archetype; 11] = [
+    pub const ALL: [Archetype; 13] = [
         Archetype::Everyday,
         Archetype::Wutbuerger,
         Archetype::Punk,
@@ -59,6 +64,8 @@ impl Archetype {
         Archetype::Beggar,
         Archetype::Shy,
         Archetype::Missionary,
+        Archetype::Hooligan,
+        Archetype::Rocker,
         Archetype::Skater,
         Archetype::CaneUser,
         Archetype::Wheelchair,
@@ -75,6 +82,8 @@ impl Archetype {
             Archetype::Beggar => "Bettler",
             Archetype::Shy => "Schüchterne",
             Archetype::Missionary => "Missionar",
+            Archetype::Hooligan => "Hooligan",
+            Archetype::Rocker => "Rocker",
             Archetype::Skater => "Skater",
             Archetype::CaneUser => "Mit Gehstock",
             Archetype::Wheelchair => "Im Rollstuhl",
@@ -87,6 +96,8 @@ impl Archetype {
             Archetype::Wutbuerger => Some(Temperament::ragemonger()),
             Archetype::Shy => Some(Temperament::serene()),
             Archetype::Missionary => Some(Temperament::easygoing()),
+            Archetype::Hooligan => Some(Temperament::touchy()),
+            Archetype::Rocker => Some(Temperament::easygoing()),
             _ => None,
         }
     }
@@ -102,6 +113,8 @@ impl Archetype {
             Archetype::Beggar => Some(Color::srgb(0.33, 0.28, 0.21)),
             Archetype::Shy => Some(Color::srgb(0.56, 0.58, 0.61)),
             Archetype::Missionary => Some(Color::srgb(0.87, 0.49, 0.10)),
+            Archetype::Hooligan => Some(Color::srgb(0.88, 0.88, 0.90)),
+            Archetype::Rocker => Some(Color::srgb(0.09, 0.08, 0.08)),
             _ => None,
         }
     }
@@ -151,15 +164,32 @@ impl Archetype {
         self == Archetype::Missionary
     }
 
-    /// Cheers spontaneously whatever the mood, rather than only in delight.
-    pub fn cheer_spam(self) -> bool {
-        self == Archetype::Missionary
+    /// A rudeness this archetype produces spontaneously whatever its mood:
+    /// the missionaries cheer, the hooligans chant. Everybody else needs to
+    /// actually feel something before they say so.
+    pub fn spam(self) -> Option<crate::mood::provoke::Rudeness> {
+        match self {
+            Archetype::Missionary => Some(crate::mood::provoke::Rudeness::Cheer),
+            Archetype::Hooligan => Some(crate::mood::provoke::Rudeness::Taunt),
+            _ => None,
+        }
+    }
+
+    /// A factor on the voice. The gangs run deep.
+    pub fn pitch(self) -> f32 {
+        match self {
+            Archetype::Hooligan => 0.88,
+            Archetype::Rocker => 0.78,
+            _ => 1.0,
+        }
     }
 
     /// How many of them arrive together.
     pub fn group_size(self) -> usize {
         match self {
             Archetype::Missionary => 4,
+            Archetype::Hooligan => 5,
+            Archetype::Rocker => 4,
             _ => 1,
         }
     }
@@ -250,7 +280,7 @@ pub struct Cast(pub Vec<(Archetype, f32)>);
 impl Default for Cast {
     fn default() -> Self {
         Self(vec![
-            (Archetype::Everyday, 0.44),
+            (Archetype::Everyday, 0.41),
             (Archetype::Wutbuerger, 0.07),
             (Archetype::Punk, 0.07),
             // One in fifty. An Elvis is a sighting, not a demographic.
@@ -258,7 +288,9 @@ impl Default for Cast {
             (Archetype::Headphones, 0.08),
             (Archetype::Beggar, 0.05),
             (Archetype::Shy, 0.10),
-            (Archetype::Missionary, 0.06),
+            (Archetype::Missionary, 0.04),
+            (Archetype::Hooligan, 0.03),
+            (Archetype::Rocker, 0.02),
             (Archetype::Skater, 0.05),
             (Archetype::CaneUser, 0.04),
             (Archetype::Wheelchair, 0.02),

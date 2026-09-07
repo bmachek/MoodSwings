@@ -245,11 +245,12 @@ fn npcs_provoke(
             continue;
         }
 
-        // A missionary cheers whatever the weather in their head; everybody
-        // else needs to actually feel something before they say so.
-        let spam = archetype.is_some_and(|a| a.cheer_spam());
-        let kind = if spam {
-            Rudeness::Cheer
+        // A missionary cheers and a hooligan chants whatever the weather in
+        // their heads; everybody else needs to actually feel something
+        // before they say so.
+        let spam = archetype.and_then(|a| a.spam());
+        let kind = if let Some(kind) = spam {
+            kind
         } else if mood.value <= SPONTANEOUS_SPITE {
             Rudeness::Taunt
         } else if mood.value >= SPONTANEOUS_JOY {
@@ -260,7 +261,7 @@ fn npcs_provoke(
         // Rolled per second rather than per frame, so how often the city is
         // rude does not depend on how fast it is running. The spammer's zeal
         // has a floor: their enthusiasm does not depend on their mood either.
-        let zeal = if spam {
+        let zeal = if spam.is_some() {
             mood.value.abs().max(0.5)
         } else {
             mood.value.abs()
