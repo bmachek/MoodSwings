@@ -135,6 +135,14 @@ SOUNDS=(
     # tracking that kept this synthesised for so long lives in playback
     # speed, which works on a recording just as well.
     "screech|https://cdn.freesound.org/previews/71/71739_995351-hq.mp3"
+    # Small talk for the indifferent middle of the mood scale: dodrio's
+    # wordless dialogue mumbles, three takes.
+    "murmur-0|https://cdn.freesound.org/previews/554/554017_1433422-hq.mp3"
+    "murmur-1|https://cdn.freesound.org/previews/554/554018_1433422-hq.mp3"
+    "murmur-2|https://cdn.freesound.org/previews/554/554020_1433422-hq.mp3"
+    # Zone ambience: mycompasstv's restaurant chatter, hung on restaurant
+    # frontages by the streaming emitters.
+    "chatter|https://cdn.freesound.org/previews/474/474740_3902754-hq.mp3"
 )
 # These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
 CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"
@@ -158,6 +166,8 @@ SFX100_PACK_URL="https://opengameart.org/sites/default/files/sfx_100_v2.zip"
 SFX100_PACK=(
     "footstep|sfx100v2_footstep_01.ogg"
     "ambience|sfx100v2_loop_highway.ogg"
+    # The filling-station forecourt hum, for the same emitters.
+    "forecourt|sfx100v2_loop_machine_02.ogg"
 )
 
 mkdir -p "$SOUNDS_DEST"

@@ -50,7 +50,7 @@ const CRASH_FULL: f32 = 16.0;
 
 /// Per-sound gains, so the mix is one block of numbers rather than a constant
 /// buried in each system.
-mod gain {
+pub mod gain {
     pub const CRASH: f32 = 0.9;
     pub const HONK: f32 = 0.7;
     pub const WHEEE: f32 = 0.6;
@@ -64,6 +64,11 @@ mod gain {
     /// stops reading it as a city behind the buildings and starts reading it
     /// as the mixer hissing. Felt more than heard, as its synth promises.
     pub const TRAFFIC_BED: f32 = 0.4;
+    // The zone emitters, under the global beds on purpose: a place's own
+    // sound should read as detail over the city, not replace it.
+    pub const CHATTER: f32 = 0.5;
+    pub const FORECOURT: f32 = 0.45;
+    pub const PARK_BIRDS: f32 = 0.45;
 }
 
 /// How much of a vehicle's voice survives its distance from the player.
@@ -106,6 +111,69 @@ enum Ambience {
     Uproar,
 }
 
+/// A place's own loop: restaurant chatter on a frontage, forecourt hum under
+/// a filling station's canopy, birdsong over a park. Spawned per block by
+/// `world::buildings::spawn_block` with `ChunkOf`, so a place's sound streams
+/// in and out with its geometry.
+#[derive(Component)]
+pub struct AmbienceEmitter {
+    /// This emitter's slot in the mix, against the `gain` table's scale.
+    pub gain: f32,
+}
+
+/// How many zone emitters may be audible at once. A street corner with a
+/// restaurant, a forecourt and a park all in earshot must not stack five
+/// loops — the same reasoning as the voice choir, at the scale of places.
+const EMITTER_CHOIR: usize = 4;
+
+/// Keeps the nearest few places audible and the rest muted.
+///
+/// Same two-pass shape as `mood::voice::speak_up`: rank by distance from the
+/// listener, then touch every sink once. Distance is measured from the
+/// camera, where the `SpatialListener` actually sits.
+fn tend_emitters(
+    config: Res<GameConfig>,
+    listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
+    mut emitters: Query<(
+        Entity,
+        &GlobalTransform,
+        &AmbienceEmitter,
+        &mut SpatialAudioSink,
+    )>,
+) {
+    let Ok(listener) = listeners.single() else {
+        return;
+    };
+    let ears = listener.translation();
+    let base = config.audio.master * config.audio.ambience;
+
+    let mut near: Vec<(f32, Entity)> = emitters
+        .iter()
+        .map(|(entity, at, ..)| (at.translation().distance(ears), entity))
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.truncate(EMITTER_CHOIR);
+    let audible: Vec<Entity> = near.into_iter().map(|(_, entity)| entity).collect();
+
+    for (entity, at, emitter, mut sink) in &mut emitters {
+        let level = if audible.contains(&entity) {
+            base * emitter.gain * hush(at.translation().distance(ears))
+        } else {
+            0.0
+        };
+        sink.set_volume(Volume::Linear(level));
+        // A muted sink remembers its volume, so unmuting lands on the level
+        // just set rather than on last week's.
+        if level > 0.001 {
+            if sink.is_muted() {
+                sink.unmute();
+            }
+        } else if !sink.is_muted() {
+            sink.mute();
+        }
+    }
+}
+
 pub struct SfxPlugin;
 
 impl Plugin for SfxPlugin {
@@ -125,6 +193,7 @@ impl Plugin for SfxPlugin {
                     manage_vehicle_voices,
                     update_vehicle_voices,
                     update_ambience,
+                    tend_emitters,
                 )
                     .in_set(GameSet::Simulation),
             )
@@ -425,13 +494,16 @@ fn manage_vehicle_voices(
 
 fn update_vehicle_voices(
     config: Res<GameConfig>,
-    players: Query<&Transform, With<Player>>,
+    listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
     vehicles: Query<(&VehicleState, &VehicleInput, &Transform)>,
     mut voices: Query<(&Voice, &mut SpatialAudioSink)>,
 ) {
-    let ears = players
+    // Measured from the camera, because that is where the `SpatialListener`
+    // sits — this used to measure from the player, and in the free camera the
+    // two faders disagreed about which cars were near.
+    let ears = listeners
         .single()
-        .map(|player| player.translation)
+        .map(|listener| listener.translation())
         .unwrap_or_default();
     for (voice, mut sink) in &mut voices {
         let Ok((state, input, at)) = vehicles.get(voice.owner) else {

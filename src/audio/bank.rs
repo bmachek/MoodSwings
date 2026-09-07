@@ -64,6 +64,15 @@ pub struct SoundBank {
     /// Making up: a contrite word, thrown with a flower.
     pub sorry: Handle<SynthSound>,
     pub gasp: Handle<SynthSound>,
+    /// Small talk for the indifferent middle of the mood scale.
+    pub murmur: [Handle<SynthSound>; VARIANTS],
+
+    // --- places ---
+    //
+    // Zone ambience: loops that belong to a lot rather than to the whole
+    // city. `world::streaming` hangs these on emitter entities per block.
+    pub chatter: Handle<SynthSound>,
+    pub forecourt: Handle<SynthSound>,
 }
 
 /// How many takes of each spoken sound the bank holds.
@@ -112,6 +121,11 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("burp", 0.8, Shape::Shot),
     ("sorry", 0.6, Shape::Shot),
     ("gasp", 0.65, Shape::Shot),
+    ("murmur-0", 0.5, Shape::Shot),
+    ("murmur-1", 0.5, Shape::Shot),
+    ("murmur-2", 0.5, Shape::Shot),
+    ("chatter", 0.5, Shape::Loop),
+    ("forecourt", 0.45, Shape::Loop),
     ("spray", 0.6, Shape::Loop),
     ("engine", 0.85, Shape::Loop),
     ("screech", 0.75, Shape::Loop),
@@ -169,6 +183,9 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         burp: add("burp"),
         sorry: add("sorry"),
         gasp: add("gasp"),
+        murmur: std::array::from_fn(|take| add(&format!("murmur-{take}"))),
+        chatter: add("chatter"),
+        forecourt: add("forecourt"),
     }
 }
 

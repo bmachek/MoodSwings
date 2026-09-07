@@ -390,6 +390,9 @@ pub struct BlockContext<'a> {
     pub shells: &'a ShellKit,
     pub signs: &'a crate::world::signage::SignKit,
     pub lots: &'a crate::world::lots::LotKit,
+    /// `None` only before the bank has landed — streaming simply spawns that
+    /// chunk's emitters never, which resolves itself on the next re-entry.
+    pub bank: Option<&'a crate::audio::bank::SoundBank>,
     pub seed: u64,
     pub lod_scale: f32,
 }
@@ -444,6 +447,56 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     }
     for vacant in &block.vacants {
         crate::world::lots::spawn_lot(commands, ctx.lots, ctx.signs, block, vacant, chunk);
+    }
+
+    // The places that make a sound of their own. Emitters stream with the
+    // block like everything else here; `audio::sfx::tend_emitters` decides
+    // which few of them are actually audible.
+    if let Some(bank) = ctx.bank {
+        use crate::audio::sfx::{AmbienceEmitter, gain};
+        let emitter = |commands: &mut Commands,
+                       at: Vec2,
+                       height: f32,
+                       sound: &Handle<crate::audio::synth::SynthSound>,
+                       loudness: f32| {
+            commands.spawn((
+                ChunkOf(chunk),
+                Transform::from_xyz(at.x, height, at.y),
+                bevy::audio::AudioPlayer(sound.clone()),
+                // Muted until `tend_emitters` ranks it, so the first frame
+                // cannot blare — the vehicle voices' trick.
+                bevy::audio::PlaybackSettings::LOOP
+                    .with_spatial(true)
+                    .muted(),
+                AmbienceEmitter { gain: loudness },
+            ));
+        };
+
+        if park {
+            emitter(commands, center, 4.0, &bank.birdsong, gain::PARK_BIRDS);
+        }
+        for building in &block.buildings {
+            if building.kind == super::citygen::BuildingKind::Restaurant {
+                emitter(
+                    commands,
+                    building.footprint.center(),
+                    2.2,
+                    &bank.chatter,
+                    gain::CHATTER,
+                );
+            }
+        }
+        for vacant in &block.vacants {
+            if vacant.purpose == super::citygen::VacantUse::GasStation {
+                emitter(
+                    commands,
+                    vacant.rect.center(),
+                    2.5,
+                    &bank.forecourt,
+                    gain::FORECOURT,
+                );
+            }
+        }
     }
 }
 

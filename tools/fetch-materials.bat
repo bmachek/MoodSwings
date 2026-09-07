@@ -72,6 +72,10 @@ call :fetch_sound raspberry mp3 "https://cdn.freesound.org/previews/252/252262_9
 call :fetch_sound fart mp3 "https://cdn.freesound.org/previews/732/732936_15881540-hq.mp3"
 call :fetch_sound sorry mp3 "https://cdn.freesound.org/previews/458/458075_6492957-hq.mp3"
 call :fetch_sound screech mp3 "https://cdn.freesound.org/previews/71/71739_995351-hq.mp3"
+call :fetch_sound murmur-0 mp3 "https://cdn.freesound.org/previews/554/554017_1433422-hq.mp3"
+call :fetch_sound murmur-1 mp3 "https://cdn.freesound.org/previews/554/554018_1433422-hq.mp3"
+call :fetch_sound murmur-2 mp3 "https://cdn.freesound.org/previews/554/554020_1433422-hq.mp3"
+call :fetch_sound chatter mp3 "https://cdn.freesound.org/previews/474/474740_3902754-hq.mp3"
 
 rem The car pack zip — mirror of CAR_PACK in the .sh.
 set "NEED_PACK="
@@ -117,14 +121,16 @@ rem the traffic bed (the highway loop is the city ambience).
 set "NEED_SFX100="
 if not exist "%SOUNDS_DEST%\footstep.ogg" set NEED_SFX100=1
 if not exist "%SOUNDS_DEST%\ambience.ogg" set NEED_SFX100=1
+if not exist "%SOUNDS_DEST%\forecourt.ogg" set NEED_SFX100=1
 if "%FORCE%"=="--force" set NEED_SFX100=1
 if defined NEED_SFX100 (
     echo fetch   sfx hundred pack
     curl -fsSL --retry 3 --retry-delay 2 -o "%TEMP%\sfx100pack.zip" "https://opengameart.org/sites/default/files/sfx_100_v2.zip"
     if not errorlevel 1 (
-        tar -xf "%TEMP%\sfx100pack.zip" -C "%TEMP%" sfx100v2_footstep_01.ogg sfx100v2_loop_highway.ogg
+        tar -xf "%TEMP%\sfx100pack.zip" -C "%TEMP%" sfx100v2_footstep_01.ogg sfx100v2_loop_highway.ogg sfx100v2_loop_machine_02.ogg
         move /y "%TEMP%\sfx100v2_footstep_01.ogg" "%SOUNDS_DEST%\footstep.ogg" >nul
         move /y "%TEMP%\sfx100v2_loop_highway.ogg" "%SOUNDS_DEST%\ambience.ogg" >nul
+        move /y "%TEMP%\sfx100v2_loop_machine_02.ogg" "%SOUNDS_DEST%\forecourt.ogg" >nul
     ) else (
         echo         failed; skipping - silence stands in until they are fetched 1>&2
     )
