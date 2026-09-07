@@ -165,6 +165,82 @@ impl Archetype {
     }
 }
 
+/// How old somebody is, as far as a rubber figure can be: a size, a pace, a
+/// pitch and a spring. The second axis of who a citizen is, orthogonal to
+/// the archetype — a child punk and a senior Elvis are both legal and both
+/// jokes — drawn from the same `stream::CROWD`.
+///
+/// The scale is applied to the collider capsule and to every part's `Rest`
+/// pose, never to the body entity's transform: Avian scales a collider by
+/// its transform, and a shrunken child would fall through the pavement.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AgeClass {
+    Child,
+    #[default]
+    Adult,
+    Senior,
+}
+
+impl AgeClass {
+    /// Height relative to an adult.
+    pub fn size(self) -> f32 {
+        match self {
+            AgeClass::Child => 0.62,
+            AgeClass::Adult => 1.0,
+            AgeClass::Senior => 0.94,
+        }
+    }
+
+    /// Multiplier on the walking pace. Children scurry, seniors take the
+    /// time the street owes them.
+    pub fn pace(self) -> f32 {
+        match self {
+            AgeClass::Child => 1.1,
+            AgeClass::Adult => 1.0,
+            AgeClass::Senior => 0.7,
+        }
+    }
+
+    /// Multiplier on the voice's pitch.
+    pub fn pitch(self) -> f32 {
+        match self {
+            AgeClass::Child => 1.45,
+            AgeClass::Adult => 1.0,
+            AgeClass::Senior => 0.9,
+        }
+    }
+
+    /// Multiplier on the hop. Childhood is mostly spring.
+    pub fn spring(self) -> f32 {
+        match self {
+            AgeClass::Child => 1.25,
+            AgeClass::Adult => 1.0,
+            AgeClass::Senior => 0.85,
+        }
+    }
+
+    /// Whether this age wears that archetype. Deliberately permissive — a
+    /// child punk and a child Wutbürger are the tie broken towards the joke
+    /// — with one exception that would not be one.
+    pub fn suits(self, archetype: Archetype) -> bool {
+        !(self == AgeClass::Child && archetype == Archetype::Beggar)
+    }
+
+    /// Draws an age from the fixed pyramid. A method on the class rather
+    /// than a tunable table: the mix of ages is scenery, not a dial the
+    /// game's feel hangs on.
+    pub fn draw(rng: &mut ChaCha8Rng) -> AgeClass {
+        let roll: f32 = rng.random_range(0.0..1.0);
+        if roll < 0.12 {
+            AgeClass::Child
+        } else if roll < 0.82 {
+            AgeClass::Adult
+        } else {
+            AgeClass::Senior
+        }
+    }
+}
+
 /// The mix, as (archetype, share). A resource for the same reason `Tempers`
 /// is: the only way to find out how many Elvises a city can support is to
 /// drag a slider and watch the street.

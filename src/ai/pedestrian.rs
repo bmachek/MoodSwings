@@ -300,6 +300,14 @@ fn maintain_population(
         // shares one draw and arrives in single file down the same pavement.
         let archetype = cast.draw(&mut crowd_rng.0);
         for member in 0..archetype.group_size() {
+            // And how old. Drawn per member — a group of missionaries spans
+            // the generations — and bent to Adult where the combination
+            // would not be a joke.
+            let mut age = super::archetype::AgeClass::draw(&mut crowd_rng.0);
+            if !age.suits(archetype) {
+                age = super::archetype::AgeClass::Adult;
+            }
+            let size = age.size();
             if alive >= crowd.population {
                 break;
             }
@@ -321,7 +329,7 @@ fn maintain_population(
             // Their own voice, for as long as they are resident. The same
             // stream as the temperament: how somebody sounds is part of who
             // they are, and both are drawn once and never again.
-            let pitch = tempers.0.random_range(0.82..1.28);
+            let pitch = tempers.0.random_range(0.82..1.28) * age.pitch();
 
             let mut person = commands.spawn((
                 Name::new("Pedestrian"),
@@ -335,15 +343,23 @@ fn maintain_population(
                     panic: 0.0,
                     current_speed: 0.0,
                 },
-                archetype,
-                Transform::from_xyz(position.x, SIDEWALK_HEIGHT + STAND_HEIGHT, position.y),
+                // Nested: a flat tuple would pass Bevy's fifteen-element
+                // bundle ceiling, and who-they-are is one thing anyway.
+                (archetype, age, super::figure::Stature(size)),
+                Transform::from_xyz(
+                    position.x,
+                    SIDEWALK_HEIGHT + STAND_HEIGHT * size,
+                    position.y,
+                ),
                 // Dynamic, so a car can send them across the junction.
                 RigidBody::Dynamic,
-                Collider::capsule(RADIUS, HEIGHT),
+                // The collider scales with the age, the same number the
+                // figure's pose is multiplied by — see `figure::Stature`.
+                Collider::capsule(RADIUS * size, HEIGHT * size),
                 // Upright until something knocks them over; `bounce::launch`
                 // takes this off for as long as they are tumbling.
                 LockedAxes::ROTATION_LOCKED,
-                Bouncer::new(STAND_HEIGHT),
+                Bouncer::new(STAND_HEIGHT * size),
                 temper,
                 Mood::new(mood),
                 FaceLevel(worn.level),
@@ -381,6 +397,7 @@ fn walk_pavements(
             &mut Transform,
             &Mood,
             &super::archetype::Archetype,
+            &super::archetype::AgeClass,
         ),
         (Without<crate::vehicle::spawn::Vehicle>, Without<Launched>),
     >,
@@ -402,7 +419,7 @@ fn walk_pavements(
     }
     let mut sample = None;
 
-    for (mut pedestrian, mut bouncer, mut transform, mood, archetype) in &mut pedestrians {
+    for (mut pedestrian, mut bouncer, mut transform, mood, archetype, age) in &mut pedestrians {
         let position = transform.translation.xz();
         let a = city.graph.node(pedestrian.from).pos;
         let b = city.graph.node(pedestrian.to).pos;
@@ -455,14 +472,19 @@ fn walk_pavements(
             // Panic overrides temperament: a trudge does not outrun a car.
             crowd.flee_speed
         } else {
-            // Who they are scales how they amble, on top of how they feel.
-            pedestrian.speed.min(crowd.walk_speed * 1.3) * stride(mood.value) * archetype.pace()
+            // Who they are — and how old they are — scales how they amble,
+            // on top of how they feel.
+            pedestrian.speed.min(crowd.walk_speed * 1.3)
+                * stride(mood.value)
+                * archetype.pace()
+                * age.pace()
         };
         // The mood is in the body as well as on the face: the hop the bounce
         // controller takes at the bottom of every arc is scaled here, every
         // frame, because the controller spends the scale on each landing.
         // Who they are scales it again — a skater glides, a wheelchair rolls.
-        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max) * archetype.hop();
+        bouncer.hop_scale =
+            spring(mood.value, config.bounce.npc_spring_max) * archetype.hop() * age.spring();
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's

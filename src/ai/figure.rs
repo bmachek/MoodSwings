@@ -103,6 +103,17 @@ impl Rest {
     }
 }
 
+/// How tall this figure stands, relative to the adult every part was
+/// proportioned for.
+///
+/// Read by [`animate`], which multiplies it into the squash pose — so the
+/// scale reaches every `Rest`-carrying part, and the limbs' children inherit
+/// it through their parents' transforms. The body entity is never scaled
+/// (Avian would shrink the collider with it); whoever spawns a small figure
+/// scales the capsule and the stand height by the same number instead.
+#[derive(Component, Clone, Copy)]
+pub struct Stature(pub f32);
+
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
 /// The speed is written by whoever owns the figure — the pedestrian AI for a
@@ -592,11 +603,16 @@ pub fn limb_angle(limb: Limb, phase: f32) -> f32 {
 pub fn animate(
     time: Res<Time>,
     config: Res<crate::core::config::GameConfig>,
-    figures: Query<(&mut WalkCycle, Option<&Bouncer>, &Children)>,
+    figures: Query<(
+        &mut WalkCycle,
+        Option<&Bouncer>,
+        Option<&Stature>,
+        &Children,
+    )>,
     mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cycle, bouncer, children) in figures {
+    for (mut cycle, bouncer, stature, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
@@ -607,7 +623,11 @@ pub fn animate(
             }
             None => (1.0, 1.0),
         };
-        let pose = Vec3::new(horizontal, vertical, horizontal);
+        // The stature multiplies straight into the pose: a child is an adult
+        // squashed evenly, every frame, which is also exactly what a rubber
+        // city would say about children.
+        let size = stature.map_or(1.0, |stature| stature.0);
+        let pose = Vec3::new(horizontal, vertical, horizontal) * size;
 
         for &child in children {
             let Ok((mut transform, rest, limb)) = parts.get_mut(child) else {
