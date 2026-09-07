@@ -71,7 +71,8 @@ bevy_egui, saves are RON.
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning |
 | `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
-| `ai` | Traffic, pedestrians, shared steering, walk cycles, the figure itself |
+| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself |
+| `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
 | `audio` | The recorded sound bank (`bank::REGISTER`), the load-time discipline (`files`), triggers, the WAV audition tool |
