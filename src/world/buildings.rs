@@ -375,6 +375,17 @@ impl CityAssets {
     pub fn building_materials(&self) -> &[Handle<super::facade::FacadeMaterial>] {
         &self.building
     }
+
+    /// The kerb concrete, for structures that are honestly made of it.
+    pub fn concrete(&self) -> Handle<StandardMaterial> {
+        self.kerb.clone()
+    }
+
+    /// The block paving tiled for a surface `extent` metres across — the
+    /// garage decks wear the same slabs the block tops do.
+    pub fn paving_for(&self, extent: f32) -> Handle<StandardMaterial> {
+        self.paving[ground_bucket(extent)].clone()
+    }
 }
 
 /// Spawns one block's pavement and buildings, tagged for streaming.
@@ -575,6 +586,27 @@ fn spawn_building(
     } else {
         (size.x, size.y)
     };
+    // The parking garage is not a facade with an inside implied — it has no
+    // facade at all. Its whole structure comes from `world::garage`, plus
+    // the sign over its mouth, and nothing else of a building's anatomy
+    // applies: no shells, no roof slab, no plinth, no rooftop clutter.
+    if building.kind == super::citygen::BuildingKind::ParkingGarage {
+        super::garage::spawn(
+            commands, assets, center, frontage, throat, height, yaw, chunk,
+        );
+        hang_sign(
+            commands,
+            ctx,
+            building,
+            front,
+            yaw,
+            frontage,
+            SIDEWALK_HEIGHT + 3.6,
+            chunk,
+        );
+        return;
+    }
+
     let wall = if door_shell.is_some() {
         Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
             .with_rotation(Quat::from_rotation_y(yaw))
@@ -716,43 +748,19 @@ fn spawn_building(
         ));
     }
 
-    // The sign, for any kind that hangs one. It goes on the face nearest the
-    // block perimeter — the side the lot fronts, which is the side with a
-    // pavement under it — centred on the fascia band the facade painter
-    // reserves over the ground storey, and scaled down if the board would
-    // outgrow the wall it is bolted to.
-    if let Some((mesh, material, board)) = ctx.signs.get(building.kind) {
-        // On the front chosen above — the sign, the doorway and the room
-        // behind it all face the same pavement.
-        let proud = crate::world::signage::PROUD;
-        let at = match front {
-            0 => Vec2::new(footprint.min.x - proud, center.y),
-            1 => Vec2::new(footprint.max.x + proud, center.y),
-            2 => Vec2::new(center.x, footprint.min.y - proud),
-            _ => Vec2::new(center.x, footprint.max.y + proud),
-        };
-        // The fascia band sits at the top of the ground storey, wherever the
-        // class puts its storeys for this height.
-        let storey = height / class.grid().1;
-        let fascia = SIDEWALK_HEIGHT + storey * 0.875;
-        let fit = (frontage * 0.8 / board.x).min(1.0);
-        let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
-        commands.spawn((
-            ChunkOf(chunk),
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(material.clone()),
-            Transform::from_xyz(at.x, fascia, at.y)
-                .with_rotation(Quat::from_rotation_y(yaw))
-                .with_scale(Vec3::splat(fit)),
-            VisibilityRange {
-                start_margin: 0.0..0.0,
-                end_margin: (sign_draw * 0.9)..sign_draw,
-                use_aabb: false,
-            },
-            // The wall behind it casts the same shadow from the same place.
-            NotShadowCaster,
-        ));
-    }
+    // The sign, for any kind that hangs one, centred on the fascia band the
+    // facade painter reserves over the ground storey.
+    let storey = height / class.grid().1;
+    hang_sign(
+        commands,
+        ctx,
+        building,
+        front,
+        yaw,
+        frontage,
+        SIDEWALK_HEIGHT + storey * 0.875,
+        chunk,
+    );
 
     // And what accumulated on the deck. Sits on top of the slab, so nothing is
     // buried in it and nothing floats over it.
@@ -765,6 +773,53 @@ fn spawn_building(
         &rooftop::plan(seed, building.footprint, class),
         ctx.lod_scale,
     );
+}
+
+/// Hangs a building's sign on its front face, `fascia` metres up, scaled
+/// down if the board would outgrow the wall it is bolted to. It goes on the
+/// face nearest the block perimeter — the side the lot fronts, which is the
+/// side with a pavement under it — the same front the doorway and the room
+/// behind it chose.
+#[allow(clippy::too_many_arguments)]
+fn hang_sign(
+    commands: &mut Commands,
+    ctx: &BlockContext,
+    building: &Building,
+    front: usize,
+    yaw: f32,
+    frontage: f32,
+    fascia: f32,
+    chunk: IVec2,
+) {
+    let Some((mesh, material, board)) = ctx.signs.get(building.kind) else {
+        return;
+    };
+    let footprint = building.footprint;
+    let center = footprint.center();
+    let proud = crate::world::signage::PROUD;
+    let at = match front {
+        0 => Vec2::new(footprint.min.x - proud, center.y),
+        1 => Vec2::new(footprint.max.x + proud, center.y),
+        2 => Vec2::new(center.x, footprint.min.y - proud),
+        _ => Vec2::new(center.x, footprint.max.y + proud),
+    };
+    let fit = (frontage * 0.8 / board.x).min(1.0);
+    let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::from_xyz(at.x, fascia, at.y)
+            .with_rotation(Quat::from_rotation_y(yaw))
+            .with_scale(Vec3::splat(fit)),
+        VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: (sign_draw * 0.9)..sign_draw,
+            use_aabb: false,
+        },
+        // The wall behind it casts the same shadow from the same place.
+        NotShadowCaster,
+    ));
 }
 
 /// The collider for a building the player can walk into, in the door frame:

@@ -4,6 +4,7 @@ pub mod buildings;
 pub mod citygen;
 pub mod decals;
 pub mod facade;
+pub mod garage;
 pub mod interior;
 pub mod lots;
 pub mod markings;
