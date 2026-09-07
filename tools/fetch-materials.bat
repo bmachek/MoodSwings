@@ -76,6 +76,8 @@ call :fetch_sound murmur-0 mp3 "https://cdn.freesound.org/previews/554/554017_14
 call :fetch_sound murmur-1 mp3 "https://cdn.freesound.org/previews/554/554018_1433422-hq.mp3"
 call :fetch_sound murmur-2 mp3 "https://cdn.freesound.org/previews/554/554020_1433422-hq.mp3"
 call :fetch_sound chatter mp3 "https://cdn.freesound.org/previews/474/474740_3902754-hq.mp3"
+call :fetch_sound bark mp3 "https://cdn.freesound.org/previews/277/277058_4486188-hq.mp3"
+call :fetch_sound meow mp3 "https://cdn.freesound.org/previews/412/412017_3652520-hq.mp3"
 
 rem The car pack zip — mirror of CAR_PACK in the .sh.
 set "NEED_PACK="
