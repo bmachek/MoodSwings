@@ -57,6 +57,11 @@ pub mod stream {
     /// `key_for` like the weather, never drawn — a parade at 14:00 on this
     /// seed must be a fact about the seed, reproducible under `--hour`.
     pub const EVENTS: u64 = 17;
+    // 18 stays reserved for the animals, per the same budget.
+    /// Cyclists: where on the network they appear and what they wear. Their
+    /// own stream for the usual reason — retuning how many bikes the city
+    /// holds must not move a single pedestrian, mood or parked car.
+    pub const CYCLISTS: u64 = 19;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
