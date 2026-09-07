@@ -284,6 +284,8 @@ pub struct CityLayout {
     pub z_streets: Vec<Street>,
     pub blocks: Vec<Block>,
     pub graph: RoadGraph,
+    /// The one street surrendered to water, if the grid had a spare.
+    pub canal: Option<Canal>,
 }
 
 impl CityLayout {
@@ -336,7 +338,8 @@ pub fn generate(seed: u64, half_extent: f32) -> CityLayout {
     let x_streets = streets(&mut road_rng, half_extent);
     let z_streets = streets(&mut road_rng, half_extent);
 
-    let graph = build_graph(&x_streets, &z_streets);
+    let canal = canal_for(seed, &x_streets, &z_streets);
+    let graph = build_graph(&x_streets, &z_streets, canal);
     let mut blocks = build_blocks(seed, &x_streets, &z_streets);
     zone_civics(seed, &mut blocks);
 
@@ -347,7 +350,55 @@ pub fn generate(seed: u64, half_extent: f32) -> CityLayout {
         z_streets,
         blocks,
         graph,
+        canal,
     }
+}
+
+/// The canal: one minor street of the grid surrendered to water.
+///
+/// The elegant part is what it does *not* touch. The street's line stays in
+/// the layout, so every block keeps its shape and every lot its hash — but
+/// the road graph gets no edges *along* it, so traffic, parking, props,
+/// markings and lamps all leave it alone without knowing why. The water is
+/// cut a little wider than the carriageway, which drowns the bottom of the
+/// neighbouring kerb slabs and turns them into quay walls for free. Every
+/// crossing street keeps its edges and becomes a bridge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Canal {
+    /// Which axis' street list the canal came from, and its index there:
+    /// `true` means an `x_streets` entry (water running along Z).
+    pub along_z: bool,
+    pub index: usize,
+    /// Centreline on the perpendicular axis, and the water's width.
+    pub center: f32,
+    pub width: f32,
+}
+
+/// How far past the carriageway the water reaches, drowning the kerb feet.
+const CANAL_OVERHANG: f32 = 2.0;
+
+fn canal_for(seed: u64, x_streets: &[Street], z_streets: &[Street]) -> Option<Canal> {
+    let key = key_for(seed, stream::RIVER);
+    let along_z = key & 1 == 0;
+    let list = if along_z { x_streets } else { z_streets };
+    // The minor streets only: an arterial carries the traffic the grid
+    // cannot spare, and a canal down the main drag is a different game.
+    let target = ((key >> 8) & 0xFFFF) as f32 / 65536.0 * 1200.0 - 600.0;
+    let (index, street) = list
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.arterial)
+        .min_by(|a, b| {
+            (a.1.center - target)
+                .abs()
+                .total_cmp(&(b.1.center - target).abs())
+        })?;
+    Some(Canal {
+        along_z,
+        index,
+        center: street.center,
+        width: street.width + CANAL_OVERHANG * 2.0,
+    })
 }
 
 /// Walks one axis laying down streets, alternating arterials with a run of
@@ -393,7 +444,7 @@ fn streets(rng: &mut ChaCha8Rng, half_extent: f32) -> Vec<Street> {
     out
 }
 
-fn build_graph(x_streets: &[Street], z_streets: &[Street]) -> RoadGraph {
+fn build_graph(x_streets: &[Street], z_streets: &[Street], canal: Option<Canal>) -> RoadGraph {
     let mut graph = RoadGraph::default();
 
     // A node at every crossing.
@@ -403,8 +454,18 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street]) -> RoadGraph {
         }
     }
 
+    // No edges *along* the canal: nothing drives, parks or lights a street
+    // that is water. Its nodes stay — they are the bridge ends, and every
+    // crossing street still runs through them.
+    let drowned = |along_z: bool, index: usize| {
+        canal.is_some_and(|c| c.along_z == along_z && c.index == index)
+    };
+
     // Link along each street to its immediate neighbour.
     for (xi, xs) in x_streets.iter().enumerate() {
+        if drowned(true, xi) {
+            continue;
+        }
         for zi in 0..z_streets.len().saturating_sub(1) {
             let a = graph.node_at_grid((xi as u16, zi as u16));
             let b = graph.node_at_grid((xi as u16, zi as u16 + 1));
@@ -414,6 +475,9 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street]) -> RoadGraph {
         }
     }
     for (zi, zs) in z_streets.iter().enumerate() {
+        if drowned(false, zi) {
+            continue;
+        }
         for xi in 0..x_streets.len().saturating_sub(1) {
             let a = graph.node_at_grid((xi as u16, zi as u16));
             let b = graph.node_at_grid((xi as u16 + 1, zi as u16));

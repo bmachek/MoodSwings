@@ -12,6 +12,7 @@ pub mod markings;
 pub mod material;
 pub mod mayhem;
 pub mod props;
+pub mod river;
 pub mod road;
 pub mod roadgraph;
 pub mod rooftop;
@@ -104,6 +105,8 @@ fn generate_city(
         layout.graph.node_count(),
         layout.graph.edge_count(),
     );
+
+    river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
 
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));

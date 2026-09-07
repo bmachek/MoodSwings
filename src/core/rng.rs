@@ -69,6 +69,10 @@ pub mod stream {
     /// The captain. One resident, own wardrobe, own stream: he must be able
     /// to change his coat without a single citizen changing theirs.
     pub const CAPTAIN: u64 = 20;
+    /// The canal: which street of the grid is surrendered to water. Sampled
+    /// via `key_for` like the weather — where the river runs is a fact about
+    /// the seed, and digging it must never move a lot.
+    pub const RIVER: u64 = 21;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
