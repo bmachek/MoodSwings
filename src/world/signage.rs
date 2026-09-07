@@ -180,6 +180,121 @@ fn board_texture(plaque: &Plaque) -> Image {
     })
 }
 
+// ------------------------------------------------------------- frontages ----
+
+/// The painted ground storey a civic kind wears instead of shop glass.
+///
+/// The enterable kinds show who they are through an open door and a lit
+/// room; the civic ones are sealed, so their identity has to be painted on.
+/// One texture per kind, stretched across the front face's ground storey —
+/// a fire station's roller doors stretch a little wider on a wider
+/// building, which is also how real fire stations work.
+///
+/// The paint reads `v = 0` at the top of the strip, `v = 1` at the
+/// pavement, matching the quad's UV layout — every gate below is painted to
+/// *reach* v = 1, so a flipped convention would show doors hanging from the
+/// ceiling and be caught by the first capture.
+fn frontage_texture(kind: BuildingKind) -> Option<Image> {
+    use BuildingKind::*;
+    let paint: fn(f32, f32) -> [u8; 4] = match kind {
+        FireStation => |u, v| {
+            // Three roller doors in the red, white trim, slats every so far.
+            let field = [150, 28, 24, 255];
+            for centre in [0.2f32, 0.5, 0.8] {
+                let inside = (u - centre).abs();
+                if inside < 0.105 && v > 0.18 {
+                    if inside > 0.095 || v < 0.20 {
+                        return [235, 230, 224, 255];
+                    }
+                    let slat = (v * 11.0).fract() < 0.16;
+                    return if slat {
+                        [126, 22, 18, 255]
+                    } else {
+                        [196, 48, 38, 255]
+                    };
+                }
+            }
+            field
+        },
+        TownHall => |u, v| {
+            // Sandstone with pilasters, and one civic double door.
+            if (u - 0.5).abs() < 0.055 && v > 0.28 {
+                return if (u - 0.5).abs() > 0.048 {
+                    [120, 100, 76, 255]
+                } else {
+                    [74, 52, 38, 255]
+                };
+            }
+            let pilaster = (u * 7.0).fract() < 0.12;
+            if pilaster {
+                [226, 212, 184, 255]
+            } else if v < 0.10 {
+                [188, 172, 144, 255]
+            } else {
+                [208, 192, 162, 255]
+            }
+        },
+        PoliceStation => |u, v| {
+            // Institutional grey-blue, barred windows, and a door taped
+            // shut — the tape is the subline made architecture.
+            let door = (u - 0.5).abs() < 0.06 && v > 0.25;
+            if door {
+                let tape = ((u - 0.44) * 6.0 - (v - 0.25)).rem_euclid(0.5) < 0.11;
+                return if tape {
+                    [214, 40, 34, 255]
+                } else {
+                    [26, 44, 88, 255]
+                };
+            }
+            for centre in [0.16f32, 0.32, 0.68, 0.84] {
+                if (u - centre).abs() < 0.05 && (0.2..0.62).contains(&v) {
+                    let bar = ((u - centre) * 40.0).rem_euclid(1.0) < 0.3;
+                    return if bar {
+                        [200, 206, 214, 255]
+                    } else {
+                        [42, 50, 62, 255]
+                    };
+                }
+            }
+            [178, 188, 200, 255]
+        },
+        Barracks => |u, v| {
+            // Olive drab around one steel gate in hazard chevrons.
+            if (u - 0.5).abs() < 0.16 && v > 0.2 {
+                if (u - 0.5).abs() > 0.15 {
+                    return [60, 64, 46, 255];
+                }
+                let chevron = ((u * 14.0) + v * 2.0).rem_euclid(1.0) < 0.5;
+                return if chevron && v > 0.72 {
+                    [196, 168, 48, 255]
+                } else {
+                    [116, 118, 112, 255]
+                };
+            }
+            if (v * 6.0).fract() < 0.06 {
+                [76, 84, 56, 255]
+            } else {
+                [92, 100, 66, 255]
+            }
+        },
+        _ => return None,
+    };
+    Some(painted_rect(
+        1024,
+        256,
+        TextureFormat::Rgba8UnormSrgb,
+        paint,
+    ))
+}
+
+/// The kinds that paint their ground storey, for the kit and the tests.
+const FRONTED: [BuildingKind; 4] = [
+    BuildingKind::FireStation,
+    BuildingKind::TownHall,
+    BuildingKind::PoliceStation,
+    BuildingKind::Barracks,
+];
+
 /// The filling station's board. Not a [`BuildingKind`] — a Tankstelle is a
 /// vacant-lot occupant with a canopy rather than a building — but it hangs
 /// the same kind of painted sign, so it lives in the same kit.
@@ -197,6 +312,9 @@ fn tankstelle_plaque() -> Plaque {
 pub struct SignKit {
     boards: Vec<(BuildingKind, Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
     tankstelle: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
+    /// A shared unit quad, scaled per building to its ground storey.
+    strip: Handle<Mesh>,
+    frontages: Vec<(BuildingKind, Handle<StandardMaterial>)>,
 }
 
 impl SignKit {
@@ -213,6 +331,18 @@ impl SignKit {
     pub fn tankstelle(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
         let (mesh, material, size) = &self.tankstelle;
         (mesh, material, *size)
+    }
+
+    /// The painted ground storey for a civic kind, as a unit quad and its
+    /// material — the caller stretches it across the front face.
+    pub fn frontage(
+        &self,
+        kind: BuildingKind,
+    ) -> Option<(&Handle<Mesh>, &Handle<StandardMaterial>)> {
+        self.frontages
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, material)| (&self.strip, material))
     }
 }
 
@@ -252,7 +382,27 @@ pub fn build_assets(
         size,
     );
 
-    SignKit { boards, tankstelle }
+    let frontages = FRONTED
+        .iter()
+        .map(|&kind| {
+            let image = frontage_texture(kind).expect("every FRONTED kind paints one");
+            (
+                kind,
+                materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(image)),
+                    perceptual_roughness: 0.85,
+                    ..default()
+                }),
+            )
+        })
+        .collect();
+
+    SignKit {
+        boards,
+        tankstelle,
+        strip: meshes.add(Rectangle::new(1.0, 1.0)),
+        frontages,
+    }
 }
 
 #[cfg(test)]
@@ -302,6 +452,46 @@ mod tests {
                 "{kind:?}: {ink:.3} of the board is ink"
             );
         }
+    }
+
+    #[test]
+    fn only_the_sealed_civic_kinds_paint_a_frontage() {
+        for kind in FRONTED {
+            assert!(frontage_texture(kind).is_some(), "{kind:?}");
+            assert!(
+                !kind.enterable(),
+                "{kind:?} has an open door and a painted one"
+            );
+        }
+        // The enterable kinds show who they are through the doorway instead.
+        assert!(frontage_texture(BuildingKind::Supermarket).is_none());
+        assert!(frontage_texture(BuildingKind::Apartments).is_none());
+    }
+
+    #[test]
+    fn the_fire_station_doors_reach_the_pavement() {
+        // An orientation guard: the strip's last texture row is the
+        // pavement line. A door painted at the wrong end of `v` would hang
+        // from the lintel, and every painter below inherits the mistake.
+        let image = frontage_texture(BuildingKind::FireStation).unwrap();
+        let data = image.data.as_ref().unwrap();
+        let width = image.texture_descriptor.size.width as usize;
+        let height = image.texture_descriptor.size.height as usize;
+        let at = |x: usize, y: usize| {
+            let i = (y * width + x) * 4;
+            [data[i], data[i + 1], data[i + 2]]
+        };
+        let field = [150, 28, 24];
+        assert_eq!(
+            at(width / 2, 2),
+            field,
+            "the lintel over the middle door is missing"
+        );
+        assert_ne!(
+            at(width / 2, height - 2),
+            field,
+            "the middle door never reaches the ground"
+        );
     }
 
     #[test]

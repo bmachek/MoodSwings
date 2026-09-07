@@ -762,6 +762,40 @@ fn spawn_building(
         chunk,
     );
 
+    // The painted ground storey, for the sealed civic kinds: fire-station
+    // roller doors, the town hall's pilasters, the taped-shut police door,
+    // the barracks gate. A quad stretched across the front face, standing
+    // just proud of the wall — under the sign, over the shop glass the
+    // class would otherwise paint there. It clears the plinth's band by
+    // starting above it, and stops under the fascia the sign hangs on.
+    if let Some((mesh, material)) = ctx.signs.frontage(building.kind) {
+        let proud = 0.14;
+        let at = match front {
+            0 => Vec2::new(footprint.min.x - proud, center.y),
+            1 => Vec2::new(footprint.max.x + proud, center.y),
+            2 => Vec2::new(center.x, footprint.min.y - proud),
+            _ => Vec2::new(center.x, footprint.max.y + proud),
+        };
+        let foot = SIDEWALK_HEIGHT + PLINTH_HEIGHT + 0.02;
+        let top = SIDEWALK_HEIGHT + storey * texture::FASCIA.0 - 0.05;
+        let strip = (top - foot).max(1.2);
+        let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(at.x, foot + strip * 0.5, at.y)
+                .with_rotation(Quat::from_rotation_y(yaw))
+                .with_scale(Vec3::new(frontage * 0.96, strip, 1.0)),
+            VisibilityRange {
+                start_margin: 0.0..0.0,
+                end_margin: (sign_draw * 0.9)..sign_draw,
+                use_aabb: false,
+            },
+            NotShadowCaster,
+        ));
+    }
+
     // And what accumulated on the deck. Sits on top of the slab, so nothing is
     // buried in it and nothing floats over it.
     rooftop::spawn(
