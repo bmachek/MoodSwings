@@ -170,6 +170,7 @@ pub fn update_streaming(
     props: Res<PropAssets>,
     foliage: Res<crate::world::vegetation::FoliageKit>,
     wear: Res<crate::world::decals::WearKit>,
+    rubbish: Res<crate::world::litter::LitterKit>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -213,6 +214,7 @@ pub fn update_streaming(
         .graphics
         .lod_distance(crate::world::vegetation::RANGE);
     let wear_range = config.graphics.lod_distance(crate::world::decals::RANGE);
+    let litter_range = config.graphics.lod_distance(crate::world::litter::RANGE);
     for chunk in arriving {
         // One stream per chunk and per subsystem, so a chunk's furniture is
         // identical every time it is walked back into rather than reshuffling,
@@ -248,6 +250,11 @@ pub fn update_streaming(
                 crate::core::rng::stream::PROPS,
                 (chunk.x, chunk.y),
             );
+            let mut dropping = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::LITTER,
+                (chunk.x, chunk.y),
+            );
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
@@ -272,6 +279,16 @@ pub fn update_streaming(
                     to,
                     chunk,
                     wear_range,
+                );
+                super::litter::spawn_edge(
+                    &mut commands,
+                    &rubbish,
+                    &mut dropping,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    litter_range,
                 );
             }
         }

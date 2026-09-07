@@ -83,6 +83,10 @@ pub mod stream {
     /// are on the paving must not move a cat, and startling a flock must not
     /// change a dog's coat.
     pub const PIGEONS: u64 = 23;
+    /// Where the city's rubbish has collected. Its own stream for the reason
+    /// every other one has: how dirty a street is must not move the bin at the
+    /// end of it, nor the tree, nor the manhole.
+    pub const LITTER: u64 = 24;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

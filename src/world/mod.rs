@@ -8,6 +8,7 @@ pub mod facade;
 pub mod frontage;
 pub mod garage;
 pub mod interior;
+pub mod litter;
 pub mod lots;
 pub mod markings;
 pub mod material;
@@ -60,6 +61,7 @@ impl Plugin for WorldPlugin {
             vegetation::VegetationPlugin,
             mayhem::MayhemPlugin,
             stadium::StadiumPlugin,
+            litter::LitterPlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
@@ -113,6 +115,7 @@ fn generate_city(
     commands.insert_resource(streaming::ChunkIndex::build(&city));
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(rooftop::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(shell::build_assets(&mut meshes));
     commands.insert_resource(decals::build_assets(&mut images, &mut wear));
