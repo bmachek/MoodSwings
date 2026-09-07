@@ -224,8 +224,9 @@ fn drive_player(
     // `BounceConfig::player_hop_scale` for why the player of all people
     // bounces least.
     // The chosen archetype scales it again — a player in the wheelchair
-    // glides exactly as the crowd's wheelchair users do.
-    bouncer.hop_scale = config.bounce.player_hop_scale * config.character.hop();
+    // glides exactly as the crowd's wheelchair users do — and the gait
+    // setting scales everybody: a walking city walks its player too.
+    bouncer.hop_scale = config.bounce.player_hop_scale * config.character.hop() * config.gait.hop();
 
     // Only off the ground. Held down, this would otherwise be a pogo stick with
     // no ceiling: every landing would take the bigger hop, and each one lands

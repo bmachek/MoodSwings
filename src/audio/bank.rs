@@ -61,6 +61,11 @@ pub struct SoundBank {
     pub cough: Handle<SynthSound>,
     pub spit: Handle<SynthSound>,
     pub burp: Handle<SynthSound>,
+    /// The disgust department: dry retching and a cartoon gag. Not part of
+    /// the taunt rotation — they belong to one particular gentleman with a
+    /// peanut for a head, and general circulation would blunt him.
+    pub retch: Handle<SynthSound>,
+    pub gag: Handle<SynthSound>,
     /// Making up: a contrite word, thrown with a flower.
     pub sorry: Handle<SynthSound>,
     pub gasp: Handle<SynthSound>,
@@ -123,6 +128,8 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("cough", 0.8, Shape::Shot),
     ("spit", 0.7, Shape::Shot),
     ("burp", 0.8, Shape::Shot),
+    ("retch", 0.8, Shape::Shot),
+    ("gag", 0.75, Shape::Shot),
     ("sorry", 0.6, Shape::Shot),
     ("gasp", 0.65, Shape::Shot),
     ("murmur-0", 0.5, Shape::Shot),
@@ -187,6 +194,8 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         cough: add("cough"),
         spit: add("spit"),
         burp: add("burp"),
+        retch: add("retch"),
+        gag: add("gag"),
         sorry: add("sorry"),
         gasp: add("gasp"),
         murmur: std::array::from_fn(|take| add(&format!("murmur-{take}"))),

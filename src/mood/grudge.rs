@@ -291,13 +291,19 @@ fn drift_towards_company(
     }
 }
 
-/// The ram itself.
+/// The ram — or, between citizens, the collar-grab.
 ///
 /// Only the angry half lands a blow. A pirouetting flummi simply walks into its
 /// neighbour and lets the solver deal with it, which is a small knock, which
 /// [`super::feeling::jolt`] reads as a friendly bop and *raises* both moods.
 /// That is the whole of the happy contagion: no code, just the same collision
 /// with a different number on it.
+///
+/// Arriving at the target now forks on who the target is — see
+/// [`super::scuffle::grabbable`]: the player and the steadfast are rammed as
+/// they always were, an ordinary citizen is grabbed by the collar and shaken
+/// instead, which is what an argument between neighbours actually looks like.
+///
 /// Decided and then applied, in two passes over a [`ParamSet`], because both
 /// halves want `LinearVelocity` — the rammer's to see how fast it arrived, the
 /// victim's to throw them with. The obvious fix is to make the two queries
@@ -309,13 +315,20 @@ fn settle_scores(
     mut commands: Commands,
     knocked: Query<(), With<KnockedDown>>,
     steadfast: Query<(), With<crate::bounce::launch::NeverTumbles>>,
+    launched: Query<(), With<Launched>>,
+    scuffling: Query<(), With<super::scuffle::Scuffle>>,
+    players: Query<(), With<crate::player::on_foot::Player>>,
     positions: Query<&Transform>,
     mut bodies: ParamSet<(
-        Query<(Entity, &Transform, &LinearVelocity, &Grudge), Without<Launched>>,
+        Query<
+            (Entity, &Transform, &LinearVelocity, &Grudge),
+            (Without<Launched>, Without<super::scuffle::Scuffle>),
+        >,
         Query<&mut LinearVelocity>,
     )>,
 ) {
     let mut landed: Vec<(Entity, Entity, Vec3)> = Vec::new();
+    let mut collared: Vec<(Entity, Entity)> = Vec::new();
     for (rammer, transform, velocity, grudge) in &bodies.p0() {
         let Ok(target) = positions.get(grudge.against) else {
             continue;
@@ -329,6 +342,17 @@ fn settle_scores(
         if apart.length() > RAM_REACH {
             continue;
         }
+
+        if super::scuffle::grabbable(
+            players.contains(grudge.against),
+            steadfast.contains(grudge.against),
+            launched.contains(grudge.against),
+            scuffling.contains(grudge.against),
+        ) {
+            collared.push((rammer, grudge.against));
+            continue;
+        }
+
         // Whatever speed the pursuer arrived with, along the line between them,
         // handed on with interest. A rammer that has been slowed to a crawl by
         // the crowd should not still launch anybody across a junction.
@@ -356,6 +380,20 @@ fn settle_scores(
         // Satisfied. Without this the pursuer stays glued to whoever it just
         // launched and rams them again the moment they land.
         commands.entity(rammer).remove::<Grudge>();
+    }
+
+    for (grabber, victim) in collared {
+        // Both grudges come off — the argument *is* the settlement now, and
+        // a victim who kept pursuing somebody currently shaking them would
+        // be asking two systems to steer one body.
+        commands.entity(grabber).remove::<Grudge>().insert((
+            super::scuffle::Scuffle::new(victim, true),
+            crate::ai::figure::Posture::Grabbing,
+        ));
+        commands.entity(victim).remove::<Grudge>().insert((
+            super::scuffle::Scuffle::new(grabber, false),
+            crate::ai::figure::Posture::Flailing,
+        ));
     }
 }
 

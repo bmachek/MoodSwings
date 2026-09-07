@@ -43,6 +43,63 @@ pub struct GameConfig {
     /// preference, like a keybinding, not a fact about one city.
     #[serde(default)]
     pub character: crate::ai::archetype::Archetype,
+    /// How everybody on foot gets about: walking like a person or hopping
+    /// like a flummi. A preference like the character, so it lives in the
+    /// options; see [`Gait`] for why both stayed in the game.
+    #[serde(default)]
+    pub gait: Gait,
+}
+
+/// Whether the city walks or bounces.
+///
+/// The city was built around the perpetual hop, and then it turned out that a
+/// street of people *walking* — with the rubber saved for what happens to
+/// them — reads better. Rather than deleting the hop (and the work in it),
+/// the gait became a setting: `Walking` zeroes the resting hop and the squash
+/// cycle that rides on it, `Bouncing` is the city as it was. Everything else
+/// — launches, crashes, deliberate jumps, the solver's restitution — is
+/// untouched by this switch, because being made of rubber was never the same
+/// decision as travelling by bouncing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Gait {
+    /// Feet on the ground: the resting hop is zeroed, so the bounce
+    /// controller glides bodies the way it already glides wheelchairs and
+    /// cyclists, and the walk cycle carries the motion.
+    #[default]
+    Walking,
+    /// The original flummi city: everybody travels by hopping.
+    Bouncing,
+}
+
+impl Gait {
+    pub const ALL: [Self; 2] = [Self::Walking, Self::Bouncing];
+
+    /// Multiplier on the *resting* hop — the travel bounce, not the jump.
+    pub fn hop(self) -> f32 {
+        match self {
+            Self::Walking => 0.0,
+            Self::Bouncing => 1.0,
+        }
+    }
+
+    /// The squash depth that goes with it. Walking bodies are permanently at
+    /// the bottom of a hop as far as `Bouncer::hop_phase` can tell, and a
+    /// city frozen mid-squash reads as a rendering bug, so the whole cycle
+    /// is switched off with the hop.
+    pub fn squash(self, amount: f32) -> f32 {
+        match self {
+            Self::Walking => 0.0,
+            Self::Bouncing => amount,
+        }
+    }
+
+    /// The settings menu's label. Player-facing, so German.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Walking => "Gehen (realistisch)",
+            Self::Bouncing => "Hüpfen (Flummi)",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -424,6 +481,7 @@ impl Default for GameConfig {
             graphics: GraphicsSettings::default(),
             window: WindowConfig::default(),
             character: crate::ai::archetype::Archetype::default(),
+            gait: Gait::default(),
         }
     }
 }
@@ -491,6 +549,32 @@ mod tests {
             parsed.crowd.population,
             GameConfig::default().crowd.population
         );
+    }
+
+    #[test]
+    fn the_city_walks_by_default_and_can_be_told_to_bounce() {
+        // The decision this records: walking became the default, hopping
+        // stayed as the option, and no work was thrown away for it.
+        assert_eq!(Gait::default(), Gait::Walking);
+        assert_eq!(Gait::Walking.hop(), 0.0);
+        assert_eq!(Gait::Bouncing.hop(), 1.0);
+        // The squash cycle rides on the hop and must go with it, or a
+        // walking city is a city frozen mid-squash.
+        assert_eq!(Gait::Walking.squash(0.35), 0.0);
+        assert_eq!(Gait::Bouncing.squash(0.35), 0.35);
+    }
+
+    #[test]
+    fn an_options_file_from_before_the_gait_switch_still_parses() {
+        let mut old = GameConfig::default();
+        old.audio.master = 0.42;
+        let mut text = ron::ser::to_string(&old).unwrap();
+        let start = text.find("gait:").unwrap();
+        let end = start + text[start..].find(')').unwrap();
+        text.replace_range(start..end, "");
+        let parsed: GameConfig = ron::from_str(&text).expect("old options should parse");
+        assert_eq!(parsed.audio.master, 0.42);
+        assert_eq!(parsed.gait, Gait::default());
     }
 
     #[test]

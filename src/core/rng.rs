@@ -63,6 +63,9 @@ pub mod stream {
     /// own stream for the usual reason — retuning how many bikes the city
     /// holds must not move a single pedestrian, mood or parked car.
     pub const CYCLISTS: u64 = 19;
+    /// The captain. One resident, own wardrobe, own stream: he must be able
+    /// to change his coat without a single citizen changing theirs.
+    pub const CAPTAIN: u64 = 20;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

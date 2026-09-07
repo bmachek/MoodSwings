@@ -245,6 +245,12 @@ fn maintain_population(
     time: Res<Time>,
     mut timer: ResMut<PedestrianTimer>,
     config: Res<GameConfig>,
+    // One tuple param rather than two: the system sits at Bevy's sixteen-
+    // parameter ceiling, and clock-and-sky is one thing here anyway.
+    sky: (
+        Res<crate::world::timeofday::TimeOfDay>,
+        Res<crate::world::weather::Weather>,
+    ),
     city: Res<City>,
     assets: Res<PedestrianAssets>,
     figures: Res<super::figure::FigureAssets>,
@@ -264,6 +270,20 @@ fn maintain_population(
     let focus = player.translation.xz();
     let crowd = &config.crowd;
 
+    // The clock and the sky thin the crowd: the small hours keep a fraction
+    // of the afternoon's street, and rain sends a share of everybody home.
+    // Residents over the cap are not culled — they walk off the despawn ring
+    // in their own time, which reads as the street emptying rather than as
+    // the game deleting people.
+    let (clock, weather) = sky;
+    let level =
+        super::social::crowd_level(clock.hours) * (1.0 - 0.4 * weather.rain.clamp(0.0, 1.0));
+    let population = ((crowd.population as f32 * level).round() as usize).max(1);
+    // After dark the cast changes too: children are in bed and the
+    // missionaries knock by day. The draws are still consumed as usual —
+    // a fixed answer is not a skipped question.
+    let dark = crate::world::timeofday::daylight(clock.hours) < 0.2;
+
     let mut alive = 0usize;
     for (entity, transform) in &pedestrians {
         if transform.translation.xz().distance(focus) > crowd.despawn {
@@ -272,7 +292,7 @@ fn maintain_population(
             alive += 1;
         }
     }
-    if alive >= crowd.population {
+    if alive >= population {
         return;
     }
 
@@ -292,7 +312,7 @@ fn maintain_population(
         return;
     }
 
-    while alive < crowd.population {
+    while alive < population {
         let edge = candidates[rng.0.random_range(0..candidates.len())];
         let (from, to) = if rng.0.random_range(0.0..1.0) < 0.5 {
             (edge.a, edge.b)
@@ -311,18 +331,21 @@ fn maintain_population(
         // Who they are, from the crowd's own stream — see `ai::archetype` for
         // why it is neither of the two streams drawn from below. A group
         // shares one draw and arrives in single file down the same pavement.
-        let archetype = cast.draw(&mut crowd_rng.0);
+        let mut archetype = cast.draw(&mut crowd_rng.0);
+        if dark && archetype == super::archetype::Archetype::Missionary {
+            archetype = super::archetype::Archetype::Everyday;
+        }
         let mut leader: Option<Entity> = None;
         for member in 0..archetype.group_size() {
             // And how old. Drawn per member — a group of missionaries spans
             // the generations — and bent to Adult where the combination
-            // would not be a joke.
+            // would not be a joke, or where the hour says a child is in bed.
             let mut age = super::archetype::AgeClass::draw(&mut crowd_rng.0);
-            if !age.suits(archetype) {
+            if !age.suits(archetype) || (dark && age == super::archetype::AgeClass::Child) {
                 age = super::archetype::AgeClass::Adult;
             }
             let size = age.size();
-            if alive >= crowd.population {
+            if alive >= population {
                 break;
             }
             let t = (t + member as f32 * 0.03).min(0.95);
@@ -408,6 +431,7 @@ fn walk_pavements(
     mut report: Local<f32>,
     city: Res<City>,
     config: Res<GameConfig>,
+    weather: Res<crate::world::weather::Weather>,
     mut rng: ResMut<PedestrianRng>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut pedestrians: Query<
@@ -493,18 +517,26 @@ fn walk_pavements(
             crowd.flee_speed
         } else {
             // Who they are — and how old they are — scales how they amble,
-            // on top of how they feel.
-            pedestrian.speed.min(crowd.walk_speed * 1.3)
+            // on top of how they feel. Rain hurries the lot of them, with a
+            // hard cap under the flee: weather quickens a street, it does
+            // not turn strollers into escape artists.
+            (pedestrian.speed.min(crowd.walk_speed * 1.3)
                 * stride(mood.value)
                 * archetype.pace()
                 * age.pace()
+                * super::social::hurry(weather.rain))
+            .min(crowd.flee_speed * 0.95)
         };
         // The mood is in the body as well as on the face: the hop the bounce
         // controller takes at the bottom of every arc is scaled here, every
         // frame, because the controller spends the scale on each landing.
         // Who they are scales it again — a skater glides, a wheelchair rolls.
-        bouncer.hop_scale =
-            spring(mood.value, config.bounce.npc_spring_max) * archetype.hop() * age.spring();
+        // And the gait setting scales the lot: a walking city keeps its feet
+        // down and lets the walk cycle carry the motion instead.
+        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max)
+            * archetype.hop()
+            * age.spring()
+            * config.gait.hop();
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's
