@@ -68,6 +68,7 @@ impl Plugin for WorldPlugin {
             worksite::WorksitePlugin,
             bunting::BuntingPlugin,
             plume::PlumePlugin,
+            frontage::FrontagePlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball

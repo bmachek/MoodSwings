@@ -88,8 +88,12 @@ pub struct WorksiteKit {
     cone: Handle<Mesh>,
     tube: Handle<Mesh>,
     heap: Handle<Mesh>,
-    /// The hoarding, red and white on both faces.
-    hoarding: Handle<StandardMaterial>,
+    /// The hoarding, red and white on both faces — and the same board after
+    /// somebody has been at it. A site hoarding is the single most reliably
+    /// tagged surface in any city, and it is the one surface in this world
+    /// that is a flat panel I own end to end: no window reveal, no shopfront
+    /// glass, nothing to work around.
+    hoarding: [Handle<StandardMaterial>; 2],
     steel: Handle<StandardMaterial>,
     /// Traffic cone orange, and the reflective band round it.
     plastic: Handle<StandardMaterial>,
@@ -108,18 +112,43 @@ pub struct WorksiteKit {
 #[derive(Component)]
 pub struct WarningLamp;
 
+/// A tag across the middle of a board, as colour and coverage.
+///
+/// The board is five times wider than it is tall, so the tag's own square image
+/// is stretched into the middle third of it — which is where somebody standing
+/// on a pavement can actually reach.
+fn scrawl(u: f32, v: f32) -> ([u8; 4], f32) {
+    let across = (u - 0.10) / 0.80;
+    let up = (v - 0.16) / 0.68;
+    if !(0.0..1.0).contains(&across) || !(0.0..1.0).contains(&up) {
+        return ([0; 4], 0.0);
+    }
+    let texel = super::texture::graffiti_at(across, up, 1);
+    (texel, texel[3] as f32 / 255.0)
+}
+
 /// Red and white diagonals, which is the most legible pattern anybody has ever
 /// painted on anything.
 ///
 /// Diagonal rather than vertical: a vertical bar pattern on a board seen at a
 /// glancing angle collapses into one colour, and the whole reason this thing is
 /// striped is to be unmistakable from up the street.
-fn hoarding_stripes() -> Image {
-    const SIZE: u32 = 128;
-    super::texture::painted(SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+fn hoarding_stripes(tagged: bool) -> Image {
+    const SIZE: u32 = 256;
+    super::texture::painted(SIZE, TextureFormat::Rgba8UnormSrgb, move |u, v| {
         // The board is five times wider than it is tall, so `u` is squashed to
         // put the stripes at forty-five degrees on the finished panel rather
         // than at the texture's own aspect.
+        // The tag, worked out first so the stripes underneath can be skipped
+        // where it covers them. Painted rather than laid over as a second quad:
+        // the board is already a texture and a decal on a movable dynamic body
+        // would have to be parented and scaled with it for nothing.
+        if tagged {
+            let (ink, alpha) = scrawl(u, v);
+            if alpha > 0.5 {
+                return [ink[0], ink[1], ink[2], 255];
+            }
+        }
         let diagonal = (u * 5.0 + v).fract();
         let red = diagonal < 0.5;
         // Weathered: a hoarding that has stood in a street for a fortnight is
@@ -158,11 +187,13 @@ pub fn build_assets(
                 .ico(2)
                 .expect("an icosphere at two subdivisions"),
         ),
-        hoarding: materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(images.add(hoarding_stripes())),
-            perceptual_roughness: 0.85,
-            ..default()
+        hoarding: [false, true].map(|tagged| {
+            materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(images.add(hoarding_stripes(tagged))),
+                perceptual_roughness: 0.85,
+                ..default()
+            })
         }),
         steel: materials.add(StandardMaterial {
             base_color: Color::srgb(0.55, 0.56, 0.58),
@@ -365,7 +396,19 @@ pub fn spawn_edge(
     for (i, (a, d, turn)) in pen.into_iter().enumerate() {
         let spot = at(a, d);
         let yaw = facing + turn;
-        barrier(commands, kit, spot, ground, yaw, chunk, &visibility, i == 0);
+        // The middle board carries the lamp, and every other board in the city
+        // has been tagged.
+        barrier(
+            commands,
+            kit,
+            spot,
+            ground,
+            yaw,
+            chunk,
+            &visibility,
+            i == 0,
+            rng.random_range(0.0..1.0) < 0.45,
+        );
     }
 
     // And two cones out in the gutter, which is both what actually happens and
@@ -410,6 +453,7 @@ fn barrier(
     chunk: IVec2,
     range: &VisibilityRange,
     lamped: bool,
+    tagged: bool,
 ) {
     commands
         .spawn((
@@ -428,7 +472,7 @@ fn barrier(
             // The board, near the top of the frame.
             parent.spawn((
                 Mesh3d(kit.cube.clone()),
-                MeshMaterial3d(kit.hoarding.clone()),
+                MeshMaterial3d(kit.hoarding[usize::from(tagged)].clone()),
                 Transform::from_xyz(0.0, PANEL_HEIGHT * 0.5 - PANEL.y * 0.5, 0.0).with_scale(PANEL),
                 range.clone(),
             ));

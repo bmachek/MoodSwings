@@ -641,6 +641,94 @@ pub struct FacadeMaps {
     pub normal: Image,
 }
 
+/// How wide a stroke of paint is, as a fraction of the tag's own image.
+const STROKE: f32 = 0.052;
+/// And the black outline round it, which is what makes a tag read as a tag
+/// rather than as a coloured squiggle.
+const OUTLINE: f32 = 0.030;
+
+/// Distance from a point to a line segment, in image space.
+fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let run = b - a;
+    let along = (p - a).dot(run) / run.length_squared().max(1e-6);
+    a.lerp(b, along.clamp(0.0, 1.0)).distance(p)
+}
+
+/// A tag: one continuous scrawl, outlined, with the rest transparent.
+///
+/// Not letters. Every attempt to spell something at this texel count comes out
+/// as a smudge that reads as a mistake rather than as writing, and a tag that
+/// says a real word says it on every wall in the city. What a tag is *shaped*
+/// like — one unbroken run of a fat marker, doubling back on itself, outlined
+/// in black — is unmistakable at ten metres and takes six points and a distance
+/// function.
+///
+/// `variant` picks a different scrawl and a different colour, so a street does
+/// not carry the same signature twice.
+pub fn graffiti(variant: u32) -> Image {
+    const SIZE: u32 = 256;
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, move |u, v| {
+        graffiti_at(u, v, variant)
+    })
+}
+
+/// One texel of a tag, so a surface that is already painting itself — the site
+/// hoarding, which has stripes under its graffiti — can lay one on without a
+/// second quad to parent, scale and knock over alongside the first.
+pub fn graffiti_at(u: f32, v: f32, variant: u32) -> [u8; 4] {
+    // The chain, hashed from the variant and kept off the border so the stroke
+    // and its outline both fit inside the image.
+    let points: Vec<Vec2> = (0..7)
+        .map(|i| {
+            // Marching left to right *on average*, with enough slack in each
+            // step to double back on the last one. That doubling-back is the
+            // whole difference between a tag and a worm: a chain that only ever
+            // advances comes out as one fat horizontal stroke, which is exactly
+            // what the first version drew across every shutter in the city.
+            let along = i as f32 / 6.0;
+            Vec2::new(
+                0.12 + along * 0.76 + (hash01(i, variant, 0x51a9) - 0.5) * 0.40,
+                0.16 + hash01(i, variant, 0x7d13) * 0.68,
+            )
+            .clamp(Vec2::splat(0.11), Vec2::splat(0.89))
+        })
+        .collect();
+
+    // Fill and outline. The fills are the colours somebody actually buys.
+    let fill = match variant % 3 {
+        0 => [0.92f32, 0.28, 0.14],
+        1 => [0.20, 0.62, 0.88],
+        _ => [0.94, 0.86, 0.16],
+    };
+
+    let p = Vec2::new(u, v);
+    let mut near = f32::MAX;
+    for pair in points.windows(2) {
+        near = near.min(to_segment(p, pair[0], pair[1]));
+    }
+    {
+        // A spray line is not a clean edge: the width wanders and the paint
+        // fades out where the can was moving.
+        let ragged = (fbm(u, v, 9, 3, 0x2be1 ^ variant) - 0.5) * 0.018;
+        let ink = smoothstep01((STROKE + ragged - near) / 0.007);
+        let edge = smoothstep01((STROKE + OUTLINE + ragged - near) / 0.007);
+
+        // Black under the colour, so the outline shows wherever the fill does
+        // not reach.
+        let color = [
+            fill[0] * ink + 0.04 * (1.0 - ink),
+            fill[1] * ink + 0.04 * (1.0 - ink),
+            fill[2] * ink + 0.045 * (1.0 - ink),
+        ];
+        [
+            byte(color[0]),
+            byte(color[1]),
+            byte(color[2]),
+            byte(edge * 0.92),
+        ]
+    }
+}
+
 pub fn smoothstep01(t: f32) -> f32 {
     smoothstep(t.clamp(0.0, 1.0))
 }

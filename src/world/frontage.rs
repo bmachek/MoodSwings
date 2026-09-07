@@ -47,7 +47,7 @@ use super::citygen::{Building, BuildingKind, Rect};
 use super::mayhem::Breakaway;
 use std::f32::consts::FRAC_PI_2;
 
-use super::texture::{FacadeClass, byte, fbm, hash01, painted};
+use super::texture::{FacadeClass, byte, fbm, hash01, painted, smoothstep01};
 
 /// How far the frontage's larger pieces are drawn: pipes, boards, troughs,
 /// parasols, tables.
@@ -111,6 +111,14 @@ pub struct FrontageKit {
     linen: Handle<StandardMaterial>,
     /// Parasol canvas, in the three colours a brewery gives them away in.
     canvas: [Handle<StandardMaterial>; 3],
+    /// Three signatures. More than one because a street where every tag is the
+    /// same tag is a street with one very busy resident.
+    tags: [Handle<StandardMaterial>; 3],
+    /// The roller shutter, plain and tagged. Of all the surfaces in a city, a
+    /// shut shutter is the one most reliably written on — it is a blank steel
+    /// hoarding that appears at seven in the evening and is gone by eight in
+    /// the morning, which is the whole working day of the person writing on it.
+    shutter: [Handle<StandardMaterial>; 2],
 }
 
 /// Slate with something chalked on it that cannot quite be read.
@@ -147,6 +155,52 @@ fn chalkboard() -> Image {
 
         let c = byte(value.clamp(0.0, 1.0));
         [c, c, byte((value * 1.03).clamp(0.0, 1.0)), 255]
+    })
+}
+
+/// A roller shutter: slats of painted steel, and sometimes a tag.
+///
+/// The slats run *across*, which is the one thing to get right and the one
+/// thing this had backwards first time: a roller shutter is a curtain of
+/// horizontal laths that rolls onto a barrel, so the lines run at right angles
+/// to the direction it travels. Vertical ribs are a garage door, or a fence.
+///
+/// Across is also the stable axis. A shutter's width is its building's
+/// frontage, anywhere from six metres to twenty, and a fixed number of
+/// divisions over that comes out anywhere from a hand's width to half a metre.
+/// Its *height* is a shopfront, which is between two and three metres on every
+/// building in the city — so slats counted up the panel land between seven and
+/// eleven centimetres wherever they are put, which is what a slat is.
+fn corrugated(tagged: bool) -> Image {
+    const SIZE: u32 = 256;
+    /// Slats up a shopfront. Twenty-six over two and a half metres is a
+    /// ten-centimetre lath.
+    const SLATS: f32 = 26.0;
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, move |u, v| {
+        if tagged {
+            // The tag occupies the middle fifth of the panel and no more. The
+            // UVs run nought to one over the whole shutter however wide the
+            // shop is, so a tag drawn across the full image is a tag stretched
+            // to the width of the building — which on a parade of them came
+            // out as one continuous red smear along the entire street.
+            let across = (u - 0.40) / 0.20;
+            let up = (v - 0.24) / 0.46;
+            if (0.0..1.0).contains(&across) && (0.0..1.0).contains(&up) {
+                let ink = super::texture::graffiti_at(across, up, 0);
+                if ink[3] > 128 {
+                    return [ink[0], ink[1], ink[2], 255];
+                }
+            }
+        }
+        // Each lath is a shallow curve with a shadow in the joint below it.
+        let slat = (v * SLATS).fract();
+        let curve = (slat - 0.5).abs() * 2.0;
+        let joint = smoothstep01((0.14 - slat) / 0.10) * 0.30;
+        // Grubby along the bottom, where every shutter in the world is kicked.
+        let kick = smoothstep01((0.10 - v) / 0.09) * 0.30;
+        let grime = fbm(u, v, 11, 3, 0x6c2f) * 0.08;
+        let value = (0.46 - curve * 0.10 - joint - kick - grime).clamp(0.0, 1.0);
+        [byte(value), byte(value), byte(value * 1.04), 255]
     })
 }
 
@@ -234,6 +288,24 @@ pub fn build_assets(
             Color::srgb(0.85, 0.79, 0.62),
         ]
         .map(|color| materials.add(matte(color, 0.88))),
+        shutter: [false, true].map(|tagged| {
+            materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(images.add(corrugated(tagged))),
+                perceptual_roughness: 0.62,
+                metallic: 0.45,
+                ..default()
+            })
+        }),
+        tags: [0u32, 1, 2].map(|variant| {
+            materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(images.add(super::texture::graffiti(variant))),
+                alpha_mode: AlphaMode::Blend,
+                perceptual_roughness: 0.90,
+                ..default()
+            })
+        }),
     }
 }
 
@@ -330,6 +402,8 @@ pub fn spawn(
     fittings(
         commands, kit, &face, building, class, &far, &near, chunk, &mut rng,
     );
+    tag(commands, kit, &face, building, class, &far, chunk, &mut rng);
+    shutter(commands, kit, &face, building, class, &far, chunk, &mut rng);
     if class.has_shopfronts() {
         sandwich_board(commands, kit, &face, &far, chunk, &mut rng);
     }
@@ -380,6 +454,198 @@ fn downpipe(
             height,
             PIPE_RADIUS,
         )),
+        range.clone(),
+    ));
+}
+
+/// A shopfront's roller shutter, and the two heights it lives between.
+///
+/// Hung from a fixed top edge, because that is where the barrel is: closing it
+/// grows the panel downwards rather than sliding a fixed-size one about, and
+/// open it is not gone — it is the box of rolled steel over the window, which
+/// is exactly what a raised shutter looks like.
+#[derive(Component)]
+pub struct Shutter {
+    /// Height of the barrel above the pavement.
+    top: f32,
+    /// What the panel measures rolled up, and pulled right down.
+    rolled: f32,
+    shut: f32,
+    /// How far down this shutter was last actually put.
+    ///
+    /// Per shutter and not in a resource, and that distinction is the whole
+    /// bug this field exists to have fixed. A single "what hour did we last
+    /// set" resource is the obvious way to keep the system off two thousand
+    /// transforms a frame — and it latches: the first frame runs before
+    /// streaming has spawned a single shopfront, records the hour against an
+    /// empty query, and every shutter built afterwards keeps the pose it was
+    /// spawned in for the rest of the session. Which is a rolled-up one, so
+    /// the whole city grew a dark bar over every shop window and nothing ever
+    /// came down.
+    ///
+    /// Kept here, a shutter that has never been set cannot be mistaken for one
+    /// that is already right. It costs a comparison per shutter per frame and
+    /// writes nothing on the twenty-two hours a day when the answer has not
+    /// moved.
+    applied: f32,
+}
+
+/// When the shops shut and when they open, and how long the shutter takes.
+const CLOSES: f32 = 19.0;
+const OPENS: f32 = 8.0;
+const RAMP: f32 = 0.7;
+
+/// How far down the shutters are at this hour, nought to one.
+///
+/// Not a step. A whole street snapping shut on the same frame is a light
+/// switch, and the ramp is what turns it into a closing time — over forty
+/// minutes the parade goes down one shopfront at a time, because every
+/// building's own panel is a different height and reaches the ground at its
+/// own moment.
+fn shut_at(hours: f32) -> f32 {
+    let h = hours.rem_euclid(24.0);
+    if h < OPENS {
+        // Still last night's.
+        return 1.0;
+    }
+    let opening = smoothstep01((h - OPENS) / RAMP);
+    let closing = smoothstep01((h - CLOSES) / RAMP);
+    (1.0 - opening).max(closing).clamp(0.0, 1.0)
+}
+
+pub struct FrontagePlugin;
+
+impl Plugin for FrontagePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            roll_shutters.in_set(crate::core::schedule::GameSet::Simulation),
+        );
+    }
+}
+
+fn roll_shutters(
+    clock: Res<super::timeofday::TimeOfDay>,
+    mut shutters: Query<(&mut Shutter, &mut Transform)>,
+) {
+    let closed = shut_at(clock.hours);
+    for (mut shutter, mut transform) in &mut shutters {
+        // A two-hundredth of the travel is under a centimetre on a three-metre
+        // shopfront, which is nothing — and skipping the *write* is everything,
+        // because writing a transform is what drags an entity back through
+        // propagation and extraction whether or not it moved.
+        if (shutter.applied - closed).abs() < 0.005 {
+            continue;
+        }
+        shutter.applied = closed;
+        let height = shutter.rolled.lerp(shutter.shut, closed);
+        transform.scale.y = height;
+        transform.translation.y = shutter.top - height * 0.5;
+    }
+}
+
+/// Hangs a shutter over a shopfront.
+fn shutter(
+    commands: &mut Commands,
+    kit: &FrontageKit,
+    face: &Face,
+    building: &Building,
+    class: FacadeClass,
+    range: &VisibilityRange,
+    chunk: IVec2,
+    rng: &mut ChaCha8Rng,
+) {
+    // A house has no shop to shut, and a tower's ground floor is a lobby with
+    // a curtain wall over it — neither has ever had a roller shutter.
+    if !matches!(class, FacadeClass::Lowrise | FacadeClass::Midrise) {
+        return;
+    }
+    let (_, rows) = class.grid();
+    let storey = building.height / rows;
+    // The barrel hangs just under the sign board, and the panel reaches the
+    // pavement — those two numbers come off `texture::FASCIA` and the ground,
+    // so a shutter cannot end up covering its own shop's sign.
+    let top = SIDEWALK_HEIGHT + storey * super::texture::FASCIA.0;
+    let at = face.at(0.0, 0.06);
+
+    let rolled = storey * 0.09;
+    commands.spawn((
+        ChunkOf(chunk),
+        Shutter {
+            top,
+            rolled,
+            shut: top - SIDEWALK_HEIGHT,
+            // Never set. Not nought: nought is a real position, and a shutter
+            // spawned at noon would then agree it was already up and never be
+            // touched again.
+            applied: f32::NAN,
+        },
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(kit.shutter[usize::from(rng.random_range(0.0..1.0) < 0.30)].clone()),
+        Transform::from_xyz(at.x, top - rolled * 0.5, at.y)
+            .with_rotation(Quat::from_rotation_y(face.facing()))
+            .with_scale(Vec3::new(face.frontage * 0.94, rolled, 0.06)),
+        range.clone(),
+    ));
+}
+
+/// Somebody's signature, at the height somebody could reach.
+///
+/// The hard part of graffiti in this world is not drawing it, it is finding a
+/// wall. The ground storey of every class but the house is a shopfront —
+/// `FacadeClass::pane` runs the glass from eight percent of a bay to
+/// ninety-two — so the only thing at eye level on most of the city is a window,
+/// and a tag standing proud of a recessed shopfront hangs half a metre out in
+/// front of the glass.
+///
+/// A house is the exception and it is the right one: its ground floor is a
+/// front door and ordinary windows, its piers are half a bay wide, and a tagged
+/// back street of houses is exactly where tags are. The other surface this
+/// module's neighbours own outright is a site hoarding, and `world::worksite`
+/// takes care of that one itself.
+#[allow(clippy::too_many_arguments)]
+fn tag(
+    commands: &mut Commands,
+    kit: &FrontageKit,
+    face: &Face,
+    building: &Building,
+    class: FacadeClass,
+    range: &VisibilityRange,
+    chunk: IVec2,
+    rng: &mut ChaCha8Rng,
+) {
+    if class != FacadeClass::House {
+        return;
+    }
+    if rng.random_range(0.0..1.0) > 0.22 {
+        return;
+    }
+    let (columns, rows) = class.grid();
+    let bay = face.frontage / columns;
+    // The pier: the strip of wall a window does not cover, which on a house is
+    // a bit over half a bay. Anything wider than that is on the glass.
+    let (glass, _) = class.glazing();
+    let pier = bay * (1.0 - glass) * 0.86;
+    if pier < 0.7 {
+        return;
+    }
+
+    let column = rng.random_range(0..columns as u32);
+    let across = column as f32 * bay - face.frontage * 0.5;
+    let at = face.at(across, 0.05);
+    // Between the top of the skirting and as high as an arm goes. A tag on the
+    // first floor is a tag somebody brought a ladder for.
+    let storey = building.height / rows;
+    let height = (storey * 0.42).clamp(0.9, 1.6);
+    let middle = SIDEWALK_HEIGHT + 0.35 + height * 0.5;
+
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(kit.tags[rng.random_range(0..kit.tags.len())].clone()),
+        Transform::from_xyz(at.x, middle, at.y)
+            .with_rotation(Quat::from_rotation_y(face.facing()))
+            .with_scale(Vec3::new(pier, height, 0.02)),
         range.clone(),
     ));
 }
@@ -1124,6 +1390,58 @@ mod tests {
             (0.6..0.85).contains(&top),
             "a stand {top}m tall is not something you lean a bike on"
         );
+    }
+
+    /// The shops shut in the evening and open in the morning, and nowhere in
+    /// between is either.
+    #[test]
+    fn a_shutter_is_down_at_night_and_up_in_the_day() {
+        assert_eq!(shut_at(3.0), 1.0, "the small hours are open for business");
+        assert_eq!(shut_at(23.0), 1.0, "nothing has shut by eleven at night");
+        assert_eq!(shut_at(13.0), 0.0, "the shops are shut at lunchtime");
+        assert_eq!(shut_at(OPENS + RAMP + 0.1), 0.0);
+        // And it is continuous over midnight, or the whole parade jumps on the
+        // frame the clock wraps.
+        assert!((shut_at(23.999) - shut_at(0.001)).abs() < 1e-3);
+    }
+
+    /// It closes over a closing time rather than on one frame.
+    #[test]
+    fn the_parade_shuts_gradually() {
+        let mut previous = shut_at(CLOSES - 0.1);
+        let mut biggest: f32 = 0.0;
+        for step in 0..80 {
+            let h = CLOSES - 0.1 + step as f32 * 0.02;
+            let now = shut_at(h);
+            biggest = biggest.max((now - previous).abs());
+            assert!(now >= previous - 1e-4, "a shutter went back up at {h}");
+            previous = now;
+        }
+        assert!((previous - 1.0).abs() < 1e-3, "the shutters never got down");
+        // Over a couple of game minutes nothing should move more than a
+        // fraction of its travel.
+        assert!(biggest < 0.2, "the street snapped shut in one step");
+    }
+
+    /// A raised shutter is a roll over the window, not a hole where one was.
+    #[test]
+    fn an_open_shutter_is_still_something() {
+        // A three-metre storey: rolled it should be a hand's depth of steel
+        // over the glass, and shut it should reach the pavement.
+        let storey = 3.4f32;
+        let top = SIDEWALK_HEIGHT + storey * super::super::texture::FASCIA.0;
+        let rolled = storey * 0.09;
+        assert!(
+            (0.15..0.45).contains(&rolled),
+            "a rolled shutter {rolled:.2}m deep is a lintel"
+        );
+        assert!(
+            (top - SIDEWALK_HEIGHT) > 2.0,
+            "the shutter does not reach the ground"
+        );
+        // And the barrel is under the sign board, so a shut shop still has its
+        // name over the door.
+        assert!(top < SIDEWALK_HEIGHT + storey);
     }
 
     /// Nothing is placed past the kerb.
