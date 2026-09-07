@@ -49,13 +49,18 @@ struct FacePortrait;
 #[derive(Component)]
 struct RageBanner;
 
+/// The banner announcing the day's scheduled event, under the rage banner —
+/// a demo can put both up at once, which is exactly right.
+#[derive(Component)]
+struct EventShout;
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PostStartup, spawn_hud).add_systems(
             Update,
-            (toggle_map, size_map_frame, show_the_mood)
+            (toggle_map, size_map_frame, show_the_mood, show_the_event)
                 .chain()
                 .in_set(GameSet::Ui),
         );
@@ -223,6 +228,26 @@ fn spawn_hud(mut commands: Commands, minimap: Res<MinimapImage>, faces: Res<Face
                     TextColor(SOUR),
                 )],
             ),
+            // --- and the day's event, while one is on the streets ---
+            (
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(78.0),
+                    width: Val::Percent(100.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                Visibility::Hidden,
+                EventShout,
+                children![(
+                    Text::new(""),
+                    TextFont {
+                        font_size: FontSize::Px(24.0),
+                        ..default()
+                    },
+                    TextColor(INK),
+                )],
+            ),
         ],
     ));
 }
@@ -269,6 +294,38 @@ fn show_the_mood(
             if let Ok(mut text) = shouts.get_mut(child) {
                 let count = city.wave_size;
                 **text = format!("Wut-Welle! {count} Bürger");
+            }
+        }
+    }
+}
+
+/// Shows whatever `events` says is on the streets right now. The colour
+/// follows the kind: a CSD announces itself in the HUD's own ink, a demo in
+/// the same sour red the rage wave uses.
+fn show_the_event(
+    banner: Res<crate::events::EventBanner>,
+    mut shouts: Query<(&mut Visibility, &Children), With<EventShout>>,
+    mut texts: Query<(&mut Text, &mut TextColor)>,
+) {
+    if !banner.is_changed() {
+        return;
+    }
+    for (mut visibility, children) in &mut shouts {
+        *visibility = if banner.0.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        let Some((line, kind)) = &banner.0 else {
+            continue;
+        };
+        for &child in children {
+            if let Ok((mut text, mut colour)) = texts.get_mut(child) {
+                **text = line.clone();
+                colour.0 = match kind {
+                    crate::events::EventKind::Csd => INK,
+                    crate::events::EventKind::Demo => SOUR,
+                };
             }
         }
     }
