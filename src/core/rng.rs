@@ -103,6 +103,10 @@ pub mod stream {
     /// Which roofs have a chimney going and which gullies are steaming. Its
     /// own stream so that lighting a fire cannot move a lamp post.
     pub const PLUMES: u64 = 28;
+    /// Which citizen has stopped to play and where the ring stands round
+    /// them. Runtime behaviour, so its own stream: who is busking must not
+    /// depend on how many pigeons have gone up.
+    pub const BUSKERS: u64 = 29;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
