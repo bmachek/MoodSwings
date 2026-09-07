@@ -534,6 +534,7 @@ pub struct BlockContext<'a> {
     pub statues: &'a crate::world::statues::StatueKit,
     pub stadium: &'a crate::world::stadium::StadiumKit,
     pub interior: &'a crate::world::interior::InteriorKit,
+    pub frontage: &'a crate::world::frontage::FrontageKit,
     /// `None` only before the bank has landed — streaming simply spawns that
     /// chunk's emitters never, which resolves itself on the next re-entry.
     pub bank: Option<&'a crate::audio::bank::SoundBank>,
@@ -735,6 +736,11 @@ fn spawn_building(
         .min_by(|a, b| a.1.total_cmp(b.1))
         .map(|(side, _)| side)
         .unwrap_or(3);
+    // How much pavement there is between this building's front and the kerb.
+    // The block is inset by `SIDEWALK_WIDTH` before anything is built on it, so
+    // this is at least that — but a lot the subdivision left deep gives its
+    // building a wider apron, and the frontage is allowed to use it.
+    let apron = gaps[front];
     let yaw = match front {
         0 => -FRAC_PI_2,
         1 => FRAC_PI_2,
@@ -858,6 +864,28 @@ fn spawn_building(
         );
         return;
     }
+
+    // What this building has put out on the pavement. After the early returns
+    // above on purpose: a stadium, a church and a parking garage each own their
+    // whole structure, and none of them keeps geraniums.
+    //
+    // The outward direction is derived from the same yaw the shell is turned
+    // by rather than from `front` a second time, so the pipe cannot end up down
+    // the back of a building whose door faces the street.
+    let outward = Vec2::new(yaw.sin(), yaw.cos());
+    super::frontage::spawn(
+        commands,
+        ctx.frontage,
+        ctx.seed,
+        ctx.lod_scale,
+        building,
+        class,
+        center + outward * (throat * 0.5),
+        outward,
+        frontage,
+        apron,
+        chunk,
+    );
 
     let wall = if door_shell.is_some() {
         Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)

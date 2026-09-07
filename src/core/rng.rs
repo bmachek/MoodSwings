@@ -73,6 +73,11 @@ pub mod stream {
     /// via `key_for` like the weather — where the river runs is a fact about
     /// the seed, and digging it must never move a lot.
     pub const RIVER: u64 = 21;
+    /// What a building has put out on the pavement: the pipe, the sandwich
+    /// board, the window boxes, the bikes, the terrace. Keyed per footprint
+    /// like the roofs are, and on its own stream for the usual reason — the
+    /// street's dressing must never move a roof, a lot or a bin.
+    pub const FRONTAGE: u64 = 22;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

@@ -149,6 +149,7 @@ pub struct BuildingKits<'w> {
     statues: Res<'w, crate::world::statues::StatueKit>,
     stadium: Res<'w, crate::world::stadium::StadiumKit>,
     interior: Res<'w, crate::world::interior::InteriorKit>,
+    frontage: Res<'w, crate::world::frontage::FrontageKit>,
     bank: Option<Res<'w, crate::audio::bank::SoundBank>>,
     // The interior staff's wardrobe and disposition tables. Optional for the
     // same reason the bank is: a chunk streamed before they land simply
@@ -192,6 +193,7 @@ pub fn update_streaming(
         statues: &kits.statues,
         stadium: &kits.stadium,
         interior: &kits.interior,
+        frontage: &kits.frontage,
         bank: kits.bank.as_deref(),
         cast: match (&kits.figures, &kits.faces, &kits.tempers) {
             (Some(figures), Some(faces), Some(tempers)) => {
