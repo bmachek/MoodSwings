@@ -65,11 +65,23 @@ pub mod gain {
     /// stops reading it as a city behind the buildings and starts reading it
     /// as the mixer hissing. Felt more than heard, as its synth promises.
     pub const TRAFFIC_BED: f32 = 0.4;
-    // The zone emitters, under the global beds on purpose: a place's own
-    // sound should read as detail over the city, not replace it.
-    pub const CHATTER: f32 = 0.5;
-    pub const FORECOURT: f32 = 0.45;
-    pub const PARK_BIRDS: f32 = 0.45;
+    /// The mood beds proper. Birdsong and uproar used to ride at unity, and
+    /// at unity a delighted city's birds sat *on top of* everything instead
+    /// of behind it — and fed the same summing distortion the traffic did.
+    /// A bed is the room tone of the city; it must never compete with an
+    /// event happening in it.
+    pub const BIRDS_BED: f32 = 0.6;
+    pub const UPROAR_BED: f32 = 0.7;
+    // The zone emitters. These went *up* when the traffic band came in: with
+    // engines local and the far city quiet, the places themselves — chatter
+    // on a frontage, a ball on a court, the factory drone — are what carries
+    // a street's character, and they were tuned to hide under noise that is
+    // no longer there.
+    pub const CHATTER: f32 = 0.6;
+    pub const FORECOURT: f32 = 0.5;
+    pub const PARK_BIRDS: f32 = 0.55;
+    pub const COURT: f32 = 0.5;
+    pub const INDUSTRY: f32 = 0.4;
     pub const BARK: f32 = 0.55;
     pub const MEOW: f32 = 0.5;
 }
@@ -80,12 +92,36 @@ pub mod gain {
 /// with a district's worth of traffic simulated at once those leftover tails
 /// sum into a permanent grey wash under everything. So distance gets a second,
 /// steeper hand on the fader: full inside `CLEAR`, genuinely nothing past
-/// `GONE`, squared in between so the drop accelerates on the way out.
+/// `GONE`, cubed in between so the drop accelerates on the way out.
+///
+/// The band used to run 30..55 with a square. That was quiet enough per
+/// engine, but rodio has no limiter: every audible source sums linearly, and
+/// a junction's worth of engines plus the beds pushed the sum past full scale
+/// — heard as crackling distortion, not as loudness. The cure for clipping is
+/// fewer things audible at once, so the band came in hard and the curve got
+/// a third power. An engine is now a *local* fact; the city at large is the
+/// ambience beds' job, which is what they are for.
 pub fn hush(distance: f32) -> f32 {
     /// Inside this, the mixer's own attenuation is the whole story.
-    const CLEAR: f32 = 30.0;
+    const CLEAR: f32 = 14.0;
     /// Beyond this a running engine is scenery, not sound.
-    const GONE: f32 = 55.0;
+    const GONE: f32 = 38.0;
+    let fade = ((GONE - distance) / (GONE - CLEAR)).clamp(0.0, 1.0);
+    fade * fade * fade
+}
+
+/// The same second fader for a *place*, on a longer leash than `hush`.
+///
+/// The zone emitters are deliberately not held to the vehicle band: a park
+/// should already sound like a park from across the street, because the
+/// place's mood arriving before the place is most of what an ambience is
+/// for. The `EMITTER_CHOIR` cap keeps the long tail from ever piling up the
+/// way traffic did.
+pub fn linger(distance: f32) -> f32 {
+    /// A place fills its own lot at full strength...
+    const CLEAR: f32 = 25.0;
+    /// ...and has faded to genuinely nothing a long block away.
+    const GONE: f32 = 80.0;
     let fade = ((GONE - distance) / (GONE - CLEAR)).clamp(0.0, 1.0);
     fade * fade
 }
@@ -160,7 +196,7 @@ fn tend_emitters(
 
     for (entity, at, emitter, mut sink) in &mut emitters {
         let level = if audible.contains(&entity) {
-            base * emitter.gain * hush(at.translation().distance(ears))
+            base * emitter.gain * linger(at.translation().distance(ears))
         } else {
             0.0
         };
@@ -198,7 +234,7 @@ fn play_animal_voices(
                 &mut commands,
                 bank.bark.clone(),
                 here.translation,
-                spatial_once(effect_gain(&config, gain::BARK), 24.0).with_speed(dog.pitch),
+                spatial_once(effect_gain(&config, gain::BARK), 18.0).with_speed(dog.pitch),
             );
         }
     }
@@ -208,7 +244,7 @@ fn play_animal_voices(
                 &mut commands,
                 bank.meow.clone(),
                 here.translation,
-                spatial_once(effect_gain(&config, gain::MEOW), 14.0).with_speed(cat.pitch),
+                spatial_once(effect_gain(&config, gain::MEOW), 12.0).with_speed(cat.pitch),
             );
         }
     }
@@ -307,7 +343,7 @@ fn play_honks(
             &mut commands,
             bank.honk.clone(),
             impact.position,
-            spatial_once(effect_gain(&config, gain::HONK), 26.0)
+            spatial_once(effect_gain(&config, gain::HONK), 20.0)
                 // Every car has its own voice, near enough.
                 .with_speed(0.85 + rng.random::<f32>() * 0.35),
         );
@@ -327,7 +363,7 @@ fn play_sproings(
             &mut commands,
             bank.sproing.clone(),
             shear.position,
-            spatial_once(effect_gain(&config, gain::SPROING), 24.0)
+            spatial_once(effect_gain(&config, gain::SPROING), 18.0)
                 // A parking meter and a phone box do not twang at the same
                 // pitch, and the ear notices even if it cannot say why.
                 .with_speed(0.85 + rng.random::<f32>() * 0.4),
@@ -381,7 +417,7 @@ fn play_wheees(
             &mut commands,
             bank.wheee.clone(),
             transform.translation,
-            spatial_once(effect_gain(&config, gain::WHEEE), 24.0)
+            spatial_once(effect_gain(&config, gain::WHEEE), 20.0)
                 .with_speed(0.9 + rng.random::<f32>() * 0.3),
         );
     }
@@ -639,8 +675,8 @@ fn update_ambience(
     for (bed, mut sink) in &mut beds {
         let level = match bed {
             Ambience::Traffic => traffic * gain::TRAFFIC_BED,
-            Ambience::Birdsong => birds,
-            Ambience::Uproar => uproar,
+            Ambience::Birdsong => birds * gain::BIRDS_BED,
+            Ambience::Uproar => uproar * gain::UPROAR_BED,
         };
         sink.set_volume(Volume::Linear(base * level));
         // A muted sink remembers its volume, so unmuting lands on the level
@@ -724,14 +760,30 @@ mod tests {
         // has to reach an actual zero, and reach it faster than a straight
         // line so leaving earshot sounds like leaving rather than dimming.
         assert_eq!(hush(0.0), 1.0);
-        assert_eq!(hush(25.0), 1.0, "close traffic is the mixer's business");
-        assert_eq!(hush(60.0), 0.0);
+        assert_eq!(hush(12.0), 1.0, "close traffic is the mixer's business");
+        assert_eq!(hush(40.0), 0.0);
         assert_eq!(hush(300.0), 0.0);
-        let midway = hush(42.5);
+        let midway = hush(26.0);
         assert!(
-            midway > 0.0 && midway < 0.5,
-            "halfway out should be under half as loud, got {midway}"
+            midway > 0.0 && midway < 0.25,
+            "halfway out should be well under a quarter as loud, got {midway}"
         );
+        // Rodio sums every audible source with no limiter, so the sum of a
+        // junction's worth of engines is bounded by how many the band lets
+        // through at all — at 30m, where the old band still passed a third,
+        // an engine must now be nearly gone.
+        assert!(hush(30.0) < 0.05, "got {}", hush(30.0));
+    }
+
+    #[test]
+    fn a_place_carries_further_than_an_engine() {
+        // The whole point of splitting `linger` off `hush`: the mood of a
+        // place should arrive before the place does, while traffic stays a
+        // local fact.
+        assert_eq!(linger(0.0), 1.0);
+        assert!(linger(35.0) > hush(35.0), "a park outlasts an engine");
+        assert!(linger(35.0) > 0.3, "audible from across the street");
+        assert_eq!(linger(85.0), 0.0, "but a long block away it is gone");
     }
 
     #[test]

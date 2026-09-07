@@ -50,7 +50,7 @@ pub struct SoundBank {
     // per speaker (`Voicebox::pitch`), which is also what keeps a recorded
     // human take from reading as the same human twice.
     pub whistle: [Handle<SynthSound>; VARIANTS],
-    pub giggle: Handle<SynthSound>,
+    pub giggle: [Handle<SynthSound>; VARIANTS],
     pub grumble: [Handle<SynthSound>; VARIANTS],
     pub curse: [Handle<SynthSound>; VARIANTS],
     /// The taunt rotation: raspberry, fart, cough, spit — and now the burp,
@@ -82,10 +82,20 @@ pub struct SoundBank {
     /// exactly the way the crowd's voices work.
     pub bark: Handle<SynthSound>,
     pub meow: Handle<SynthSound>,
+    /// A ball being dribbled on tarmac, for the street-sports cages.
+    pub court: Handle<SynthSound>,
+    /// The factory-floor drone that hangs over an industrial block.
+    pub industry: Handle<SynthSound>,
 }
 
 /// How many takes of each spoken sound the bank holds.
-pub const VARIANTS: usize = 3;
+///
+/// Was three, and three turned out to be the number at which a street of
+/// citizens still audibly repeats itself within a minute of play. Five takes
+/// per utterance — times the per-speaker pitch — is where the crowd stopped
+/// sounding like a soundboard. The giggle joined the arrays at the same
+/// bump: it was the last single-take voice, and the most recognisable.
+pub const VARIANTS: usize = 5;
 
 /// Firing frequency, in hertz, that the engine loop plays at unit speed.
 /// Everything driving it scales from here.
@@ -116,13 +126,23 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("whistle-0", 0.55, Shape::Shot),
     ("whistle-1", 0.55, Shape::Shot),
     ("whistle-2", 0.55, Shape::Shot),
-    ("giggle", 0.6, Shape::Shot),
+    ("whistle-3", 0.55, Shape::Shot),
+    ("whistle-4", 0.55, Shape::Shot),
+    ("giggle-0", 0.6, Shape::Shot),
+    ("giggle-1", 0.6, Shape::Shot),
+    ("giggle-2", 0.6, Shape::Shot),
+    ("giggle-3", 0.6, Shape::Shot),
+    ("giggle-4", 0.6, Shape::Shot),
     ("grumble-0", 0.65, Shape::Shot),
     ("grumble-1", 0.65, Shape::Shot),
     ("grumble-2", 0.65, Shape::Shot),
+    ("grumble-3", 0.65, Shape::Shot),
+    ("grumble-4", 0.65, Shape::Shot),
     ("curse-0", 0.7, Shape::Shot),
     ("curse-1", 0.7, Shape::Shot),
     ("curse-2", 0.7, Shape::Shot),
+    ("curse-3", 0.7, Shape::Shot),
+    ("curse-4", 0.7, Shape::Shot),
     ("raspberry", 0.85, Shape::Shot),
     ("fart", 0.85, Shape::Shot),
     ("cough", 0.8, Shape::Shot),
@@ -135,10 +155,14 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("murmur-0", 0.5, Shape::Shot),
     ("murmur-1", 0.5, Shape::Shot),
     ("murmur-2", 0.5, Shape::Shot),
+    ("murmur-3", 0.5, Shape::Shot),
+    ("murmur-4", 0.5, Shape::Shot),
     ("bark", 0.7, Shape::Shot),
     ("meow", 0.55, Shape::Shot),
     ("chatter", 0.5, Shape::Loop),
     ("forecourt", 0.45, Shape::Loop),
+    ("court", 0.5, Shape::Loop),
+    ("industry", 0.45, Shape::Loop),
     ("spray", 0.6, Shape::Loop),
     ("engine", 0.85, Shape::Loop),
     ("screech", 0.75, Shape::Loop),
@@ -186,7 +210,7 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         birdsong: add("birdsong"),
         uproar: add("uproar"),
         whistle: std::array::from_fn(|take| add(&format!("whistle-{take}"))),
-        giggle: add("giggle"),
+        giggle: std::array::from_fn(|take| add(&format!("giggle-{take}"))),
         grumble: std::array::from_fn(|take| add(&format!("grumble-{take}"))),
         curse: std::array::from_fn(|take| add(&format!("curse-{take}"))),
         raspberry: add("raspberry"),
@@ -203,6 +227,8 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         forecourt: add("forecourt"),
         bark: add("bark"),
         meow: add("meow"),
+        court: add("court"),
+        industry: add("industry"),
     }
 }
 
