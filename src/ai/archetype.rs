@@ -184,6 +184,42 @@ impl Archetype {
         }
     }
 
+    /// How readily this archetype stops for small talk, as a multiplier on
+    /// the street's base chance. Zero is a veto — see
+    /// [`crate::ai::social::chat_chance`], which multiplies both parties
+    /// through, so the Shy are never cornered and headphones actually work.
+    pub fn chattiness(self) -> f32 {
+        match self {
+            Archetype::Shy | Archetype::Headphones => 0.0,
+            Archetype::Wutbuerger => 0.3,
+            Archetype::Hooligan => 0.4,
+            Archetype::Skater => 0.5,
+            Archetype::Punk => 0.7,
+            Archetype::Rocker => 0.8,
+            Archetype::Beggar => 1.2,
+            Archetype::CaneUser => 1.4,
+            // Recruiting is talking. Of course they stop.
+            Archetype::Missionary => 1.6,
+            _ => 1.0,
+        }
+    }
+
+    /// An excuse this archetype has to stand still: (chance per second,
+    /// how long, whether they face the buildings while they do it).
+    ///
+    /// The window-shopper faces the shopfronts; everybody else faces
+    /// wherever they happened to stop, which for a beggar with a cup out
+    /// and a punk holding up a corner is exactly right.
+    pub fn loiter(self) -> Option<(f32, f32, bool)> {
+        match self {
+            Archetype::Everyday => Some((0.010, 4.0, true)),
+            Archetype::Beggar => Some((0.05, 9.0, false)),
+            Archetype::Punk => Some((0.03, 7.0, false)),
+            Archetype::CaneUser => Some((0.04, 5.0, false)),
+            _ => None,
+        }
+    }
+
     /// How many of them arrive together.
     pub fn group_size(self) -> usize {
         match self {
@@ -246,6 +282,16 @@ impl AgeClass {
             AgeClass::Child => 1.25,
             AgeClass::Adult => 1.0,
             AgeClass::Senior => 0.85,
+        }
+    }
+
+    /// Multiplier on the chance of stopping for a chat. Children have
+    /// somewhere to be; seniors have all the time the street owes them.
+    pub fn chattiness(self) -> f32 {
+        match self {
+            AgeClass::Child => 0.7,
+            AgeClass::Adult => 1.0,
+            AgeClass::Senior => 1.5,
         }
     }
 

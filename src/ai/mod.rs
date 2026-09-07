@@ -6,6 +6,7 @@ pub mod archetype;
 pub mod cyclist;
 pub mod figure;
 pub mod pedestrian;
+pub mod social;
 pub mod steering;
 pub mod traffic;
 
@@ -18,6 +19,7 @@ impl Plugin for AiPlugin {
         app.add_plugins((
             traffic::TrafficPlugin,
             pedestrian::PedestrianPlugin,
+            social::SocialPlugin,
             cyclist::CyclistPlugin,
             animal::AnimalPlugin,
         ));
