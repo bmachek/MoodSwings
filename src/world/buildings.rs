@@ -28,7 +28,7 @@ use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
-use super::citygen::{Block, Building, District, PALETTE_SIZE};
+use super::citygen::{Block, Building, District, PALETTE_SIZE, Quarter};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
 
@@ -124,6 +124,43 @@ fn palette(district: District) -> [Color; PALETTE_SIZE as usize] {
             Color::srgb(0.51, 0.49, 0.44),
         ],
         District::Park => [Color::srgb(0.30, 0.44, 0.26); PALETTE_SIZE as usize],
+    }
+}
+
+/// The quarters' own palettes, overriding the district's where a block sits
+/// in one. This is most of what makes a quarter legible from the street:
+/// the same city, suddenly wearing somebody else's colours.
+fn quarter_palette(quarter: Quarter) -> [Color; PALETTE_SIZE as usize] {
+    match quarter {
+        Quarter::Italia => [
+            Color::srgb(0.72, 0.44, 0.30),
+            Color::srgb(0.80, 0.62, 0.38),
+            Color::srgb(0.84, 0.74, 0.58),
+            Color::srgb(0.62, 0.33, 0.26),
+        ],
+        Quarter::Fernost => [
+            Color::srgb(0.60, 0.20, 0.16),
+            Color::srgb(0.78, 0.62, 0.28),
+            Color::srgb(0.36, 0.52, 0.42),
+            Color::srgb(0.48, 0.46, 0.44),
+        ],
+    }
+}
+
+/// Which district's wall grain a quarter borrows. There are six scanned wall
+/// sets in the whole game; a quarter recolours, it does not re-photograph.
+fn quarter_grain(quarter: Quarter) -> District {
+    match quarter {
+        Quarter::Italia => District::Residential,
+        Quarter::Fernost => District::Midtown,
+    }
+}
+
+/// Material-table group index: the five districts first, then the quarters.
+fn quarter_index(quarter: Quarter) -> usize {
+    5 + match quarter {
+        Quarter::Italia => 0,
+        Quarter::Fernost => 1,
     }
 }
 
@@ -247,13 +284,26 @@ pub fn build_assets(
         })
         .collect();
 
-    let mut building = Vec::with_capacity(districts.len() * PALETTE_SIZE as usize * CLASS_COUNT);
-    for district in districts {
-        for (slot, color) in palette(district).into_iter().enumerate() {
+    // The five districts' groups first, then one group per quarter — the
+    // same `group * PALETTE_SIZE + palette` addressing throughout, which is
+    // what `material_for` and `quarter_index` agree on.
+    let groups: Vec<([Color; PALETTE_SIZE as usize], District)> = districts
+        .iter()
+        .map(|&district| (palette(district), district))
+        .chain(
+            [Quarter::Italia, Quarter::Fernost]
+                .into_iter()
+                .map(|quarter| (quarter_palette(quarter), quarter_grain(quarter))),
+        )
+        .collect();
+
+    let mut building = Vec::with_capacity(groups.len() * PALETTE_SIZE as usize * CLASS_COUNT);
+    for (colors, grain_district) in groups {
+        for (slot, color) in colors.into_iter().enumerate() {
             // The grain is the district's, but how it is dressed — scale, and
             // whether it is turned — belongs to the palette slot, so a street
             // of one district is not a street of one photograph.
-            let grain = super::facade::FacadeGrain::for_district(library, district, slot);
+            let grain = super::facade::FacadeGrain::for_district(library, grain_district, slot);
             for (&class, (base, emissive, surface, normal)) in FacadeClass::ALL.iter().zip(&facades)
             {
                 building.push(facades_out.add(super::facade::FacadeMaterial {
@@ -367,10 +417,15 @@ impl CityAssets {
     fn material_for(
         &self,
         district: District,
+        quarter: Option<Quarter>,
         palette: u8,
         class: FacadeClass,
     ) -> Handle<super::facade::FacadeMaterial> {
-        let slot = district_index(district) * PALETTE_SIZE as usize + palette as usize;
+        let group = match quarter {
+            Some(quarter) => quarter_index(quarter),
+            None => district_index(district),
+        };
+        let slot = group * PALETTE_SIZE as usize + palette as usize;
         let i = slot * CLASS_COUNT + class.index();
         self.building[i.min(self.building.len() - 1)].clone()
     }
@@ -514,6 +569,16 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
         if block.district == District::Industrial {
             emitter(commands, center, 3.0, &bank.industry, gain::INDUSTRY);
         }
+        // A quarter's tune hangs over its blocks the same way — this is the
+        // zone-ambience variation RNG key 16 was reserved for, though it
+        // turned out to need a wedge of geometry rather than a die roll.
+        if let Some(quarter) = block.quarter {
+            let air = match quarter {
+                Quarter::Italia => &bank.mandolin,
+                Quarter::Fernost => &bank.guzheng,
+            };
+            emitter(commands, center, 3.0, air, gain::QUARTER);
+        }
         for building in &block.buildings {
             if building.kind == super::citygen::BuildingKind::Restaurant {
                 emitter(
@@ -608,11 +673,21 @@ fn spawn_building(
     // origin, so all three measure the same distance and hand over to one
     // another on precisely the same metre — which is what Bevy needs before it
     // will dither one into the next instead of blinking between them.
-    let material = assets.material_for(district, building.palette, class);
+    let material = assets.material_for(district, block.quarter, building.palette, class);
     let (near, far) = shell::ranges(ctx.lod_scale);
     // Which balconies and which awnings, from the building's own seed rather
     // than from a counter, for the same reason its roof is.
     let variant = (seed >> 19) as u32;
+    // A quarter picks its restaurants' chain for them: every dining room in
+    // Klein-Neapel is the Pizzeria, every one in the Fernost-Viertel is the
+    // Wok — which is how real quarters advertise themselves, one cuisine
+    // repeated until it is a neighbourhood. Only the sign is forced; the
+    // shell variant stays the building's own, so the street still varies.
+    let sign_variant = match (block.quarter, building.kind) {
+        (Some(Quarter::Italia), super::citygen::BuildingKind::Restaurant) => 1,
+        (Some(Quarter::Fernost), super::citygen::BuildingKind::Restaurant) => 3,
+        _ => variant,
+    };
 
     // An enterable kind gets the shell with the doorway carved into its +Z
     // face — so the whole wall stack is turned to put +Z on the front, with
@@ -643,7 +718,7 @@ fn spawn_building(
             commands,
             ctx,
             building,
-            variant,
+            sign_variant,
             front,
             yaw,
             // The board hangs on the tower, which is much narrower than the
@@ -662,7 +737,7 @@ fn spawn_building(
             commands,
             ctx,
             building,
-            variant,
+            sign_variant,
             front,
             yaw,
             frontage,
@@ -820,7 +895,7 @@ fn spawn_building(
         commands,
         ctx,
         building,
-        variant,
+        sign_variant,
         front,
         yaw,
         frontage,
@@ -1130,9 +1205,53 @@ mod tests {
                 }
             }
         }
+        // The quarters address their own groups past the districts' five,
+        // colliding with nothing.
+        for quarter in [Quarter::Italia, Quarter::Fernost] {
+            for palette in 0..PALETTE_SIZE {
+                for class in FacadeClass::ALL {
+                    let slot = quarter_index(quarter) * PALETTE_SIZE as usize + palette as usize;
+                    assert!(
+                        seen.insert(slot * CLASS_COUNT + class.index()),
+                        "material index collision at {quarter:?}/{palette}/{class:?}"
+                    );
+                }
+            }
+        }
         assert_eq!(
             seen.len(),
-            districts.len() * PALETTE_SIZE as usize * CLASS_COUNT
+            (districts.len() + 2) * PALETTE_SIZE as usize * CLASS_COUNT
         );
+    }
+
+    #[test]
+    fn the_quarters_are_wedges_somewhere_in_the_middle_ring() {
+        use super::super::citygen::{Quarter, quarter_for};
+        // Sweep the ring on two seeds: both quarters must exist, must not
+        // overlap, and must leave most of the city unthemed.
+        for seed in [0xA17E_5EED_u64, 2709413613] {
+            let mut italia = 0;
+            let mut fernost = 0;
+            let mut plain = 0;
+            for i in 0..720 {
+                let angle = i as f32 / 720.0 * std::f32::consts::TAU;
+                let at = Vec2::new(angle.cos(), angle.sin()) * 470.0;
+                match quarter_for(seed, at) {
+                    Some(Quarter::Italia) => italia += 1,
+                    Some(Quarter::Fernost) => fernost += 1,
+                    None => plain += 1,
+                }
+            }
+            assert!(italia > 0, "seed {seed:#x} has no Klein-Neapel");
+            assert!(fernost > 0, "seed {seed:#x} has no Fernost-Viertel");
+            assert!(
+                plain > (italia + fernost) * 2,
+                "seed {seed:#x} is more theme park than city"
+            );
+            // And the wedges stop at the rings: downtown and the far belt
+            // stay themselves.
+            assert!(quarter_for(seed, Vec2::new(50.0, 0.0)).is_none());
+            assert!(quarter_for(seed, Vec2::new(900.0, 0.0)).is_none());
+        }
     }
 }

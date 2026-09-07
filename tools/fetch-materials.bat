@@ -101,6 +101,9 @@ rem The street performers - mirror of the .sh: the busker's strummed loop
 rem and the photographer's shutter.
 call :fetch_sound busking mp3 "https://cdn.freesound.org/previews/628/628766_11532701-hq.mp3"
 call :fetch_sound camera mp3 "https://cdn.freesound.org/previews/271/271010_2276808-hq.mp3"
+rem The cultural quarters' airs - mirror of the .sh.
+call :fetch_sound mandolin mp3 "https://cdn.freesound.org/previews/545/545744_10008174-hq.mp3"
+call :fetch_sound guzheng mp3 "https://cdn.freesound.org/previews/666/666269_8466114-hq.mp3"
 
 rem The car pack zip — mirror of CAR_PACK in the .sh.
 set "NEED_PACK="

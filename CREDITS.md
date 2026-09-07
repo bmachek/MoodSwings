@@ -72,6 +72,8 @@ on load.
 - **deadrobotmusic** — the strummed acoustic loop the busker plays whenever
   the street grants him an audience.
 - **Kodack** — the camera shutter click, one decisive moment at a time.
+- **Jackie-makes-noiz** — the porch mandolin that hangs over Klein-Neapel.
+- **f-r-a-g-i-l-e** — the lotus guzheng that hangs over the Fernost-Viertel.
 
 ## Software
 

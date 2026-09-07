@@ -50,9 +50,12 @@ pub mod stream {
     /// Not `PEDESTRIANS` (retuning the cast must not move where anybody
     /// spawns) and not `MOOD` (it must not move anybody's disposition either).
     pub const CROWD: u64 = 15;
-    // 16 stays reserved for zone-ambience variation, per the roadmap's key
-    // budget — the emitters turned out to need no randomness yet, and a
-    // reserved number is cheaper than a renumbering ever is.
+    /// The cultural quarters: where the city keeps its Klein-Neapel and its
+    /// Fernost-Viertel, and the zone ambience that hangs over them — the use
+    /// this key was reserved for all along. Sampled via `key_for`, never
+    /// drawn: which wedge of the city smells of basil is a fact about the
+    /// seed, and placing a quarter must never reshuffle a single lot.
+    pub const QUARTERS: u64 = 16;
     /// The city's event calendar: which day throws which parade. Sampled via
     /// `key_for` like the weather, never drawn — a parade at 14:00 on this
     /// seed must be a fact about the seed, reproducible under `--hour`.

@@ -94,6 +94,10 @@ pub struct SoundBank {
     pub busking: Handle<SynthSound>,
     /// One camera shutter, for the street photographer's decisive moment.
     pub camera: Handle<SynthSound>,
+    /// The cultural quarters' airs: a mandolin over Klein-Neapel, a guzheng
+    /// over the Fernost-Viertel — zone ambience like the industry drone.
+    pub mandolin: Handle<SynthSound>,
+    pub guzheng: Handle<SynthSound>,
 }
 
 /// How many takes of each spoken sound the bank holds.
@@ -179,6 +183,8 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("uproar", 0.6, Shape::Loop),
     ("busking", 0.5, Shape::Loop),
     ("camera", 0.6, Shape::Shot),
+    ("mandolin", 0.45, Shape::Loop),
+    ("guzheng", 0.45, Shape::Loop),
 ];
 
 /// Loads one register entry, or the silence that stands in for it.
@@ -241,6 +247,8 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         industry: add("industry"),
         busking: add("busking"),
         camera: add("camera"),
+        mandolin: add("mandolin"),
+        guzheng: add("guzheng"),
     }
 }
 

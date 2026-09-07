@@ -100,6 +100,15 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 field: [74, 50, 30, 255],
                 letter: 0.50,
             },
+            // Index three, and the Fernost-Viertel forces it — see the
+            // sign-variant override in `buildings::spawn_building`.
+            Plaque {
+                title: "WOK & WEG",
+                subline: Some("GLÜCKSKEKS SAGT: KOMMEN SIE WIEDER"),
+                ink: [250, 226, 160, 255],
+                field: [122, 24, 20, 255],
+                letter: 0.50,
+            },
         ],
         Hotel => &[
             Plaque {

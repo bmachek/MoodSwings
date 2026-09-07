@@ -177,6 +177,11 @@ SOUNDS=(
     # and Kodack's shutter snap is the photographer's decisive moment.
     "busking|https://cdn.freesound.org/previews/628/628766_11532701-hq.mp3"
     "camera|https://cdn.freesound.org/previews/271/271010_2276808-hq.mp3"
+    # The cultural quarters' airs (both CC0): Jackie-makes-noiz's porch
+    # mandolin over Klein-Neapel, f-r-a-g-i-l-e's lotus guzheng over the
+    # Fernost-Viertel.
+    "mandolin|https://cdn.freesound.org/previews/545/545744_10008174-hq.mp3"
+    "guzheng|https://cdn.freesound.org/previews/666/666269_8466114-hq.mp3"
 )
 # These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
 CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"

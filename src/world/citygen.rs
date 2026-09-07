@@ -14,7 +14,7 @@ use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 
 use super::roadgraph::RoadGraph;
-use crate::core::rng::{stream, stream_for};
+use crate::core::rng::{key_for, stream, stream_for};
 
 const ARTERIAL_WIDTH: f32 = 17.0;
 const MINOR_WIDTH: f32 = 9.5;
@@ -201,6 +201,52 @@ pub struct VacantLot {
     pub purpose: VacantUse,
 }
 
+/// A cultural quarter, laid over the radial districts as a second axis of
+/// identity. A district says how tall and how dense; a quarter says whose
+/// kitchen the street smells of. Two wedges of the middle ring carry one
+/// each, placed by the seed via [`quarter_for`] — sampled, never drawn, so
+/// a quarter can move between seeds but never moves a lot within one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Quarter {
+    /// Klein-Neapel: terracotta walls, pizzerias, a mandolin on the air.
+    Italia,
+    /// The Fernost-Viertel: red and gold, woks, a guzheng over the street.
+    Fernost,
+}
+
+/// Which quarter a point of the city belongs to, if any.
+///
+/// The two wedges sit in the middle ring (inside it downtown is too proud
+/// to be themed, outside it the industrial belt would waste the paint),
+/// roughly opposite each other so one walk cannot cross both.
+pub fn quarter_for(seed: u64, center: Vec2) -> Option<Quarter> {
+    use std::f32::consts::{PI, TAU};
+    let r = center.length();
+    if !(230.0..=720.0).contains(&r) {
+        return None;
+    }
+    let key = key_for(seed, stream::QUARTERS);
+    let first = (key & 0xFFFF) as f32 / 65536.0 * TAU;
+    let second = first + PI * (0.75 + ((key >> 16) & 0xFF) as f32 / 256.0 * 0.5);
+    let angle = center.y.atan2(center.x);
+    let within = |wedge: f32| {
+        let mut apart = (angle - wedge).rem_euclid(TAU);
+        if apart > PI {
+            apart = TAU - apart;
+        }
+        // A 48° wedge: wide enough to walk through, narrow enough that the
+        // city stays mostly itself.
+        apart < 0.42
+    };
+    if within(first) {
+        Some(Quarter::Italia)
+    } else if within(second) {
+        Some(Quarter::Fernost)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Building {
     pub footprint: Rect,
@@ -220,6 +266,8 @@ pub struct Block {
     pub vacants: Vec<VacantLot>,
     /// Whether each bounding street is an arterial: -x, +x, -z, +z.
     pub arterial: [bool; 4],
+    /// The cultural quarter this block sits in, if any.
+    pub quarter: Option<Quarter>,
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +315,13 @@ impl CityLayout {
                 mix(vacant.rect.min.x);
                 mix(vacant.purpose as u8 as f32);
             }
+            // A quarter moving is a different city the same way a zoning
+            // change is.
+            mix(match b.quarter {
+                None => 0.0,
+                Some(Quarter::Italia) => 1.0,
+                Some(Quarter::Fernost) => 2.0,
+            });
         }
         h
     }
@@ -401,6 +456,7 @@ fn build_blocks(seed: u64, x_streets: &[Street], z_streets: &[Street]) -> Vec<Bl
                 buildings,
                 vacants,
                 arterial,
+                quarter: quarter_for(seed, area.center()),
             });
         }
     }

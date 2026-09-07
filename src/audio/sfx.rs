@@ -82,6 +82,10 @@ pub mod gain {
     pub const PARK_BIRDS: f32 = 0.55;
     pub const COURT: f32 = 0.5;
     pub const INDUSTRY: f32 = 0.4;
+    /// The cultural quarters' street music. Quieter than the chatter on
+    /// purpose: a quarter's tune is weather, not a performance — the busker
+    /// is the performance, and he must still win his own street.
+    pub const QUARTER: f32 = 0.35;
     pub const BARK: f32 = 0.55;
     pub const MEOW: f32 = 0.5;
 }
