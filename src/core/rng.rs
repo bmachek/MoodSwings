@@ -87,6 +87,10 @@ pub mod stream {
     /// every other one has: how dirty a street is must not move the bin at the
     /// end of it, nor the tree, nor the manhole.
     pub const LITTER: u64 = 24;
+    /// Which streets are being dug up. Its own stream so that adding a
+    /// worksite cannot move a bin, a tree or a piece of rubbish on any of the
+    /// streets that are not.
+    pub const WORKSITE: u64 = 25;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

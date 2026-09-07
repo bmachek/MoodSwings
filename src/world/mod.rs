@@ -28,6 +28,7 @@ pub mod texture;
 pub mod timeofday;
 pub mod vegetation;
 pub mod weather;
+pub mod worksite;
 
 use avian3d::prelude::*;
 use bevy::math::Affine2;
@@ -62,6 +63,7 @@ impl Plugin for WorldPlugin {
             mayhem::MayhemPlugin,
             stadium::StadiumPlugin,
             litter::LitterPlugin,
+            worksite::WorksitePlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
@@ -116,6 +118,11 @@ fn generate_city(
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(worksite::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(rooftop::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(shell::build_assets(&mut meshes));
     commands.insert_resource(decals::build_assets(&mut images, &mut wear));
