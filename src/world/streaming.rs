@@ -146,6 +146,7 @@ pub struct BuildingKits<'w> {
     shells: Res<'w, crate::world::shell::ShellKit>,
     signs: Res<'w, crate::world::signage::SignKit>,
     lots: Res<'w, crate::world::lots::LotKit>,
+    statues: Res<'w, crate::world::statues::StatueKit>,
     interior: Res<'w, crate::world::interior::InteriorKit>,
     bank: Option<Res<'w, crate::audio::bank::SoundBank>>,
     // The interior staff's wardrobe and disposition tables. Optional for the
@@ -187,6 +188,7 @@ pub fn update_streaming(
         shells: &kits.shells,
         signs: &kits.signs,
         lots: &kits.lots,
+        statues: &kits.statues,
         interior: &kits.interior,
         bank: kits.bank.as_deref(),
         cast: match (&kits.figures, &kits.faces, &kits.tempers) {

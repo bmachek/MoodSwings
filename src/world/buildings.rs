@@ -401,6 +401,7 @@ pub struct BlockContext<'a> {
     pub shells: &'a ShellKit,
     pub signs: &'a crate::world::signage::SignKit,
     pub lots: &'a crate::world::lots::LotKit,
+    pub statues: &'a crate::world::statues::StatueKit,
     pub interior: &'a crate::world::interior::InteriorKit,
     /// `None` only before the bank has landed — streaming simply spawns that
     /// chunk's emitters never, which resolves itself on the next re-entry.
@@ -462,6 +463,9 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     }
     for vacant in &block.vacants {
         crate::world::lots::spawn_lot(commands, ctx.lots, ctx.signs, block, vacant, chunk);
+    }
+    if park {
+        crate::world::statues::spawn(commands, ctx.statues, ctx.seed, block, chunk);
     }
 
     // The places that make a sound of their own. Emitters stream with the
@@ -614,6 +618,7 @@ fn spawn_building(
             commands,
             ctx,
             building,
+            variant,
             front,
             yaw,
             frontage,
@@ -771,12 +776,70 @@ fn spawn_building(
         commands,
         ctx,
         building,
+        variant,
         front,
         yaw,
         frontage,
         SIDEWALK_HEIGHT + storey * 0.875,
         chunk,
     );
+
+    // An advertising poster on a blind side wall, for the anonymous kinds
+    // only. A supermarket advertising over its own sign is clutter; a block
+    // of flats renting its gable out is a business model. Placement comes
+    // off the building's own seed like everything else about it, from bits
+    // the roof and the sign variant are not already using.
+    use super::citygen::BuildingKind;
+    if matches!(
+        building.kind,
+        BuildingKind::Apartments | BuildingKind::Offices
+    ) && height >= 12.0
+        && (seed >> 27) & 0b111 < 3
+    {
+        let (mesh, material, poster) = ctx.signs.advert((seed >> 33) as u32);
+        // The two faces perpendicular to the front are the blind ones; one
+        // seed bit picks which. The poster must fit the wall it is pasted
+        // to with paper to spare, or it wraps the corner.
+        let side = if front < 2 {
+            2 + ((seed >> 41) & 1) as usize
+        } else {
+            ((seed >> 41) & 1) as usize
+        };
+        let side_width = if side < 2 { size.y } else { size.x };
+        let fit = (side_width * 0.55 / poster.x)
+            .min(height * 0.38 / poster.y)
+            .min(1.0);
+        if fit > 0.45 {
+            let proud = 0.14;
+            let at = match side {
+                0 => Vec2::new(footprint.min.x - proud, center.y),
+                1 => Vec2::new(footprint.max.x + proud, center.y),
+                2 => Vec2::new(center.x, footprint.min.y - proud),
+                _ => Vec2::new(center.x, footprint.max.y + proud),
+            };
+            let side_yaw = match side {
+                0 => -FRAC_PI_2,
+                1 => FRAC_PI_2,
+                2 => PI,
+                _ => 0.0,
+            };
+            let poster_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + height * 0.6, at.y)
+                    .with_rotation(Quat::from_rotation_y(side_yaw))
+                    .with_scale(Vec3::splat(fit)),
+                VisibilityRange {
+                    start_margin: 0.0..0.0,
+                    end_margin: (poster_draw * 0.9)..poster_draw,
+                    use_aabb: false,
+                },
+                NotShadowCaster,
+            ));
+        }
+    }
 
     // The painted ground storey, for the sealed civic kinds: fire-station
     // roller doors, the town hall's pilasters, the taped-shut police door,
@@ -835,13 +898,14 @@ fn hang_sign(
     commands: &mut Commands,
     ctx: &BlockContext,
     building: &Building,
+    variant: u32,
     front: usize,
     yaw: f32,
     frontage: f32,
     fascia: f32,
     chunk: IVec2,
 ) {
-    let Some((mesh, material, board)) = ctx.signs.get(building.kind) else {
+    let Some((mesh, material, board)) = ctx.signs.get(building.kind, variant) else {
         return;
     };
     let footprint = building.footprint;

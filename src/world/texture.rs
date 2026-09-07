@@ -83,14 +83,88 @@ pub const FONT: [[u8; 7]; 36] = [
     [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111], // Z
 ];
 
+/// The glyphs German gave the alphabet after the plates were done: umlauts,
+/// the Eszett, and the punctuation a joke cannot land without. Sparse rather
+/// than a second dense table, because the code points are nowhere near
+/// contiguous — the umlauts sit at their Latin-1 positions, which [`encode`]
+/// maps the real UTF-8 characters onto.
+///
+/// The umlauts spend their top row on the dots and compress the letter into
+/// the remaining six — the same trade every 5×7 terminal font makes.
+#[rustfmt::skip]
+pub const EXTRA: [(u8, [u8; 7]); 12] = [
+    (0xC4, [0b01010, 0b00000, 0b01110, 0b10001, 0b11111, 0b10001, 0b10001]), // Ä
+    (0xD6, [0b01010, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110]), // Ö
+    (0xDC, [0b01010, 0b00000, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]), // Ü
+    (0xDF, [0b01110, 0b10001, 0b10001, 0b10110, 0b10001, 0b10001, 0b10110]), // ß
+    (b'.', [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100]),
+    (b',', [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b11000]),
+    (b'!', [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100]),
+    (b'?', [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100]),
+    (b'-', [0b00000, 0b00000, 0b00000, 0b01110, 0b00000, 0b00000, 0b00000]),
+    (b'\'', [0b01100, 0b00100, 0b01000, 0b00000, 0b00000, 0b00000, 0b00000]),
+    (b'&', [0b01000, 0b10100, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101]),
+    (b':', [0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000]),
+];
+
 /// The rows of one character, or a blank cell for anything not in the font —
 /// which is what makes a space a space.
 pub fn glyph(character: u8) -> [u8; 7] {
     match character {
         b'0'..=b'9' => FONT[(character - b'0') as usize],
         b'A'..=b'Z' => FONT[(character - b'A') as usize + 10],
-        _ => [0; 7],
+        _ => EXTRA
+            .iter()
+            .find(|(code, _)| *code == character)
+            .map(|(_, rows)| *rows)
+            .unwrap_or([0; 7]),
     }
+}
+
+/// A string as glyph codes: one byte per painted cell.
+///
+/// The paint loops index text byte-by-byte, which was fine while every sign
+/// was ASCII — an umlaut is two UTF-8 bytes and would paint as two blank
+/// cells. This is the one place that knows the difference: real characters
+/// in, one glyph code per cell out. Lowercase folds to the capitals on the
+/// way through, so a plaque can be written like language instead of like a
+/// register entry. Anything the font cannot draw becomes a space, and the
+/// tests on every sign catch the ones that matter.
+pub fn encode(text: &str) -> Vec<u8> {
+    text.chars()
+        .map(|character| match character {
+            'Ä' | 'ä' => 0xC4,
+            'Ö' | 'ö' => 0xD6,
+            'Ü' | 'ü' => 0xDC,
+            'ß' => 0xDF,
+            c if c.is_ascii() => c.to_ascii_uppercase() as u8,
+            _ => b' ',
+        })
+        .collect()
+}
+
+/// Whether (u, v) inside a text band lands on ink. `v` runs 0..1 over the
+/// glyph height; `u` runs 0..1 over the whole band, with an empty cell of
+/// breathing room at either end. `text` is glyph codes from [`encode`].
+///
+/// This began life in `signage` and moved into the shared kit when the
+/// statues wanted inscriptions: one band geometry, so every painted line of
+/// text in the city sits in its cell the same way.
+pub fn text_band(text: &[u8], u: f32, v: f32) -> bool {
+    let cells = (text.len() + 2) as f32;
+    let column = u * cells - 1.0;
+    let index = column.floor();
+    if index < 0.0 || index >= text.len() as f32 {
+        return false;
+    }
+    let inside_x = (column - index - 0.14) / 0.72;
+    if !(0.0..1.0).contains(&inside_x) || !(0.0..1.0).contains(&v) {
+        return false;
+    }
+    let rows = glyph(text[index as usize]);
+    let bit = (inside_x * 5.0) as usize;
+    let row = (v * 7.0) as usize;
+    rows[row.min(6)] & (1 << (4 - bit.min(4))) != 0
 }
 
 // ---------------------------------------------------------------- noise ----
@@ -905,5 +979,37 @@ mod tests {
                 );
             }
         }
+        for (code, rows) in EXTRA {
+            assert!(
+                rows.iter().any(|&row| row != 0),
+                "extra glyph {code:#04x} is blank"
+            );
+            for (line, &row) in rows.iter().enumerate() {
+                assert!(
+                    row < 0b100000,
+                    "extra glyph {code:#04x} row {line} is wider than five cells"
+                );
+            }
+            // And each one is actually reachable through the lookup — an
+            // entry whose code collides with the plate alphabet would be
+            // shadowed and never paint.
+            assert_eq!(glyph(code), rows, "glyph {code:#04x} is unreachable");
+        }
+    }
+
+    #[test]
+    fn the_umlauts_survive_the_trip_through_encode() {
+        // The failure this catches is painting umlauts byte-by-byte: 'Ä' is
+        // two UTF-8 bytes, so a sign painted from `str::as_bytes` shows two
+        // blank cells where the letter should be.
+        let coded = encode("Käßspatzen ÖD & GRAU?!");
+        assert_eq!(coded.len(), "Käßspatzen ÖD & GRAU?!".chars().count());
+        for &code in &coded {
+            if code != b' ' {
+                assert_ne!(glyph(code), [0; 7], "{code:#04x} came out blank");
+            }
+        }
+        // Lowercase folds to the capitals the font actually has.
+        assert_eq!(encode("boing"), encode("BOING"));
     }
 }

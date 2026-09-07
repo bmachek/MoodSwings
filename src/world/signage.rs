@@ -7,18 +7,24 @@
 //! building in `buildings::spawn_building`. A supermarket's sign is the same
 //! board on every supermarket, which is exactly how chain shopfronts work.
 //!
-//! The names are invented and the words are chosen to live inside the shared
-//! 5×7 font, which has no umlauts — so the hotel is HOTEL BOING rather than
-//! Hotel Hüpfer, which is funnier anyway. The one sign with something to
-//! explain gets a subline: the police station is closed, wegen anhaltender
-//! Freundlichkeit.
+//! The names are invented. The font grew umlauts and punctuation when the
+//! city wanted jokes — HOTEL BOING predates both and stays, because it was
+//! funnier than Hotel Hüpfer anyway. A kind may carry several plaques now:
+//! the building's own seed picks one, so the city reads as three or four
+//! competing chains instead of one monopolist, at the price of a handful of
+//! extra shared boards.
+//!
+//! The same kit paints the advertising posters that hang on the blind side
+//! walls of the anonymous buildings. Flats and offices refuse to say what
+//! they are, but they will absolutely tell you what to buy — that is the
+//! joke, and it is also how real gable walls work.
 
 use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 
 use super::citygen::BuildingKind;
-use super::texture::{glyph, painted_rect};
+use super::texture::{encode, painted_rect, text_band};
 
 /// How far a sign board reads, before the level-of-detail scale.
 pub const RANGE: f32 = 320.0;
@@ -37,70 +43,117 @@ struct Plaque {
     letter: f32,
 }
 
-/// The kinds that hang a sign at all. Flats and offices are anonymous on
-/// purpose: a city where every building announces itself is an airport.
-fn plaque_for(kind: BuildingKind) -> Option<Plaque> {
+/// The kinds that hang a sign at all, each with its plaque variants. Flats
+/// and offices are anonymous on purpose: a city where every building
+/// announces itself is an airport.
+///
+/// The chains get competitors; the civic kinds stay singular — there is one
+/// Rathaus and it has exactly one sense of humour. The sublines are where
+/// the jokes live, and the rule for writing one is the police station's:
+/// deadpan, plausible, and told entirely in the register of the institution
+/// telling it.
+fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
     use BuildingKind::*;
-    let plaque = match kind {
-        Supermarket => Plaque {
-            title: "SUPERMARKT",
-            subline: None,
-            ink: [245, 248, 244, 255],
-            field: [30, 104, 48, 255],
-            letter: 0.55,
-        },
-        Restaurant => Plaque {
-            title: "RESTAURANT",
-            subline: None,
-            ink: [240, 226, 200, 255],
-            field: [98, 26, 22, 255],
-            letter: 0.50,
-        },
-        Hotel => Plaque {
-            title: "HOTEL BOING",
-            subline: None,
-            ink: [236, 198, 112, 255],
-            field: [20, 32, 62, 255],
-            letter: 0.55,
-        },
-        TownHall => Plaque {
+    match kind {
+        Supermarket => &[
+            Plaque {
+                title: "SUPERMARKT",
+                subline: Some("HEUTE IM ANGEBOT: GEDULD"),
+                ink: [245, 248, 244, 255],
+                field: [30, 104, 48, 255],
+                letter: 0.55,
+            },
+            Plaque {
+                title: "HÜPF & GUT",
+                subline: Some("PREISE IM FREIEN FALL"),
+                ink: [252, 246, 232, 255],
+                field: [206, 112, 20, 255],
+                letter: 0.55,
+            },
+            Plaque {
+                title: "FRISCHE-ECK",
+                subline: Some("ÄPFEL MIT HALTUNG"),
+                ink: [240, 248, 246, 255],
+                field: [14, 92, 84, 255],
+                letter: 0.55,
+            },
+        ],
+        Restaurant => &[
+            Plaque {
+                title: "RESTAURANT",
+                subline: Some("WARME KÜCHE, KÜHLE BLICKE"),
+                ink: [240, 226, 200, 255],
+                field: [98, 26, 22, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "PIZZERIA LUIGI LUIGI",
+                subline: Some("DOPPELT HÄLT BESSER"),
+                ink: [242, 236, 224, 255],
+                field: [24, 84, 40, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "GASTHAUS ZUR BEULE",
+                subline: Some("GUT ABGEHANGEN"),
+                ink: [232, 214, 182, 255],
+                field: [74, 50, 30, 255],
+                letter: 0.50,
+            },
+        ],
+        Hotel => &[
+            Plaque {
+                title: "HOTEL BOING",
+                subline: Some("JEDES BETT EIN TRAMPOLIN"),
+                ink: [236, 198, 112, 255],
+                field: [20, 32, 62, 255],
+                letter: 0.55,
+            },
+            Plaque {
+                title: "PENSION SORGENFREI",
+                subline: Some("SORGEN BITTE AN DER REZEPTION ABGEBEN"),
+                ink: [236, 226, 240, 255],
+                field: [86, 60, 92, 255],
+                letter: 0.55,
+            },
+        ],
+        TownHall => &[Plaque {
             title: "RATHAUS",
-            subline: None,
+            subline: Some("BITTE ZIEHEN SIE EINE NUMMER: 7183"),
             ink: [42, 38, 32, 255],
             field: [212, 196, 166, 255],
             letter: 0.72,
-        },
-        FireStation => Plaque {
+        }],
+        FireStation => &[Plaque {
             title: "FEUERWEHR",
-            subline: None,
+            subline: Some("WIR BRENNEN FÜR SIE"),
             ink: [248, 244, 240, 255],
             field: [186, 30, 26, 255],
             letter: 0.62,
-        },
-        PoliceStation => Plaque {
+        }],
+        PoliceStation => &[Plaque {
             title: "POLIZEI",
             subline: Some("WEGEN ANHALTENDER FREUNDLICHKEIT GESCHLOSSEN"),
             ink: [246, 247, 250, 255],
             field: [22, 58, 118, 255],
             letter: 0.62,
-        },
-        Barracks => Plaque {
+        }],
+        Barracks => &[Plaque {
             title: "KASERNE",
-            subline: None,
+            subline: Some("TAG DER OFFENEN TÜR: NIE"),
             ink: [228, 226, 216, 255],
             field: [72, 80, 52, 255],
             letter: 0.55,
-        },
-        ParkingGarage => Plaque {
+        }],
+        ParkingGarage => &[Plaque {
             title: "PARKHAUS",
-            subline: None,
+            subline: Some("RESTPLÄTZE: JA"),
             ink: [246, 247, 250, 255],
             field: [28, 62, 136, 255],
             letter: 0.60,
-        },
-        Apartments | Offices => return None,
-    };
-    Some(plaque)
+        }],
+        Apartments | Offices => &[],
+    }
 }
 
 /// Every kind that gets a board, for building the kit and for tests.
@@ -120,35 +173,19 @@ const SIGNED: [BuildingKind; 8] = [
 const CELL_ASPECT: f32 = 0.95;
 
 /// Board size in metres for a plaque, title padding included.
+///
+/// Counted in characters, not bytes — an umlaut is two bytes and one cell,
+/// and a board sized by bytes would carry a blank cell for every one.
 fn board_size(plaque: &Plaque) -> Vec2 {
-    let title_cells = (plaque.title.len() + 2) as f32;
+    let title_cells = (plaque.title.chars().count() + 2) as f32;
     // Subline letters are painted at half size, so two of them fit a cell.
     let sub_cells = plaque
         .subline
-        .map(|s| (s.len() + 2) as f32 * 0.5)
+        .map(|s| (s.chars().count() + 2) as f32 * 0.5)
         .unwrap_or(0.0);
     let cells = title_cells.max(sub_cells);
     let height = plaque.letter * if plaque.subline.is_some() { 2.1 } else { 1.6 };
     Vec2::new(cells * plaque.letter * CELL_ASPECT, height)
-}
-
-/// Whether (u, v) inside a text band lands on ink. `v` runs 0..1 over the
-/// glyph height; `u` runs 0..1 over the whole band.
-fn on_ink(text: &[u8], u: f32, v: f32) -> bool {
-    let cells = (text.len() + 2) as f32;
-    let column = u * cells - 1.0;
-    let index = column.floor();
-    if index < 0.0 || index >= text.len() as f32 {
-        return false;
-    }
-    let inside_x = (column - index - 0.14) / 0.72;
-    if !(0.0..1.0).contains(&inside_x) || !(0.0..1.0).contains(&v) {
-        return false;
-    }
-    let rows = glyph(text[index as usize]);
-    let bit = (inside_x * 5.0) as usize;
-    let row = (v * 7.0) as usize;
-    rows[row.min(6)] & (1 << (4 - bit.min(4))) != 0
 }
 
 /// Paints one board.
@@ -157,8 +194,8 @@ fn board_texture(plaque: &Plaque) -> Image {
     // Pixels per metre, capped so the police novel stays a sane texture.
     let width = ((size.x * 56.0) as u32).clamp(64, 2048);
     let height = ((size.y * 56.0) as u32).clamp(32, 512);
-    let title: &[u8] = plaque.title.as_bytes();
-    let subline = plaque.subline.map(str::as_bytes);
+    let title = encode(plaque.title);
+    let subline = plaque.subline.map(encode);
     let (ink, field) = (plaque.ink, plaque.field);
 
     painted_rect(width, height, TextureFormat::Rgba8UnormSrgb, move |u, v| {
@@ -172,9 +209,11 @@ fn board_texture(plaque: &Plaque) -> Image {
                 255,
             ];
         }
-        let lit = match subline {
-            None => on_ink(title, u, (v - 0.18) / 0.64),
-            Some(sub) => on_ink(title, u, (v - 0.10) / 0.48) || on_ink(sub, u, (v - 0.66) / 0.24),
+        let lit = match &subline {
+            None => text_band(&title, u, (v - 0.18) / 0.64),
+            Some(sub) => {
+                text_band(&title, u, (v - 0.10) / 0.48) || text_band(sub, u, (v - 0.66) / 0.24)
+            }
         };
         if lit { ink } else { field }
     })
@@ -301,31 +340,187 @@ const FRONTED: [BuildingKind; 4] = [
 fn tankstelle_plaque() -> Plaque {
     Plaque {
         title: "TANKSTELLE",
-        subline: None,
+        subline: Some("BENZIN, BRAUSE & BEULENSPRAY"),
         ink: [252, 250, 244, 255],
         field: [206, 96, 22, 255],
         letter: 0.58,
     }
 }
 
+// -------------------------------------------------------------- adverts ----
+
+/// One parody poster for the blind gable walls.
+///
+/// The register is the whole gag: every poster speaks fluent advertising and
+/// says nothing, which is only a slight exaggeration of the medium. Kept
+/// gentle on purpose — the city laughs at products, not at people.
+struct Advert {
+    title: &'static str,
+    lines: &'static [&'static str],
+    ink: [u8; 4],
+    field: [u8; 4],
+    accent: [u8; 4],
+    /// A disc behind the title instead of a bar — the "product shot".
+    disc: bool,
+}
+
+/// The poster run. One texture and one material each, shared city-wide, the
+/// same economy as the plaques — a city with eight adverts on rotation is
+/// still truer than a city with none.
+const ADVERTS: [Advert; 8] = [
+    Advert {
+        title: "LAUNENBRAUSE",
+        lines: &["JETZT MIT NOCH MEHR GEFÜHL", "OHNE ALLES, DAFÜR VIEL"],
+        ink: [252, 248, 240, 255],
+        field: [188, 44, 32, 255],
+        accent: [240, 196, 48, 255],
+        disc: true,
+    },
+    Advert {
+        title: "VERSICHERUNG HOPPLA",
+        lines: &["WIR ZAHLEN. IRGENDWANN."],
+        ink: [238, 242, 248, 255],
+        field: [24, 52, 96, 255],
+        accent: [96, 148, 210, 255],
+        disc: false,
+    },
+    Advert {
+        title: "NEU: NICHTS",
+        lines: &["JETZT AUCH IN BUNT"],
+        ink: [34, 32, 36, 255],
+        field: [236, 232, 224, 255],
+        accent: [214, 108, 160, 255],
+        disc: true,
+    },
+    Advert {
+        title: "FLUMMI-FITNESS",
+        lines: &["IN 3 WOCHEN RUNDUM RUND"],
+        ink: [244, 250, 244, 255],
+        field: [28, 112, 60, 255],
+        accent: [148, 208, 80, 255],
+        disc: true,
+    },
+    Advert {
+        title: "ZAHNCREME STRAHL",
+        lines: &["LÄCHELN WIE FRISCH GEWISCHT"],
+        ink: [252, 252, 254, 255],
+        field: [22, 118, 138, 255],
+        accent: [180, 236, 244, 255],
+        disc: false,
+    },
+    Advert {
+        title: "URLAUB DAHEIM",
+        lines: &["SIE SIND SCHON DA", "KOFFER BLEIBT, SIE AUCH"],
+        ink: [250, 246, 234, 255],
+        field: [66, 138, 190, 255],
+        accent: [244, 208, 72, 255],
+        disc: true,
+    },
+    Advert {
+        title: "KAUFEN SIE GLÜCK",
+        lines: &["JETZT IM 6ER-PACK"],
+        ink: [244, 238, 248, 255],
+        field: [96, 52, 128, 255],
+        accent: [206, 160, 232, 255],
+        disc: true,
+    },
+    Advert {
+        title: "MÖBELHAUS WACKEL",
+        lines: &["STEHT. MEISTENS."],
+        ink: [242, 234, 220, 255],
+        field: [104, 66, 36, 255],
+        accent: [196, 148, 92, 255],
+        disc: false,
+    },
+];
+
+/// Poster size in metres. One size for the whole run: posters are printed
+/// things, and a print run has a format.
+const POSTER: Vec2 = Vec2::new(2.7, 3.8);
+
+/// One line of poster text: where its band sits and how tall its letters
+/// are, sized so the glyph cells keep the plaque proportions on the poster's
+/// fixed aspect instead of stretching to fill it.
+fn poster_line(text: &str, centre_v: f32, tallest_v: f32) -> (Vec3, Vec<u8>) {
+    let cells = (text.chars().count() + 2) as f32;
+    // A letter `h` of the poster tall is `h * (H/W) * CELL_ASPECT` of the
+    // poster wide; the whole line has to fit inside 92% of the width.
+    let letter_v = tallest_v.min(0.92 / (cells * CELL_ASPECT * (POSTER.y / POSTER.x)));
+    let width_u = cells * letter_v * CELL_ASPECT * (POSTER.y / POSTER.x);
+    (Vec3::new(centre_v, letter_v, width_u), encode(text))
+}
+
+/// Paints one poster.
+fn poster_texture(advert: &Advert) -> Image {
+    let mut lines = vec![poster_line(advert.title, 0.50, 0.075)];
+    for (index, line) in advert.lines.iter().enumerate() {
+        lines.push(poster_line(line, 0.66 + index as f32 * 0.10, 0.042));
+    }
+    let (ink, field, accent, disc) = (advert.ink, advert.field, advert.accent, advert.disc);
+
+    painted_rect(384, 540, TextureFormat::Rgba8UnormSrgb, move |u, v| {
+        // A pale paper margin, so the poster reads as pasted on rather than
+        // painted into the wall.
+        if u < 0.02 || u > 0.98 || v < 0.015 || v > 0.985 {
+            return [230, 226, 216, 255];
+        }
+        for (band, text) in &lines {
+            let (centre_v, letter_v, width_u) = (band.x, band.y, band.z);
+            let band_u = (u - (0.5 - width_u * 0.5)) / width_u;
+            let band_v = (v - (centre_v - letter_v * 0.5)) / letter_v;
+            if (0.0..1.0).contains(&band_u) && text_band(text, band_u, band_v) {
+                return ink;
+            }
+        }
+        // The art direction, such as it is: a product disc or a slogan bar
+        // in the upper third, behind nothing, meaning everything.
+        if disc {
+            let d = Vec2::new((u - 0.5) * POSTER.x, (v - 0.26) * POSTER.y);
+            if d.length() < 0.52 {
+                return accent;
+            }
+        } else if (0.16..0.36).contains(&v) {
+            return accent;
+        }
+        field
+    })
+}
+
 #[derive(Resource)]
 pub struct SignKit {
-    boards: Vec<(BuildingKind, Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
+    boards: Vec<(
+        BuildingKind,
+        Vec<(Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
+    )>,
     tankstelle: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
     /// A shared unit quad, scaled per building to its ground storey.
     strip: Handle<Mesh>,
     frontages: Vec<(BuildingKind, Handle<StandardMaterial>)>,
+    /// The poster mesh and the run of poster materials.
+    poster: Handle<Mesh>,
+    adverts: Vec<Handle<StandardMaterial>>,
 }
 
 impl SignKit {
+    /// The board a particular building hangs: its kind's plaque run, picked
+    /// into by the building's own variant so the choice survives the chunk
+    /// respawning.
     pub fn get(
         &self,
         kind: BuildingKind,
+        variant: u32,
     ) -> Option<(&Handle<Mesh>, &Handle<StandardMaterial>, Vec2)> {
         self.boards
             .iter()
             .find(|(k, ..)| *k == kind)
-            .map(|(_, mesh, material, size)| (mesh, material, *size))
+            .and_then(|(_, run)| run.get(variant as usize % run.len().max(1)))
+            .map(|(mesh, material, size)| (mesh, material, *size))
+    }
+
+    /// One poster off the run, and the size every poster shares.
+    pub fn advert(&self, pick: u32) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
+        let material = &self.adverts[pick as usize % self.adverts.len()];
+        (&self.poster, material, POSTER)
     }
 
     pub fn tankstelle(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
@@ -354,19 +549,20 @@ pub fn build_assets(
     let boards = SIGNED
         .iter()
         .map(|&kind| {
-            let plaque = plaque_for(kind).expect("every SIGNED kind has a plaque");
-            let size = board_size(&plaque);
-            let material = materials.add(StandardMaterial {
-                base_color_texture: Some(images.add(board_texture(&plaque))),
-                perceptual_roughness: 0.72,
-                ..default()
-            });
-            (
-                kind,
-                meshes.add(Rectangle::new(size.x, size.y)),
-                material,
-                size,
-            )
+            let run = plaques_for(kind)
+                .iter()
+                .map(|plaque| {
+                    let size = board_size(plaque);
+                    let material = materials.add(StandardMaterial {
+                        base_color_texture: Some(images.add(board_texture(plaque))),
+                        perceptual_roughness: 0.72,
+                        ..default()
+                    });
+                    (meshes.add(Rectangle::new(size.x, size.y)), material, size)
+                })
+                .collect::<Vec<_>>();
+            assert!(!run.is_empty(), "{kind:?} is SIGNED but has no plaque");
+            (kind, run)
         })
         .collect();
 
@@ -397,11 +593,24 @@ pub fn build_assets(
         })
         .collect();
 
+    let adverts = ADVERTS
+        .iter()
+        .map(|advert| {
+            materials.add(StandardMaterial {
+                base_color_texture: Some(images.add(poster_texture(advert))),
+                perceptual_roughness: 0.92,
+                ..default()
+            })
+        })
+        .collect();
+
     SignKit {
         boards,
         tankstelle,
         strip: meshes.add(Rectangle::new(1.0, 1.0)),
         frontages,
+        poster: meshes.add(Rectangle::new(POSTER.x, POSTER.y)),
+        adverts,
     }
 }
 
@@ -409,26 +618,49 @@ pub fn build_assets(
 mod tests {
     use super::*;
 
+    /// Every word the city paints, for tests that walk all of them.
+    fn every_text() -> Vec<(&'static str, String)> {
+        let mut texts = Vec::new();
+        for kind in SIGNED {
+            for plaque in plaques_for(kind) {
+                texts.push(("plaque", plaque.title.to_string()));
+                if let Some(sub) = plaque.subline {
+                    texts.push(("plaque", sub.to_string()));
+                }
+            }
+        }
+        let tankstelle = tankstelle_plaque();
+        texts.push(("tankstelle", tankstelle.title.to_string()));
+        if let Some(sub) = tankstelle.subline {
+            texts.push(("tankstelle", sub.to_string()));
+        }
+        for advert in &ADVERTS {
+            texts.push(("advert", advert.title.to_string()));
+            for line in advert.lines {
+                texts.push(("advert", line.to_string()));
+            }
+        }
+        texts
+    }
+
     #[test]
     fn every_sign_fits_the_font() {
-        for kind in SIGNED {
-            let plaque = plaque_for(kind).unwrap();
-            for text in std::iter::once(plaque.title).chain(plaque.subline) {
-                for character in text.bytes() {
-                    assert!(
-                        character == b' ' || glyph(character) != [0; 7],
-                        "the sign for {kind:?} needs a '{}' and the font has none",
-                        character as char
-                    );
-                }
+        use crate::world::texture::glyph;
+        for (kind, text) in every_text() {
+            for code in encode(&text) {
+                assert!(
+                    code == b' ' || glyph(code) != [0; 7],
+                    "a {kind} says {text:?} and the font cannot draw {:?}",
+                    code as char
+                );
             }
         }
     }
 
     #[test]
     fn flats_and_offices_stay_anonymous() {
-        assert!(plaque_for(BuildingKind::Apartments).is_none());
-        assert!(plaque_for(BuildingKind::Offices).is_none());
+        assert!(plaques_for(BuildingKind::Apartments).is_empty());
+        assert!(plaques_for(BuildingKind::Offices).is_empty());
     }
 
     #[test]
@@ -437,20 +669,62 @@ mod tests {
         // whole board in ink, or none of it — both build, both look like a
         // coloured rectangle from the street.
         for kind in SIGNED {
-            let plaque = plaque_for(kind).unwrap();
-            let image = board_texture(&plaque);
-            let data = image.data.as_ref().expect("the board was not painted");
+            for plaque in plaques_for(kind) {
+                let image = board_texture(plaque);
+                let data = image.data.as_ref().expect("the board was not painted");
+                let ink = data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|pixel| pixel[..3] == plaque.ink[..3])
+                    .count() as f32
+                    / (data.len() / 4) as f32;
+                assert!(
+                    (0.02..0.45).contains(&ink),
+                    "{kind:?} {:?}: {ink:.3} of the board is ink",
+                    plaque.title
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_poster_is_mostly_field_with_ink_on_it() {
+        // Same slip, same disguise: a poster that paints all ink or no ink
+        // still builds and still hangs, it just stops being an advert.
+        for advert in &ADVERTS {
+            let image = poster_texture(advert);
+            let data = image.data.as_ref().expect("the poster was not painted");
             let ink = data
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .filter(|pixel| pixel[..3] == plaque.ink[..3])
+                .filter(|pixel| pixel[..3] == advert.ink[..3])
                 .count() as f32
                 / (data.len() / 4) as f32;
             assert!(
-                (0.02..0.45).contains(&ink),
-                "{kind:?}: {ink:.3} of the board is ink"
+                (0.005..0.30).contains(&ink),
+                "{:?}: {ink:.3} of the poster is ink",
+                advert.title
             );
+        }
+    }
+
+    #[test]
+    fn every_poster_line_fits_on_the_poster() {
+        // The line-fitting maths clamps the letter height so the widest line
+        // stays inside the sheet; a regression here paints letters off the
+        // edge, which crops the punchline.
+        for advert in &ADVERTS {
+            for text in std::iter::once(&advert.title).chain(advert.lines) {
+                let (band, _) = poster_line(text, 0.5, 0.075);
+                assert!(
+                    band.z <= 0.921,
+                    "{text:?} runs {:.2} of the poster wide",
+                    band.z
+                );
+                assert!(band.y > 0.0, "{text:?} has no letter height at all");
+            }
         }
     }
 
@@ -496,7 +770,49 @@ mod tests {
 
     #[test]
     fn the_police_station_confesses_why_it_is_shut() {
-        let plaque = plaque_for(BuildingKind::PoliceStation).unwrap();
+        let [plaque] = plaques_for(BuildingKind::PoliceStation) else {
+            panic!("the police station hangs exactly one sign");
+        };
         assert!(plaque.subline.unwrap().contains("FREUNDLICHKEIT"));
+    }
+
+    #[test]
+    fn the_civic_kinds_stay_singular() {
+        // One Rathaus, one sense of humour. The chains are where the
+        // variants live; a civic kind growing a second plaque means two
+        // town halls disagreeing about their own name across one city.
+        for kind in SIGNED {
+            let count = plaques_for(kind).len();
+            if kind.is_civic() {
+                assert_eq!(count, 1, "{kind:?} hangs {count} different signs");
+            } else {
+                assert!(count >= 2, "{kind:?} deserves competitors by now");
+            }
+        }
+    }
+
+    #[test]
+    fn any_variant_number_lands_on_a_board() {
+        // The variant arrives as raw seed bits, so `get` must wrap it into
+        // the run — an unwrapped index is a supermarket with no sign, which
+        // does not fail, it just quietly unhangs most of the city.
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let kit = build_assets(&mut images, &mut materials, &mut meshes);
+        for kind in SIGNED {
+            for variant in [0u32, 1, 2, 3, u32::MAX, 3_185_463_605] {
+                assert!(
+                    kit.get(kind, variant).is_some(),
+                    "{kind:?} v{variant} has no board"
+                );
+            }
+        }
+        assert!(kit.get(BuildingKind::Apartments, 0).is_none());
+        // And the run actually varies: two adjacent supermarkets with
+        // different variants hang different boards.
+        let a = kit.get(BuildingKind::Supermarket, 0).unwrap().1.clone();
+        let b = kit.get(BuildingKind::Supermarket, 1).unwrap().1.clone();
+        assert_ne!(a, b, "every supermarket wears the same sign");
     }
 }
