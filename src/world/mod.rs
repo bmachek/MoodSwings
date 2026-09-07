@@ -17,6 +17,7 @@ pub mod roadgraph;
 pub mod rooftop;
 pub mod shell;
 pub mod signage;
+pub mod stadium;
 pub mod statues;
 pub mod streaming;
 pub mod streetlights;
@@ -56,6 +57,7 @@ impl Plugin for WorldPlugin {
             streetlights::StreetLightPlugin,
             vegetation::VegetationPlugin,
             mayhem::MayhemPlugin,
+            stadium::StadiumPlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
@@ -117,6 +119,11 @@ fn generate_city(
     ));
     commands.insert_resource(lots::build_assets(&mut meshes, &mut materials, &mut images));
     commands.insert_resource(statues::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
+    commands.insert_resource(stadium::build_assets(
         &mut meshes,
         &mut materials,
         &mut images,

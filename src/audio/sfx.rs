@@ -86,6 +86,8 @@ pub mod gain {
     /// purpose: a quarter's tune is weather, not a performance — the busker
     /// is the performance, and he must still win his own street.
     pub const QUARTER: f32 = 0.35;
+    /// The stadium's standing roar.
+    pub const STADIUM: f32 = 0.5;
     pub const BARK: f32 = 0.55;
     pub const MEOW: f32 = 0.5;
 }

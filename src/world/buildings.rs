@@ -471,6 +471,7 @@ pub struct BlockContext<'a> {
     pub signs: &'a crate::world::signage::SignKit,
     pub lots: &'a crate::world::lots::LotKit,
     pub statues: &'a crate::world::statues::StatueKit,
+    pub stadium: &'a crate::world::stadium::StadiumKit,
     pub interior: &'a crate::world::interior::InteriorKit,
     /// `None` only before the bank has landed — streaming simply spawns that
     /// chunk's emitters never, which resolves itself on the next re-entry.
@@ -587,6 +588,17 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                     2.2,
                     &bank.chatter,
                     gain::CHATTER,
+                );
+            }
+            // The bowl roars. The same recording the demos march under —
+            // a crowd is a crowd; only the occasion differs.
+            if building.kind == super::citygen::BuildingKind::Stadium {
+                emitter(
+                    commands,
+                    building.footprint.center(),
+                    6.0,
+                    &bank.uproar,
+                    gain::STADIUM,
                 );
             }
         }
@@ -708,6 +720,32 @@ fn spawn_building(
     // facade at all. Its whole structure comes from `world::garage`, plus
     // the sign over its mouth, and nothing else of a building's anatomy
     // applies: no shells, no roof slab, no plinth, no rooftop clutter.
+    // The stadium owns its whole structure: bowl, stands, crowd, wave.
+    if building.kind == super::citygen::BuildingKind::Stadium {
+        super::stadium::spawn(
+            commands,
+            assets,
+            ctx.stadium,
+            seed,
+            center,
+            frontage,
+            throat,
+            yaw,
+            chunk,
+        );
+        hang_sign(
+            commands,
+            ctx,
+            building,
+            sign_variant,
+            front,
+            yaw,
+            frontage,
+            SIDEWALK_HEIGHT + 4.6,
+            chunk,
+        );
+        return;
+    }
     // The church replaces its box the same way the garage does: the whole
     // structure comes from `world::church`, plus the sign on the nave.
     if building.kind == super::citygen::BuildingKind::Church {

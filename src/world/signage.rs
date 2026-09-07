@@ -182,12 +182,19 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
             field: [58, 48, 40, 255],
             letter: 0.50,
         }],
+        Stadium => &[Plaque {
+            title: "STADION AN DER BEULE",
+            subline: Some("HEIMSPIEL: JEDEN TAG"),
+            ink: [244, 214, 74, 255],
+            field: [24, 40, 78, 255],
+            letter: 0.62,
+        }],
         Apartments | Offices => &[],
     }
 }
 
 /// Every kind that gets a board, for building the kit and for tests.
-const SIGNED: [BuildingKind; 11] = [
+const SIGNED: [BuildingKind; 12] = [
     BuildingKind::Supermarket,
     BuildingKind::Restaurant,
     BuildingKind::Hotel,
@@ -199,6 +206,7 @@ const SIGNED: [BuildingKind; 11] = [
     BuildingKind::Museum,
     BuildingKind::School,
     BuildingKind::Church,
+    BuildingKind::Stadium,
 ];
 
 /// Width of one glyph cell relative to the height of its letters. The glyph

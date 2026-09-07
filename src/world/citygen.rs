@@ -138,6 +138,9 @@ pub enum BuildingKind {
     /// The one building that is not a box: `world::church` raises a nave,
     /// a tower and a spire where the stamped building's box would stand.
     Church,
+    /// The bowl on the edge of town: pitch, stands, floodlights, and a
+    /// crowd doing the wave — `world::stadium` owns the whole structure.
+    Stadium,
 }
 
 impl BuildingKind {
@@ -169,6 +172,7 @@ impl BuildingKind {
                 | BuildingKind::Museum
                 | BuildingKind::School
                 | BuildingKind::Church
+                | BuildingKind::Stadium
         )
     }
 }
@@ -846,6 +850,19 @@ fn zone_civics(seed: u64, blocks: &mut [Block]) {
         &[Downtown, Midtown, Residential],
         10.0..14.0,
         400.0,
+    );
+    // One stadium, out where the land is cheap — which is where they
+    // actually get built. The claimed height is only the stands' presence;
+    // `world::stadium` builds tiers and floodlights out of the footprint.
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        Stadium,
+        1,
+        &[Industrial, Residential],
+        9.0..11.0,
+        0.0,
     );
 }
 
