@@ -60,6 +60,16 @@ FRAMINGS=(
     "gasstation|--at -930,26,-555 --look -964,2,-585 --hour 15"
     "parkinglot|--at -910,24,-770 --look -937,2,-791 --hour 15"
     "park|--at 522,1.8,-986 --look 610,7,-902 --hour 9"
+    # The open doors of M9: a supermarket frontage by day and night (the
+    # night shot is the lit-shop test), the view from inside the shop, a
+    # parking-garage deck from inside its mouth, and the fire station's
+    # painted roller doors. Hard default-options-seed coordinates like the
+    # other lot framings.
+    "door|--at -917,2.0,783 --look -905,3.5,783 --hour 15"
+    "door-night|--at -917,2.0,783 --look -905,3.5,783 --hour 22"
+    "interior|--at -902,1.6,783 --look -878,1.0,784 --hour 15"
+    "parkhaus|--at 210,2,-183 --look 180,5,-181 --hour 15"
+    "feuerwehr|--at -831,3,313 --look -800,5,313 --hour 15"
     # Down onto the carriageway from a first-floor window. The only framing
     # that shows the road *surface*: from head height a decal is four pixels
     # tall and every one of them is on the horizon.

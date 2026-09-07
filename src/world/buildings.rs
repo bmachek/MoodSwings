@@ -375,6 +375,17 @@ impl CityAssets {
     pub fn building_materials(&self) -> &[Handle<super::facade::FacadeMaterial>] {
         &self.building
     }
+
+    /// The kerb concrete, for structures that are honestly made of it.
+    pub fn concrete(&self) -> Handle<StandardMaterial> {
+        self.kerb.clone()
+    }
+
+    /// The block paving tiled for a surface `extent` metres across — the
+    /// garage decks wear the same slabs the block tops do.
+    pub fn paving_for(&self, extent: f32) -> Handle<StandardMaterial> {
+        self.paving[ground_bucket(extent)].clone()
+    }
 }
 
 /// Spawns one block's pavement and buildings, tagged for streaming.
@@ -390,9 +401,13 @@ pub struct BlockContext<'a> {
     pub shells: &'a ShellKit,
     pub signs: &'a crate::world::signage::SignKit,
     pub lots: &'a crate::world::lots::LotKit,
+    pub interior: &'a crate::world::interior::InteriorKit,
     /// `None` only before the bank has landed — streaming simply spawns that
     /// chunk's emitters never, which resolves itself on the next re-entry.
     pub bank: Option<&'a crate::audio::bank::SoundBank>,
+    /// `None` only before the figure and face kits have landed — an interior
+    /// spawned that early simply opens without its staff.
+    pub cast: Option<crate::world::interior::CastContext<'a>>,
     pub seed: u64,
     pub lod_scale: f32,
 }
@@ -520,22 +535,94 @@ fn spawn_building(
     let seed = rooftop::seed_for(ctx.seed, building.footprint);
     let parapet = rooftop::parapet(seed, class);
 
+    // Which face fronts the street: the one nearest the block perimeter,
+    // which is the side with a pavement under it. Decided once, up here,
+    // because three things hang off it — the sign, the doorway, and the room
+    // behind the doorway — and they must all agree which way is out.
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let footprint = building.footprint;
+    let gaps = [
+        footprint.min.x - block.area.min.x,
+        block.area.max.x - footprint.max.x,
+        footprint.min.y - block.area.min.y,
+        block.area.max.y - footprint.max.y,
+    ];
+    let front = gaps
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(side, _)| side)
+        .unwrap_or(3);
+    let yaw = match front {
+        0 => -FRAC_PI_2,
+        1 => FRAC_PI_2,
+        2 => PI,
+        _ => 0.0,
+    };
+
     // The wall, at three levels of detail. All three carry the same transform
     // and the same material, and `use_aabb: false` measures from the entity's
     // origin, so all three measure the same distance and hand over to one
     // another on precisely the same metre — which is what Bevy needs before it
     // will dither one into the next instead of blinking between them.
     let material = assets.material_for(district, building.palette, class);
-    let wall = Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
-        .with_scale(Vec3::new(size.x, height, size.y));
     let (near, far) = shell::ranges(ctx.lod_scale);
     // Which balconies and which awnings, from the building's own seed rather
     // than from a counter, for the same reason its roof is.
     let variant = (seed >> 19) as u32;
 
+    // An enterable kind gets the shell with the doorway carved into its +Z
+    // face — so the whole wall stack is turned to put +Z on the front, with
+    // the scale axes swapped to match. A plain building keeps the unrotated
+    // transform it always had; rotating it too would be free, but a diff
+    // that moves every wall in the city to open a few doors is not.
+    let door_shell = if building.kind.enterable() {
+        ctx.shells.door(class, variant)
+    } else {
+        None
+    };
+    let (frontage, throat) = if front < 2 {
+        (size.y, size.x)
+    } else {
+        (size.x, size.y)
+    };
+    // The parking garage is not a facade with an inside implied — it has no
+    // facade at all. Its whole structure comes from `world::garage`, plus
+    // the sign over its mouth, and nothing else of a building's anatomy
+    // applies: no shells, no roof slab, no plinth, no rooftop clutter.
+    if building.kind == super::citygen::BuildingKind::ParkingGarage {
+        super::garage::spawn(
+            commands, assets, center, frontage, throat, height, yaw, chunk,
+        );
+        hang_sign(
+            commands,
+            ctx,
+            building,
+            front,
+            yaw,
+            frontage,
+            SIDEWALK_HEIGHT + 3.6,
+            chunk,
+        );
+        return;
+    }
+
+    let wall = if door_shell.is_some() {
+        Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
+            .with_rotation(Quat::from_rotation_y(yaw))
+            .with_scale(Vec3::new(frontage, height, throat))
+    } else {
+        Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
+            .with_scale(Vec3::new(size.x, height, size.y))
+    };
+
     commands.spawn((
         ChunkOf(chunk),
-        Mesh3d(ctx.shells.get(class, shell::Detail::Full, variant)),
+        Mesh3d(
+            door_shell
+                .clone()
+                .unwrap_or_else(|| ctx.shells.get(class, shell::Detail::Full, variant)),
+        ),
         MeshMaterial3d(material.clone()),
         wall,
         VisibilityRange {
@@ -555,12 +642,13 @@ fn spawn_building(
             use_aabb: false,
         },
     ));
-    // The plain box, and with it the collider — which is deliberately on the
-    // level of detail that is never culled by *distance*, only by being close.
-    // A visibility range hides a mesh and does not touch its collider, so the
-    // building stays solid at every distance; putting it anywhere else would
-    // work today and break the first time these ranges are reordered.
-    commands.spawn((
+    // The plain box — and, for a sealed building, the collider with it,
+    // deliberately on the level of detail that is never culled by *distance*,
+    // only by being close. A visibility range hides a mesh and does not touch
+    // its collider, so the building stays solid at every distance; putting it
+    // anywhere else would work today and break the first time these ranges
+    // are reordered.
+    let mut far_box = commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.unit_cube.clone()),
         MeshMaterial3d(material),
@@ -570,10 +658,40 @@ fn spawn_building(
             end_margin: f32::INFINITY..f32::INFINITY,
             use_aabb: false,
         },
-        RigidBody::Static,
-        // Unit cube: Avian scales it by the transform above.
-        Collider::cuboid(1.0, 1.0, 1.0),
     ));
+    if door_shell.is_none() {
+        // Unit cube: Avian scales it by the transform above.
+        far_box.insert((RigidBody::Static, Collider::cuboid(1.0, 1.0, 1.0)));
+    } else {
+        // An enterable building cannot be a scaled cube: its collider needs a
+        // doorway. The compound stands on its own unscaled entity — its
+        // plates are metric, and scaling them by the transform would turn
+        // the door gap into a fraction of whatever the building measures.
+        commands.spawn((
+            ChunkOf(chunk),
+            RigidBody::Static,
+            enterable_collider(class, frontage, throat, height),
+            Transform::from_xyz(center.x, SIDEWALK_HEIGHT, center.y)
+                .with_rotation(Quat::from_rotation_y(yaw)),
+        ));
+        crate::world::interior::spawn(
+            commands,
+            ctx.interior,
+            ctx.cast.as_ref(),
+            building.kind,
+            &crate::world::interior::Doorframe {
+                center,
+                yaw,
+                width: frontage,
+                depth: throat,
+                height,
+                class,
+            },
+            seed,
+            chunk,
+            ctx.lod_scale,
+        );
+    }
 
     // A capping slab, slightly oversailing the walls. It hides the windowed top
     // face of the cube, and the overhang reads as a parapet from street level —
@@ -603,83 +721,77 @@ fn spawn_building(
     // The plinth course. Shares the kerb material on purpose — the base of a
     // building and the kerb in front of it are the two things at street level
     // that take the most abuse, and in most cities they are the same stone.
+    // Not on an enterable building: a course wrapping all four walls would
+    // bar the doorway with sixty centimetres of stone, and a shopfront meets
+    // the pavement glass-to-ground anyway.
     let plinth_draw = (PLINTH_RANGE * ctx.lod_scale).max(1.0);
-    commands.spawn((
-        ChunkOf(chunk),
-        Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.kerb.clone()),
-        Transform::from_xyz(center.x, SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5, center.y).with_scale(
-            Vec3::new(
-                size.x + PLINTH_PROUD * 2.0,
-                PLINTH_HEIGHT,
-                size.y + PLINTH_PROUD * 2.0,
-            ),
-        ),
-        VisibilityRange {
-            start_margin: 0.0..0.0,
-            end_margin: (plinth_draw * 0.9)..plinth_draw,
-            use_aabb: false,
-        },
-        // The wall behind it casts the same shadow from the same place. A
-        // second caster eleven centimetres in front buys nothing and costs a
-        // pass over every building in the city.
-        NotShadowCaster,
-    ));
+    if door_shell.is_none() {
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.kerb.clone()),
+            Transform::from_xyz(center.x, SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5, center.y)
+                .with_scale(Vec3::new(
+                    size.x + PLINTH_PROUD * 2.0,
+                    PLINTH_HEIGHT,
+                    size.y + PLINTH_PROUD * 2.0,
+                )),
+            VisibilityRange {
+                start_margin: 0.0..0.0,
+                end_margin: (plinth_draw * 0.9)..plinth_draw,
+                use_aabb: false,
+            },
+            // The wall behind it casts the same shadow from the same place. A
+            // second caster eleven centimetres in front buys nothing and costs
+            // a pass over every building in the city.
+            NotShadowCaster,
+        ));
+    }
 
-    // The sign, for any kind that hangs one. It goes on the face nearest the
-    // block perimeter — the side the lot fronts, which is the side with a
-    // pavement under it — centred on the fascia band the facade painter
-    // reserves over the ground storey, and scaled down if the board would
-    // outgrow the wall it is bolted to.
-    if let Some((mesh, material, board)) = ctx.signs.get(building.kind) {
-        let footprint = building.footprint;
-        let gaps = [
-            footprint.min.x - block.area.min.x,
-            block.area.max.x - footprint.max.x,
-            footprint.min.y - block.area.min.y,
-            block.area.max.y - footprint.max.y,
-        ];
-        let front = gaps
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.total_cmp(b.1))
-            .map(|(side, _)| side)
-            .unwrap_or(3);
-        use std::f32::consts::{FRAC_PI_2, PI};
-        let proud = crate::world::signage::PROUD;
-        let (at, yaw, face_width) = match front {
-            0 => (
-                Vec2::new(footprint.min.x - proud, center.y),
-                -FRAC_PI_2,
-                size.y,
-            ),
-            1 => (
-                Vec2::new(footprint.max.x + proud, center.y),
-                FRAC_PI_2,
-                size.y,
-            ),
-            2 => (Vec2::new(center.x, footprint.min.y - proud), PI, size.x),
-            _ => (Vec2::new(center.x, footprint.max.y + proud), 0.0, size.x),
+    // The sign, for any kind that hangs one, centred on the fascia band the
+    // facade painter reserves over the ground storey.
+    let storey = height / class.grid().1;
+    hang_sign(
+        commands,
+        ctx,
+        building,
+        front,
+        yaw,
+        frontage,
+        SIDEWALK_HEIGHT + storey * 0.875,
+        chunk,
+    );
+
+    // The painted ground storey, for the sealed civic kinds: fire-station
+    // roller doors, the town hall's pilasters, the taped-shut police door,
+    // the barracks gate. A quad stretched across the front face, standing
+    // just proud of the wall — under the sign, over the shop glass the
+    // class would otherwise paint there. It clears the plinth's band by
+    // starting above it, and stops under the fascia the sign hangs on.
+    if let Some((mesh, material)) = ctx.signs.frontage(building.kind) {
+        let proud = 0.14;
+        let at = match front {
+            0 => Vec2::new(footprint.min.x - proud, center.y),
+            1 => Vec2::new(footprint.max.x + proud, center.y),
+            2 => Vec2::new(center.x, footprint.min.y - proud),
+            _ => Vec2::new(center.x, footprint.max.y + proud),
         };
-        // The fascia band sits at the top of the ground storey, wherever the
-        // class puts its storeys for this height.
-        let storey = height / class.grid().1;
-        let fascia = SIDEWALK_HEIGHT + storey * 0.875;
-        let fit = (face_width * 0.8 / board.x).min(1.0);
+        let foot = SIDEWALK_HEIGHT + PLINTH_HEIGHT + 0.02;
+        let top = SIDEWALK_HEIGHT + storey * texture::FASCIA.0 - 0.05;
+        let strip = (top - foot).max(1.2);
         let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material.clone()),
-            Transform::from_xyz(at.x, fascia, at.y)
+            Transform::from_xyz(at.x, foot + strip * 0.5, at.y)
                 .with_rotation(Quat::from_rotation_y(yaw))
-                .with_scale(Vec3::splat(fit)),
+                .with_scale(Vec3::new(frontage * 0.96, strip, 1.0)),
             VisibilityRange {
                 start_margin: 0.0..0.0,
                 end_margin: (sign_draw * 0.9)..sign_draw,
                 use_aabb: false,
             },
-            // The wall behind it casts the same shadow from the same place.
             NotShadowCaster,
         ));
     }
@@ -697,9 +809,144 @@ fn spawn_building(
     );
 }
 
+/// Hangs a building's sign on its front face, `fascia` metres up, scaled
+/// down if the board would outgrow the wall it is bolted to. It goes on the
+/// face nearest the block perimeter — the side the lot fronts, which is the
+/// side with a pavement under it — the same front the doorway and the room
+/// behind it chose.
+#[allow(clippy::too_many_arguments)]
+fn hang_sign(
+    commands: &mut Commands,
+    ctx: &BlockContext,
+    building: &Building,
+    front: usize,
+    yaw: f32,
+    frontage: f32,
+    fascia: f32,
+    chunk: IVec2,
+) {
+    let Some((mesh, material, board)) = ctx.signs.get(building.kind) else {
+        return;
+    };
+    let footprint = building.footprint;
+    let center = footprint.center();
+    let proud = crate::world::signage::PROUD;
+    let at = match front {
+        0 => Vec2::new(footprint.min.x - proud, center.y),
+        1 => Vec2::new(footprint.max.x + proud, center.y),
+        2 => Vec2::new(center.x, footprint.min.y - proud),
+        _ => Vec2::new(center.x, footprint.max.y + proud),
+    };
+    let fit = (frontage * 0.8 / board.x).min(1.0);
+    let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::from_xyz(at.x, fascia, at.y)
+            .with_rotation(Quat::from_rotation_y(yaw))
+            .with_scale(Vec3::splat(fit)),
+        VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: (sign_draw * 0.9)..sign_draw,
+            use_aabb: false,
+        },
+        // The wall behind it casts the same shadow from the same place.
+        NotShadowCaster,
+    ));
+}
+
+/// The collider for a building the player can walk into, in the door frame:
+/// `x` across the front, `+z` towards the street, `y` up from the pavement.
+///
+/// Six plates instead of one scaled cube: the back and side walls, the two
+/// front segments either side of the doorway, and one slab covering
+/// everything above the door head — which seals the room's ceiling and keeps
+/// the upper storeys solid against airborne traffic in a single shape. The
+/// gap between the front segments is `shell::door_width`, the same number the
+/// doored shell carved out — that agreement is the whole contract.
+fn enterable_collider(class: FacadeClass, width: f32, depth: f32, height: f32) -> Collider {
+    use crate::world::interior::WALL;
+    let head = shell::door_head(class, height);
+    let door = shell::door_width(class, width);
+    let flank = (width - door) * 0.5;
+
+    let mut plates: Vec<(Vec3, Quat, Collider)> = vec![
+        (
+            Vec3::new(0.0, (head + height) * 0.5, 0.0),
+            Quat::IDENTITY,
+            Collider::cuboid(width, height - head, depth),
+        ),
+        (
+            Vec3::new(0.0, head * 0.5, -(depth - WALL) * 0.5),
+            Quat::IDENTITY,
+            Collider::cuboid(width, head, WALL),
+        ),
+    ];
+    for side in [-1.0f32, 1.0] {
+        plates.push((
+            Vec3::new(side * (width - WALL) * 0.5, head * 0.5, 0.0),
+            Quat::IDENTITY,
+            Collider::cuboid(WALL, head, depth),
+        ));
+        plates.push((
+            Vec3::new(
+                side * (door + flank) * 0.5,
+                head * 0.5,
+                (depth - WALL) * 0.5,
+            ),
+            Quat::IDENTITY,
+            Collider::cuboid(flank, head, WALL),
+        ));
+    }
+    Collider::compound(plates)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ray through the middle of the doorway passes; the same ray a door's
+    /// width to the side does not. Asked of the collider itself, because the
+    /// shell's own test only vouches for the mesh.
+    #[test]
+    fn the_compound_collider_keeps_the_doorway_open() {
+        let (width, depth, height) = (18.0, 16.0, 20.0);
+        let class = FacadeClass::for_height(height);
+        let collider = enterable_collider(class, width, depth, height);
+
+        // Each ray starts a building-depth out front and stops at the middle
+        // of the room — long enough to pierce the front wall, short enough
+        // not to report the back wall as a bricked-up door.
+        let waist = shell::door_head(class, height) * 0.5;
+        let through = collider.intersects_ray(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            Vec3::new(0.0, waist, depth),
+            Vec3::NEG_Z,
+            depth,
+        );
+        assert!(!through, "the doorway is bricked up");
+
+        let beside = collider.intersects_ray(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            Vec3::new(shell::door_width(class, width) * 1.5, waist, depth),
+            Vec3::NEG_Z,
+            depth,
+        );
+        assert!(beside, "the front wall beside the door is missing");
+
+        // And over the head the building is sealed again.
+        let above = collider.intersects_ray(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            Vec3::new(0.0, shell::door_head(class, height) + 1.0, depth),
+            Vec3::NEG_Z,
+            depth,
+        );
+        assert!(above, "there is a hole over the door head");
+    }
 
     #[test]
     fn the_cube_faces_all_agree_about_up() {

@@ -104,6 +104,49 @@ const AWNING_THICK: f32 = 0.022;
 /// baked into shared meshes, and every one of them is a mesh per class.
 pub const VARIANTS: u32 = 2;
 
+// ----------------------------------------------------------------- doors ----
+
+/// The doorway, as fractions of the middle ground-storey bay of `Face::PosZ`.
+///
+/// One description, three readers, exactly like the window grid above it: the
+/// shell carves this opening, the compound collider in `world::buildings`
+/// leaves the same gap, and `world::interior` builds its room to the same
+/// head height. They agree to the millimetre or the player either walks
+/// through a painted wall or bumps into an open door — the two failures this
+/// function exists to make impossible to write separately.
+///
+/// Per class rather than one constant, because a bay narrows as the grid
+/// densifies: a tower's bay on the same wall is half a lowrise's, and the
+/// same fraction of it is a letterbox. A wider fraction of a narrower bay
+/// keeps the metric width a door — held by the tests.
+pub fn door_span(class: FacadeClass) -> (f32, f32) {
+    match class {
+        FacadeClass::House | FacadeClass::Lowrise => (0.32, 0.68),
+        FacadeClass::Midrise => (0.22, 0.78),
+        FacadeClass::Tower => (0.15, 0.85),
+    }
+}
+
+/// Which column of the grid carries the door: the middle bay. Every
+/// shopfront class has an odd column count, so the middle bay is centred on
+/// the wall and the door lands on the building's axis — asserted in the
+/// tests, because the collider below assumes it.
+pub fn door_column(class: FacadeClass) -> u32 {
+    (class.grid().0 as u32) / 2
+}
+
+/// The doorway's width in metres on a wall `width` metres across.
+pub fn door_width(class: FacadeClass, width: f32) -> f32 {
+    let span = door_span(class);
+    (span.1 - span.0) * width / class.grid().0
+}
+
+/// Metres from the pavement to the door head on a building `height` tall:
+/// the top of the shopfront glass, which is where the opening stops.
+pub fn door_head(class: FacadeClass, height: f32) -> f32 {
+    height / class.grid().1 * class.pane(0).v1
+}
+
 /// How much of the shell survives to this distance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Detail {
@@ -447,8 +490,52 @@ fn awning_at(class: FacadeClass, column: u32, variant: u32) -> bool {
     class.has_shopfronts() && (column + variant).is_multiple_of(2)
 }
 
+/// The doorway cell: the middle ground bay with an actual hole in it.
+///
+/// The cell keeps its shopfront look — the wall either side of the opening
+/// still lies where the texture paints glass, which is what a shop door in
+/// the middle of a shop window is — but between the jambs there is nothing:
+/// no pane, no stallriser, an opening from the pavement to the head. What
+/// shows through it is `world::interior`'s room.
+fn doorway(
+    mesh: &mut Shell,
+    class: FacadeClass,
+    face: Face,
+    cell: Span,
+    size: (f32, f32),
+    pane: &Pane,
+) {
+    let (cell_u, cell_v) = size;
+    let span = door_span(class);
+    let width = cell.1 - cell.0;
+    let u0 = cell.0 + span.0 * width;
+    let u1 = cell.0 + span.1 * width;
+    let v1 = pane.v1 * cell_v;
+    let reveal = REVEAL_SHOP * cell_u;
+
+    // The wall over the head and either side of the opening, tiling the rest
+    // of the cell exactly — any gap beyond the doorway is a hole through the
+    // building that was not asked for.
+    mesh.panel(face, cell, (v1, cell_v), 0.0);
+    mesh.panel(face, (cell.0, u0), (0.0, v1), 0.0);
+    mesh.panel(face, (u1, cell.1), (0.0, v1), 0.0);
+
+    // Jambs and head, coloured from the wall beside them like every reveal.
+    let inset = (span.0 * width).min(u0 - cell.0) * 0.5;
+    mesh.jamb(face, u0, (0.0, v1), (0.0, reveal), (u0, u0 - inset), 1.0);
+    mesh.jamb(face, u1, (0.0, v1), (0.0, reveal), (u1, u1 + inset), -1.0);
+    mesh.soffit(
+        face,
+        (u0, u1),
+        v1,
+        (0.0, reveal),
+        (v1, v1 + (1.0 - pane.v1) * cell_v * 0.5),
+        -1.0,
+    );
+}
+
 /// Builds one shell.
-fn shell(class: FacadeClass, detail: Detail, variant: u32) -> Mesh {
+fn shell(class: FacadeClass, detail: Detail, variant: u32, doored: bool) -> Mesh {
     let (columns, rows) = class.grid();
     let (columns, rows) = (columns as u32, rows as u32);
     let (cell_u, cell_v) = (1.0 / columns as f32, 1.0 / rows as f32);
@@ -478,6 +565,17 @@ fn shell(class: FacadeClass, detail: Detail, variant: u32) -> Mesh {
 
             for column in 0..columns {
                 let (cu0, cu1) = (column as f32 * cell_u, (column as f32 + 1.0) * cell_u);
+
+                // The door bay, on the front face only. `continue` rather
+                // than a flag: nothing of the ordinary cell survives here.
+                if doored && face == Face::PosZ && pane.ground && column == door_column(class) {
+                    doorway(&mut mesh, class, face, (cu0, cu1), (cell_u, cell_v), &pane);
+                    if awning_at(class, column, variant) {
+                        awning(&mut mesh, face, (cu0, cu1), cv0, (cell_u, cell_v));
+                    }
+                    continue;
+                }
+
                 let u0 = cu0 + pane.u0 * cell_u;
                 let u1 = cu0 + pane.u1 * cell_u;
 
@@ -666,11 +764,23 @@ fn top_masonry(class: FacadeClass, cell_v: f32) -> (f32, f32) {
 #[derive(Resource)]
 pub struct ShellKit {
     meshes: Vec<Handle<Mesh>>,
+    /// The doored full-detail shells, one per shopfront class and variant.
+    /// `None` for a class with no shopfronts — a house's front door is a
+    /// painted one, and a house is never enterable.
+    doors: Vec<Option<Handle<Mesh>>>,
 }
 
 impl ShellKit {
     pub fn get(&self, class: FacadeClass, detail: Detail, variant: u32) -> Handle<Mesh> {
         self.meshes[index(class, detail, variant)].clone()
+    }
+
+    /// The full-detail shell with the doorway carved into `Face::PosZ`, for
+    /// buildings the player can walk into. Only the full level is doored:
+    /// past the coarse handover the interior is culled anyway, and a hole
+    /// into an unlit nothing reads worse than a pane of glass.
+    pub fn door(&self, class: FacadeClass, variant: u32) -> Option<Handle<Mesh>> {
+        self.doors[class.index() * VARIANTS as usize + (variant % VARIANTS) as usize].clone()
     }
 }
 
@@ -683,13 +793,20 @@ pub fn build_assets(meshes: &mut Assets<Mesh>) -> ShellKit {
     let started = std::time::Instant::now();
 
     let mut built = vec![Handle::default(); FacadeClass::ALL.len() * VARIANTS as usize * 2];
+    let mut doors = vec![None; FacadeClass::ALL.len() * VARIANTS as usize];
     let mut triangles = 0usize;
     for class in FacadeClass::ALL {
         for variant in 0..VARIANTS {
             for detail in Detail::ALL {
-                let mesh = shell(class, detail, variant);
+                let mesh = shell(class, detail, variant, false);
                 triangles += mesh.indices().map_or(0, |i| i.len()) / 3;
                 built[index(class, detail, variant)] = meshes.add(mesh);
+            }
+            if class.has_shopfronts() {
+                let mesh = shell(class, Detail::Full, variant, true);
+                triangles += mesh.indices().map_or(0, |i| i.len()) / 3;
+                doors[class.index() * VARIANTS as usize + variant as usize] =
+                    Some(meshes.add(mesh));
             }
         }
     }
@@ -697,10 +814,13 @@ pub fn build_assets(meshes: &mut Assets<Mesh>) -> ShellKit {
     info!(
         "facade shells built in {:.0}ms: {} meshes, {} triangles",
         started.elapsed().as_secs_f32() * 1000.0,
-        built.len(),
+        built.len() + doors.iter().flatten().count(),
         triangles,
     );
-    ShellKit { meshes: built }
+    ShellKit {
+        meshes: built,
+        doors,
+    }
 }
 
 // ------------------------------------------------------------------ lod ----
@@ -800,8 +920,12 @@ mod tests {
     #[test]
     fn every_face_is_wound_the_way_it_claims_to_point() {
         for class in FacadeClass::ALL {
-            for detail in Detail::ALL {
-                let mesh = shell(class, detail, 0);
+            for (detail, doored) in [
+                (Detail::Full, false),
+                (Detail::Coarse, false),
+                (Detail::Full, true),
+            ] {
+                let mesh = shell(class, detail, 0, doored);
                 let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap() {
                     bevy::render::mesh::VertexAttributeValues::Float32x3(n) => n.clone(),
                     _ => panic!("unexpected normal format"),
@@ -837,7 +961,7 @@ mod tests {
             let limit = 0.5 + deepest / columns + 1e-4;
             for detail in Detail::ALL {
                 for variant in 0..VARIANTS {
-                    for corners in triangles(&shell(class, detail, variant)) {
+                    for corners in triangles(&shell(class, detail, variant, false)) {
                         for corner in corners {
                             assert!(
                                 corner.x.abs() <= limit
@@ -890,7 +1014,7 @@ mod tests {
         for class in FacadeClass::ALL {
             let (columns, rows) = class.grid();
             let out = CORNICE_PROUD / columns;
-            let mesh = shell(class, Detail::Coarse, 0);
+            let mesh = shell(class, Detail::Coarse, 0, false);
             // Inside the ring: past the wall, short of the outer face, and
             // halfway up the cornice.
             let corner = 0.5 + out * 0.5;
@@ -923,7 +1047,7 @@ mod tests {
         for class in FacadeClass::ALL {
             let (columns, rows) = class.grid();
             for variant in 0..VARIANTS {
-                let mesh = shell(class, Detail::Full, variant);
+                let mesh = shell(class, Detail::Full, variant, false);
                 let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() {
                     bevy::render::mesh::VertexAttributeValues::Float32x2(uv) => uv.clone(),
                     _ => panic!("unexpected uv format"),
@@ -973,9 +1097,13 @@ mod tests {
     #[test]
     fn nothing_is_flattened_to_a_line_in_texture_space() {
         for class in FacadeClass::ALL {
-            for detail in Detail::ALL {
+            for (detail, doored) in [
+                (Detail::Full, false),
+                (Detail::Coarse, false),
+                (Detail::Full, true),
+            ] {
                 for variant in 0..VARIANTS {
-                    let mesh = shell(class, detail, variant);
+                    let mesh = shell(class, detail, variant, doored);
                     let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() {
                         bevy::render::mesh::VertexAttributeValues::Float32x2(uv) => uv.clone(),
                         _ => panic!("unexpected uv format"),
@@ -1001,8 +1129,8 @@ mod tests {
     #[test]
     fn the_coarse_shell_is_a_fraction_of_the_full_one() {
         for class in FacadeClass::ALL {
-            let full = triangles(&shell(class, Detail::Full, 0)).len();
-            let coarse = triangles(&shell(class, Detail::Coarse, 0)).len();
+            let full = triangles(&shell(class, Detail::Full, 0, false)).len();
+            let coarse = triangles(&shell(class, Detail::Coarse, 0, false)).len();
             assert!(
                 coarse * 8 < full,
                 "{class:?}: {coarse} coarse triangles against {full} full ones is not a saving"
@@ -1015,8 +1143,8 @@ mod tests {
     #[test]
     fn the_variants_actually_differ_where_they_are_meant_to() {
         for class in FacadeClass::ALL {
-            let a = triangles(&shell(class, Detail::Full, 0));
-            let b = triangles(&shell(class, Detail::Full, 1));
+            let a = triangles(&shell(class, Detail::Full, 0, false));
+            let b = triangles(&shell(class, Detail::Full, 1, false));
             let differs = a.len() != b.len() || a.iter().zip(&b).any(|(x, y)| x != y);
             assert_eq!(
                 differs,
@@ -1075,6 +1203,65 @@ mod tests {
                 near <= CEILING,
                 "{} draws reveals past the ceiling",
                 preset.name()
+            );
+        }
+    }
+
+    /// The doored shell's opening is open, and only the doored shell's.
+    ///
+    /// The same honest question the cornice test asks, pointed the other way:
+    /// stand where the player will stand — in the middle of the doorway, at
+    /// waist height — and shoot out through the front wall. Through the
+    /// doored shell the ray escapes; through the plain one it must not,
+    /// because that hole would be a window pane somebody forgot to draw.
+    #[test]
+    fn the_doorway_is_actually_open() {
+        for class in FacadeClass::ALL {
+            if !class.has_shopfronts() {
+                continue;
+            }
+            let rows = class.grid().1;
+            let waist = class.pane(0).v1 / rows * 0.5 - 0.5;
+            let from = Vec3::new(0.0, waist, 0.0);
+
+            let doored = shell(class, Detail::Full, 0, true);
+            assert!(
+                !hits(&doored, from, Vec3::Z),
+                "{class:?}: the doorway is painted shut"
+            );
+            let plain = shell(class, Detail::Full, 0, false);
+            assert!(
+                hits(&plain, from, Vec3::Z),
+                "{class:?}: the plain shell has a hole in its front wall"
+            );
+        }
+    }
+
+    /// The door contract the collider and the interior build against.
+    #[test]
+    fn the_door_contract_stays_inside_the_shopfront() {
+        for class in FacadeClass::ALL {
+            if !class.has_shopfronts() {
+                continue;
+            }
+            let span = door_span(class);
+            assert!(span.0 > 0.0 && span.1 < 1.0 && span.0 < span.1, "{class:?}");
+            let pane = class.pane(0);
+            // The opening sits inside the glass span, so the wall strips
+            // beside it are painted shopfront rather than half a window.
+            assert!(span.0 > pane.u0 && span.1 < pane.u1, "{class:?}");
+            // The head stops under the fascia band the sign hangs on.
+            assert!(pane.v1 < texture::FASCIA.0, "{class:?}");
+            // An odd column count centres the middle bay — and with it the
+            // door — on the building's axis, which the compound collider in
+            // `world::buildings` takes as given.
+            assert_eq!(class.grid().0 as u32 % 2, 1, "{class:?}");
+            // And a citizen actually fits through, on the narrowest building
+            // the city plats.
+            assert!(
+                door_width(class, 14.0) > 0.75,
+                "{class:?}: {} m is not a door, it is a letterbox",
+                door_width(class, 14.0)
             );
         }
     }

@@ -111,7 +111,7 @@ with traffic on it, weather, and a day.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, persisted settings and key bindings, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, window interiors, trees, street furniture, world damage, roofs, road wear, wet roads |
+| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, window interiors, walk-in shops and lobbies, drivable parking garages, trees, street furniture, world damage, roofs, road wear, wet roads |
 | `bounce` | The elastic simulation: the hop controller, squash and stretch, the boing, being thrown |
 | `mood` | How a flummi feels, the face it wears, what it says, and what it does about it |
 | `player` | Input mapping, the character controller, camera rig, enter/exit |

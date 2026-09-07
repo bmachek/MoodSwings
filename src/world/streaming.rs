@@ -146,7 +146,14 @@ pub struct BuildingKits<'w> {
     shells: Res<'w, crate::world::shell::ShellKit>,
     signs: Res<'w, crate::world::signage::SignKit>,
     lots: Res<'w, crate::world::lots::LotKit>,
+    interior: Res<'w, crate::world::interior::InteriorKit>,
     bank: Option<Res<'w, crate::audio::bank::SoundBank>>,
+    // The interior staff's wardrobe and disposition tables. Optional for the
+    // same reason the bank is: a chunk streamed before they land simply
+    // opens its shops unstaffed, and re-entry fixes it.
+    figures: Option<Res<'w, crate::ai::figure::FigureAssets>>,
+    faces: Option<Res<'w, crate::mood::face::FaceAssets>>,
+    tempers: Option<Res<'w, crate::mood::feeling::Tempers>>,
 }
 
 pub fn update_streaming(
@@ -180,7 +187,18 @@ pub fn update_streaming(
         shells: &kits.shells,
         signs: &kits.signs,
         lots: &kits.lots,
+        interior: &kits.interior,
         bank: kits.bank.as_deref(),
+        cast: match (&kits.figures, &kits.faces, &kits.tempers) {
+            (Some(figures), Some(faces), Some(tempers)) => {
+                Some(crate::world::interior::CastContext {
+                    figures,
+                    faces,
+                    tempers,
+                })
+            }
+            _ => None,
+        },
         seed: config.world_seed,
         lod_scale: config.graphics.lod_scale,
     };

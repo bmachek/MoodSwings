@@ -134,6 +134,22 @@ pub enum BuildingKind {
 }
 
 impl BuildingKind {
+    /// Whether the player can walk in through the front door.
+    ///
+    /// The ground floors that earn an interior: the shop, the dining room,
+    /// the two kinds of lobby. Civic buildings keep their doors shut for now
+    /// (the town hall is a venue on the events roadmap), and apartments stay
+    /// private — this is a comedy, not a burglary simulator.
+    pub fn enterable(self) -> bool {
+        matches!(
+            self,
+            BuildingKind::Supermarket
+                | BuildingKind::Restaurant
+                | BuildingKind::Hotel
+                | BuildingKind::Offices
+        )
+    }
+
     /// Placed by the zoning pass rather than the common draw.
     pub fn is_civic(self) -> bool {
         matches!(
