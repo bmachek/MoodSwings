@@ -503,8 +503,12 @@ fn walk_pavements(
         // controller takes at the bottom of every arc is scaled here, every
         // frame, because the controller spends the scale on each landing.
         // Who they are scales it again — a skater glides, a wheelchair rolls.
-        bouncer.hop_scale =
-            spring(mood.value, config.bounce.npc_spring_max) * archetype.hop() * age.spring();
+        // And the gait setting scales the lot: a walking city keeps its feet
+        // down and lets the walk cycle carry the motion instead.
+        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max)
+            * archetype.hop()
+            * age.spring()
+            * config.gait.hop();
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's

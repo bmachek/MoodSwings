@@ -445,6 +445,19 @@ fn settings_screen(
     keybindings: &KeyBindings,
     caps: &Capabilities,
 ) {
+    ui.label(egui::RichText::new("Gameplay").strong());
+    // The gait switch: whether the city travels by walking or by hopping.
+    // Takes effect live — both the crowd's and the player's resting hop are
+    // re-scaled every frame from the config.
+    egui::ComboBox::from_label("Fortbewegung")
+        .selected_text(config.gait.label())
+        .show_ui(ui, |ui| {
+            for gait in crate::core::config::Gait::ALL {
+                ui.selectable_value(&mut config.gait, gait, gait.label());
+            }
+        });
+
+    ui.add_space(6.0);
     ui.label(egui::RichText::new("Steuerung").strong());
     ui.add(
         egui::Slider::new(&mut config.camera.mouse_sensitivity, 0.0005..=0.01)

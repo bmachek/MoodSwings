@@ -618,9 +618,13 @@ pub fn animate(
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
 
         let (vertical, horizontal) = match bouncer {
-            Some(bouncer) => {
-                crate::bounce::squash::stretch(bouncer.hop_phase(), config.bounce.squash)
-            }
+            // The gait gates the squash along with the hop: a walking body is
+            // permanently at phase zero as far as the bouncer can tell, and
+            // holding the landing squash forever reads as a rendering bug.
+            Some(bouncer) => crate::bounce::squash::stretch(
+                bouncer.hop_phase(),
+                config.gait.squash(config.bounce.squash),
+            ),
             None => (1.0, 1.0),
         };
         // The stature multiplies straight into the pose: a child is an adult
