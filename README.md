@@ -14,10 +14,10 @@ pushes back.
 
 An original work, not affiliated with anyone: the city, the vehicles and the
 crowd are all generated procedurally at runtime, and no trademarks or
-third-party IP are used. Every sound is synthesised at startup from a seed,
-including the voices. Every face is painted per texel. The surface materials
-are scanned PBR sets under CC0 — public domain — fetched by a script and never
-checked in.
+third-party IP are used. Every face is painted per texel. Every sound is a
+CC0 — public domain — recording, fetched by a script and never checked in,
+held to the bank's rules mechanically at load; the surface materials are
+scanned PBR sets under the same licence.
 
 ![The city from above](shots/aerial.png)
 
@@ -120,7 +120,7 @@ with traffic on it, weather, and a day.
 | `ui` | HUD, minimap, pause menu, dev tuning panel |
 | `save` | RON quick save / load |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, ambient occlusion, anti-aliasing, volumetrics, grading, the post stack |
-| `audio` | Sound synthesis, the voice synthesiser, the sound bank, and what triggers what |
+| `audio` | The recorded sound bank, the load-time discipline, and what triggers what |
 
 The world is fully reproducible from `GameConfig::world_seed`, so a save stores
 only what cannot be derived: the seed, where the player is, and the hour.
@@ -181,9 +181,11 @@ by finding a flummi cross enough to say one, so:
 cargo run -- --audition shots/audio       # the whole bank, one WAV each
 ```
 
-writes every sound out and exits without starting Bevy at all — synthesis never
-needed an app. It enumerates the same two lists the bank's own tests iterate, so
-a sound that is not in one of them is neither auditable nor held to the rules.
+writes every sound out and exits without starting Bevy at all — loading a
+recording never needed an app. It enumerates `audio::bank::REGISTER`, the same
+list the loader and the fetch-script sync tests read, so a sound cannot exist
+without being auditable, and what it writes is the processed buffer the game
+actually plays.
 
 `tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
 dawn, overcast, facade, park, wear, bodywork, showroom, geyser, driving, map,
@@ -375,29 +377,17 @@ growl is a complaint in any language, so the tone carries the whole message,
 and made-up words cannot be misheard as a real insult, which matters in a game
 whose entire subject is people being rude to each other.
 
-A voice is not a waveform. It is a buzz made in the throat, shaped by the
-mouth, and the two halves are independent: change the buzz and the same vowel
-comes out at a different pitch; change the shape and the same pitch comes out
-as a different vowel. That is exactly how it is built — a Rosenberg glottal
-pulse driven by a phase accumulator is the source, three band-passes in
-parallel are the filter, and a vowel is nothing but three frequencies handed to
-the second of them.
-
-The luck of it was that the kit was already here. `Resonator` was written to
-make sheet metal ring, and a band-pass that rings is what a vocal tract is: a
-vowel is three of them and a name. What had to be added were the three pieces
-that were genuinely missing, about fifteen lines each.
-
-Three things make it sound like a person, none of them optional. The pitch
-moves *within* a syllable, because a held pitch is a synthesiser. There is
-breath in it — a little noise through the same formants is the difference
-between a voice and an organ. And syllables start with something: a vowel that
-fades in from nothing is a theremin, while a burst of noise in front of it is a
-consonant and the ear hears a word.
-
-Out of that come a whistle, a giggle, a grumble, a curse, a raspberry and a
-gasp, several takes of each, pitched further apart again per speaker so that a
-citizen sounds like themselves every time.
+The voices used to be synthesised — a Rosenberg glottal pulse through three
+formant band-passes, a genuinely lovely instrument — and they were retired
+with the rest of the synthesis, because the recordings simply land better.
+What speaks now is real people under CC0: a giggle, three flavours of
+frustrated groan for the grumbles, three angry wordless grunts for the
+curses, a gasp, and human whistling for the cheer. Wordlessness survived the
+change of instrument: tone carries the whole message, and made-up noises
+cannot be misheard as a real insult. Every take is still pitched per speaker
+at playback, so a citizen sounds like themselves every time — and so one
+recorded human becomes forty different flummis rather than the same person
+forty times.
 
 Deciding *who* speaks turned out to be the harder half, and the obvious limit
 is the wrong one. Capping the choir at the nearest few does nothing on its own:
@@ -946,28 +936,26 @@ system attaches its lights once and then sleeps on a change detector.
 
 ## Audio
 
-There are no sound files either. `audio::synth` is a small DSP kit — partials,
-noise, one-pole filters, resonators, envelopes, a phase accumulator — and
-`audio::bank` writes every sound in the game as an expression in it: a crash is
-four inharmonic resonators struck by a burst of noise, and each of those is a
-named term in a sum. The buffers are computed once at startup, in nine
-milliseconds, and played through a custom Bevy audio source.
+Every sound is a CC0 recording, fetched by `tools/fetch-materials.sh` into
+`assets/sounds/` — one file per name in `audio::bank::REGISTER`, which lists
+each sound with the peak it is normalised to and whether it loops. The bank
+was synthesised for most of this project's life and the synthesiser wrote
+every sound as a named expression in a small DSP kit; it was retired, not
+lost an argument to laziness: once every slot had a recording, the recordings
+simply sounded better, and eight hundred lines of fallback for a case nobody
+wanted to hear is not an asset.
 
-The signature sound is the boing, and it is a sweep rather than a note: the
-spring is stiffest at the moment of contact and slackens as it unloads, so the
-frequency falls steeply and then flattens. Phase is accumulated rather than
-computed from `sin(2πft)`, because with a frequency that changes every sample
-the latter is not a sweep at all — it is a series of unrelated tones, and it
-clicks at every one of them.
+What survived is the discipline. Every recording is mixed to mono, resampled
+to the bank's rate, edge-faded, normalised to its register peak, and — for
+loops — seam-wrapped by folding the tail back over the head, all at load, so
+a file obeys the rules (no clicks, no clipping, honest loudness) by
+construction rather than by trusting whoever uploaded it. A missing file
+plays as a short silence and warns loudly at startup; the game never refuses
+to run over a download.
 
-Loops are built to be seamless by construction rather than by crossfading: the
-engine and the ambience are sums of harmonics of the loop frequency, so the
-waveform is exactly periodic. Filtered noise can never be periodic on the
-cheap, so tyre and intake hiss is generated long and folded back over its own
-head instead, which makes the join an ordinary step rather than a click.
-
-Engine pitch follows the drivetrain, and everything but the player's own car is
-positioned in the world.
+Engine pitch follows the drivetrain, the tyre screech follows the slip
+through playback speed, and everything but the player's own car is positioned
+in the world.
 
 ## Known limitations
 

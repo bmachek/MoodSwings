@@ -1,17 +1,18 @@
-//! Recorded sounds, as an optional upgrade over the synthesised bank.
+//! Loading the recorded sound bank from `assets/sounds/`.
 //!
-//! The same bargain the scanned PBR materials make (`world::material`): a
-//! fresh clone synthesises every sound and runs identically, and
-//! `tools/fetch-materials.sh` optionally drops CC0 recordings into
-//! `assets/sounds/`, one file per bank name. Anything found there is
-//! preferred; anything missing falls back to synthesis, per sound. Nothing is
-//! ever *required* to be on disk.
+//! These recordings used to be an optional upgrade over a synthesised bank;
+//! now they *are* the bank (see `audio::bank` for the decision), and
+//! `tools/fetch-materials.sh` is the required setup step that fills the
+//! directory — one CC0 file per register name. A missing file still never
+//! stops the game from starting: the bank stands a short silence in its
+//! place and warns, once, in the log.
 //!
-//! Every loaded file is pushed through the same discipline the synthesised
-//! bank is tested to — mixed to mono, resampled to the bank's rate, edges
-//! faded, peak normalised, loops seam-wrapped — so a recording obeys the
-//! rules (no clicks, no clipping, honest loudness) by construction rather
-//! than by trusting whoever uploaded it.
+//! Every loaded file is pushed through the same discipline the old
+//! synthesised bank was tested to — mixed to mono, resampled to the bank's
+//! rate, edges faded, peak normalised, loops seam-wrapped — so a recording
+//! obeys the rules (no clicks, no clipping, honest loudness) by construction
+//! rather than by trusting whoever uploaded it. The bank's tests hold this
+//! pipeline to that promise with fixture files.
 
 use std::path::{Path, PathBuf};
 
@@ -31,19 +32,15 @@ const EXTENSIONS: [&str; 4] = ["wav", "flac", "ogg", "mp3"];
 
 /// Decodes `<dir>/<name>.<ext>` for the first extension that exists, into
 /// mono samples at the bank's rate. `None` when no file is there or the file
-/// does not decode — the caller synthesises instead, and a corrupt download
-/// must never stop the game from starting.
+/// does not decode — the caller stands silence in for it, and a corrupt
+/// download must never stop the game from starting.
 fn decode(dir: &Path, name: &str) -> Option<Vec<f32>> {
     let Some(path) = EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{name}.{ext}")))
         .find(|path| path.is_file())
     else {
-        // Absence is fine — the fetch script is optional — but *silent*
-        // absence made the synthesised fallbacks read as missing files. One
-        // line per absent sound at startup makes the gap legible in the log
-        // next to the "using recorded" lines the loaded ones print.
-        info!("no recording for {name} in assets/sounds/; synthesising");
+        // The caller warns loudly; nothing useful to add here.
         return None;
     };
 
@@ -52,7 +49,7 @@ fn decode(dir: &Path, name: &str) -> Option<Vec<f32>> {
         Ok(decoder) => decoder,
         Err(error) => {
             warn!(
-                "{} does not decode ({error}); synthesising instead",
+                "{} does not decode ({error}); playing silence instead",
                 path.display()
             );
             return None;
@@ -131,7 +128,7 @@ pub fn looping(dir: &Path, name: &str, peak: f32) -> Option<SynthSound> {
     out.truncate(samples(LOOP_CAP));
     let fade = samples(0.1);
     if out.len() <= fade * 2 {
-        warn!("{name} is too short to loop; synthesising instead");
+        warn!("{name} is too short to loop; playing silence instead");
         return None;
     }
     let mut out = wrap_seam(out, fade);

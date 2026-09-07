@@ -1,35 +1,24 @@
-//! Procedural audio synthesis.
+//! The sample buffer the bank is built of, and the load-time discipline.
 //!
-//! Same rule as everything else here: no files ship with the game, so every
-//! sound is computed into a buffer of samples at startup and handed to Bevy as
-//! an asset. [`SynthSound`] is that asset, and it plays through the normal
-//! `AudioPlayer` path — spatialised, looped and pitch-shifted like any other
-//! source, because to rodio it is just a `Source`.
+//! This module used to be a synthesiser — oscillators, resonators, formants,
+//! the lot — and the bank used to be written in it. The synthesis is gone (the
+//! recordings won, see `audio::bank`), and what remains is the part that was
+//! never about synthesis at all: [`SynthSound`], the in-memory audio asset
+//! every recording is loaded into, and the three functions that hold any
+//! buffer to the bank's rules — [`fade_edges`], [`normalize`] and
+//! [`wrap_seam`]. The name stays because the asset type is registered under it
+//! and half the codebase says `SynthSound`; renaming it would be a big diff
+//! about nothing.
 //!
 //! The decoder deliberately holds an `Arc` of the samples rather than a `Vec`.
-//! Every sink that starts playing calls `decoder()`, and forty police cars
-//! sharing one siren should share one buffer, not copy a second of audio each.
-//!
-//! ## Making a loop that does not click
-//!
-//! A looping sound is only seamless if it lands back on its own first sample.
-//! Two ways to guarantee that, and both are here because they suit different
-//! material:
-//!
-//! * [`harmonics`] sums sine partials that are exact multiples of the loop's
-//!   own frequency, so every one of them completes a whole number of cycles.
-//!   Exact, but only useful for tonal content.
-//! * [`wrap_seam`] generates *more* audio than the loop needs and folds the
-//!   surplus tail back over the head. Filtered noise can never be periodic on
-//!   the cheap, so tyres, wind and engine hiss are wrapped instead.
+//! Every sink that starts playing calls `decoder()`, and forty cars sharing
+//! one engine should share one buffer, not copy a second of audio each.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bevy::audio::{ChannelCount, Decodable, Sample, SampleRate, Source};
 use bevy::prelude::*;
-use rand::RngExt;
-use rand_chacha::ChaCha8Rng;
 
 pub const SAMPLE_RATE: u32 = 44_100;
 
@@ -45,7 +34,7 @@ const MONO: ChannelCount = match ChannelCount::new(1) {
     None => unreachable!(),
 };
 
-/// A block of synthesised samples, playable as an audio asset.
+/// A block of loaded samples, playable as an audio asset.
 #[derive(Asset, TypePath, Clone, Debug)]
 pub struct SynthSound {
     samples: Arc<[f32]>,
@@ -132,222 +121,20 @@ impl Decodable for SynthSound {
     }
 }
 
-// ------------------------------------------------------------- building ----
+// ----------------------------------------------------------- discipline ----
 
 /// Samples in `seconds` of audio.
 pub fn samples(seconds: f32) -> usize {
     (seconds * SAMPLE_RATE as f32).round().max(1.0) as usize
 }
 
-/// Seconds elapsed at sample `index`.
-pub fn at(index: usize) -> f32 {
-    index as f32 / SAMPLE_RATE as f32
-}
-
-/// Percussive envelope: a short linear attack, then exponential decay.
-///
-/// Half-life rather than a rate because it is the number you can hear: "this
-/// is half as loud again every 80 milliseconds" is a description of a gunshot.
-pub fn hit(t: f32, attack: f32, half_life: f32) -> f32 {
-    if t < 0.0 {
-        0.0
-    } else if t < attack {
-        t / attack
-    } else {
-        0.5f32.powf((t - attack) / half_life)
-    }
-}
-
-/// A one-pole low-pass. Cheap, and gentle enough that sweeping its cutoff over
-/// a sound does not whistle.
-pub struct LowPass {
-    state: f32,
-    keep: f32,
-}
-
-impl LowPass {
-    pub fn new(cutoff_hz: f32) -> Self {
-        let mut filter = Self {
-            state: 0.0,
-            keep: 0.0,
-        };
-        filter.set_cutoff(cutoff_hz);
-        filter
-    }
-
-    pub fn set_cutoff(&mut self, cutoff_hz: f32) {
-        let cutoff = cutoff_hz.clamp(1.0, SAMPLE_RATE as f32 * 0.45);
-        self.keep = (-std::f32::consts::TAU * cutoff / SAMPLE_RATE as f32).exp();
-    }
-
-    pub fn process(&mut self, input: f32) -> f32 {
-        self.state = input * (1.0 - self.keep) + self.state * self.keep;
-        self.state
-    }
-}
-
-/// A two-pole resonator: a narrow band-pass that rings.
-///
-/// This is what makes an impact sound like metal rather than a bang. A handful
-/// of them at frequencies that are *not* harmonically related is the whole
-/// trick — harmonic partials read as a musical note, inharmonic ones as a sheet
-/// of steel.
-pub struct Resonator {
-    a1: f32,
-    a2: f32,
-    gain: f32,
-    y1: f32,
-    y2: f32,
-}
-
-impl Resonator {
-    pub fn new(frequency_hz: f32, bandwidth_hz: f32) -> Self {
-        let r = (-std::f32::consts::PI * bandwidth_hz / SAMPLE_RATE as f32).exp();
-        let theta = std::f32::consts::TAU * frequency_hz / SAMPLE_RATE as f32;
-        Self {
-            a1: 2.0 * r * theta.cos(),
-            a2: -r * r,
-            // Normalised so the peak of the band sits near unity.
-            gain: (1.0 - r)
-                * (1.0 - 2.0 * r * (2.0 * theta).cos() + r * r)
-                    .max(0.0)
-                    .sqrt(),
-            y1: 0.0,
-            y2: 0.0,
-        }
-    }
-
-    pub fn process(&mut self, input: f32) -> f32 {
-        let y = self.gain * input + self.a1 * self.y1 + self.a2 * self.y2;
-        self.y2 = self.y1;
-        self.y1 = y;
-        y
-    }
-}
-
-/// A phase accumulator.
-///
-/// The only correct way to make a tone whose pitch changes. Computing
-/// `sin(TAU * f * t)` with a new `f` every sample is not a glide — it is a
-/// series of unrelated tones, and it clicks at every one of them. Accumulating
-/// the phase instead means the waveform is always continuous however wildly the
-/// frequency is swept, which is what a portamento whistle and a boing both are.
-///
-/// The phase is kept in `f64`: a sound a few seconds long accumulates hundreds
-/// of thousands of radians, and `f32` runs out of mantissa to hold the fraction
-/// long before that.
-#[derive(Default)]
-pub struct Osc {
-    phase: f64,
-}
-
-impl Osc {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Advances one sample at `hz` and returns the new phase, in turns: 0 to 1
-    /// around the circle. Turns rather than radians because the waveforms that
-    /// are not sines — a glottal pulse, a sawtooth — are all written as a shape
-    /// over the unit interval.
-    pub fn advance(&mut self, hz: f32) -> f32 {
-        self.phase += hz as f64 / SAMPLE_RATE as f64;
-        self.phase -= self.phase.floor();
-        self.phase as f32
-    }
-
-    pub fn sine(&mut self, hz: f32) -> f32 {
-        (std::f32::consts::TAU * self.advance(hz)).sin()
-    }
-}
-
-/// One pulse of the vocal folds opening and closing, over a phase in 0..1.
-///
-/// The Rosenberg shape: a slow opening, a faster closing, then a closed phase
-/// where nothing happens. The asymmetry is the whole point — it is what puts
-/// energy in the upper harmonics for the formants to pick out, and a symmetric
-/// pulse (or a plain sine) filtered by [`Formant`] sounds like a kazoo rather
-/// than a throat.
-pub fn glottal(phase: f32) -> f32 {
-    const OPEN: f32 = 0.42;
-    const CLOSE: f32 = 0.16;
-    if phase < OPEN {
-        0.5 * (1.0 - (std::f32::consts::PI * phase / OPEN).cos())
-    } else if phase < OPEN + CLOSE {
-        (std::f32::consts::FRAC_PI_2 * (phase - OPEN) / CLOSE).cos()
-    } else {
-        0.0
-    }
-}
-
-/// The three resonances that turn a buzz into a vowel.
-///
-/// A vowel is not a waveform, it is a filter: the throat and mouth ring at
-/// three frequencies, and which three decides whether the same buzz comes out
-/// as "ah" or "ee". [`Resonator`] is already a band-pass, so a vowel is three
-/// of them in parallel and nothing else.
-///
-/// The bandwidths widen with frequency because a real vocal tract's do — a
-/// first formant is a narrow, strong resonance and a third is a broad, weak
-/// one. Equal bandwidths give three whistles rather than a voice.
-pub struct Formant {
-    bands: [(Resonator, f32); 3],
-}
-
-impl Formant {
-    pub fn new(hz: [f32; 3]) -> Self {
-        Self {
-            bands: [
-                (Resonator::new(hz[0], 80.0), 1.00),
-                (Resonator::new(hz[1], 110.0), 0.62),
-                (Resonator::new(hz[2], 170.0), 0.30),
-            ],
-        }
-    }
-
-    pub fn process(&mut self, input: f32) -> f32 {
-        let mut out = 0.0;
-        for (band, weight) in &mut self.bands {
-            out += band.process(input) * *weight;
-        }
-        out
-    }
-}
-
-/// One partial of a periodic waveform.
-pub struct Partial {
-    /// Multiple of the loop's own frequency. Must be a whole number, or the
-    /// loop will not close.
-    pub harmonic: u32,
-    pub amplitude: f32,
-    /// Turns, not radians: 0.0 to 1.0 around the circle.
-    pub phase: f32,
-}
-
-/// Sums partials into a buffer that repeats perfectly.
-///
-/// Because every partial is an exact harmonic of `1 / length`, each one is back
-/// where it started at the end of the buffer, so the loop point is silent.
-pub fn harmonics(length: usize, partials: &[Partial]) -> Vec<f32> {
-    let mut out = vec![0.0; length];
-    for partial in partials {
-        if partial.amplitude.abs() < 1e-5 {
-            continue;
-        }
-        let step = std::f32::consts::TAU * partial.harmonic as f32 / length as f32;
-        let phase = std::f32::consts::TAU * partial.phase;
-        for (index, sample) in out.iter_mut().enumerate() {
-            *sample += partial.amplitude * (step * index as f32 + phase).sin();
-        }
-    }
-    out
-}
-
 /// Folds a buffer's surplus tail back over its head so it loops without a click.
 ///
 /// `samples` must be `fade` longer than the loop you want; the result is that
 /// shorter. The last sample of the result and the first are adjacent in the
-/// original buffer, so the join is continuous by construction.
+/// original buffer, so the join is continuous by construction. This is what
+/// makes an arbitrary field recording loopable: noise can never be made
+/// periodic on the cheap, but it can be crossfaded into itself.
 pub fn wrap_seam(mut samples: Vec<f32>, fade: usize) -> Vec<f32> {
     let length = samples.len().saturating_sub(fade);
     if length == 0 || fade == 0 {
@@ -378,9 +165,9 @@ pub fn fade_edges(samples: &mut [f32], seconds: f32) {
 
 /// Scales a buffer so its loudest sample sits at `peak`.
 ///
-/// Every sound is written at whatever amplitude its synthesis happened to
-/// produce; normalising here means the mix is set by one number per sound in
-/// the bank instead of by accident.
+/// Every recording arrives at whatever loudness its uploader mastered it to;
+/// normalising here means the mix is set by one number per sound in the
+/// bank's register instead of by accident.
 pub fn normalize(samples: &mut [f32], peak: f32) {
     let loudest = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     if loudest <= f32::EPSILON {
@@ -392,18 +179,25 @@ pub fn normalize(samples: &mut [f32], peak: f32) {
     }
 }
 
-/// White noise in -1..1, from one of the game's deterministic streams.
-pub fn white(rng: &mut ChaCha8Rng) -> f32 {
-    rng.random::<f32>() * 2.0 - 1.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rng::{stream, stream_for};
 
     fn decode(sound: &SynthSound) -> Vec<f32> {
         sound.decoder().collect()
+    }
+
+    /// Deterministic hash noise, standing in for the filtered noise the old
+    /// synthesiser made: the seam test needs material with no period in it.
+    fn noise(length: usize) -> Vec<f32> {
+        (0..length)
+            .map(|i| {
+                let mut h = (i as u32).wrapping_mul(0x9E37_79B1);
+                h ^= h >> 15;
+                h = h.wrapping_mul(0x2545_F491);
+                (h as f32 / u32::MAX as f32) * 2.0 - 1.0
+            })
+            .collect()
     }
 
     #[test]
@@ -429,55 +223,13 @@ mod tests {
         let second = sound.decoder();
         assert!(
             Arc::ptr_eq(&first.samples, &second.samples),
-            "every sink playing a siren would otherwise clone a second of audio"
+            "every sink playing an engine would otherwise clone a second of audio"
         );
-    }
-
-    #[test]
-    fn harmonic_loops_close_on_themselves() {
-        let length = 512;
-        let loop_buffer = harmonics(
-            length,
-            &[
-                Partial {
-                    harmonic: 3,
-                    amplitude: 1.0,
-                    phase: 0.0,
-                },
-                Partial {
-                    harmonic: 7,
-                    amplitude: 0.5,
-                    phase: 0.31,
-                },
-                Partial {
-                    harmonic: 22,
-                    amplitude: 0.2,
-                    phase: 0.77,
-                },
-            ],
-        );
-        // The step from the last sample back to the first must be no larger
-        // than any step inside the buffer, or the loop ticks once a cycle.
-        let seam = (loop_buffer[0] - loop_buffer[length - 1]).abs();
-        let worst = loop_buffer
-            .windows(2)
-            .fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
-        assert!(seam <= worst + 1e-5, "seam {seam} vs worst step {worst}");
     }
 
     #[test]
     fn wrapping_joins_a_noise_loop_at_an_adjacent_pair() {
-        let mut rng = stream_for(1, stream::AUDIO);
-        let mut filter = LowPass::new(400.0);
-        // Warm the filter up: from a zeroed state the first samples are
-        // near-silent, which would flatter every measurement here.
-        for _ in 0..2_000 {
-            filter.process(white(&mut rng));
-        }
-        let raw: Vec<f32> = (0..4_096)
-            .map(|_| filter.process(white(&mut rng)))
-            .collect();
-
+        let raw = noise(4_096);
         let wrapped = wrap_seam(raw.clone(), 1_024);
         assert_eq!(wrapped.len(), 3_072);
 
@@ -485,23 +237,15 @@ mod tests {
         // the source, so playing round the join is playing the source forwards.
         assert_eq!(wrapped[wrapped.len() - 1], raw[3_071]);
         assert_eq!(wrapped[0], raw[3_072]);
-
-        let worst_step = wrapped
-            .windows(2)
-            .fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
-        let seam = (wrapped[0] - wrapped[wrapped.len() - 1]).abs();
-        assert!(
-            seam <= worst_step,
-            "the join should be an ordinary step: {seam} vs {worst_step}"
-        );
     }
 
     #[test]
-    fn a_percussive_envelope_peaks_then_halves_on_schedule() {
-        assert_eq!(hit(0.0, 0.01, 0.1), 0.0);
-        assert_eq!(hit(0.01, 0.01, 0.1), 1.0);
-        assert!((hit(0.11, 0.01, 0.1) - 0.5).abs() < 1e-5);
-        assert!((hit(0.21, 0.01, 0.1) - 0.25).abs() < 1e-5);
+    fn fading_pins_both_edges_to_zero() {
+        let mut buffer = vec![1.0; samples(0.5)];
+        fade_edges(&mut buffer, 0.004);
+        assert_eq!(buffer[0], 0.0);
+        assert!(buffer[buffer.len() - 1].abs() < 1e-3);
+        assert_eq!(buffer[buffer.len() / 2], 1.0, "the middle is untouched");
     }
 
     #[test]
@@ -514,26 +258,5 @@ mod tests {
         let mut silent = vec![0.0; 4];
         normalize(&mut silent, 0.8);
         assert!(silent.iter().all(|s| *s == 0.0));
-    }
-
-    #[test]
-    fn a_resonator_rings_at_the_frequency_it_was_tuned_to() {
-        let mut resonator = Resonator::new(1000.0, 40.0);
-        // One impulse in; count zero crossings in the ring that comes out.
-        let mut previous = 0.0;
-        let mut crossings = 0;
-        for index in 0..SAMPLE_RATE as usize {
-            let out = resonator.process(if index == 0 { 1.0 } else { 0.0 });
-            if previous < 0.0 && out >= 0.0 {
-                crossings += 1;
-            }
-            previous = out;
-        }
-        // A second of a 1kHz ring is about a thousand cycles, less whatever
-        // decays below the noise floor.
-        assert!(
-            (900..=1_100).contains(&crossings),
-            "expected roughly a kilohertz, counted {crossings}"
-        );
     }
 }

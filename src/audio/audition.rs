@@ -11,8 +11,14 @@
 //! ```
 //!
 //! writes every sound in the bank out as a WAV and exits, without starting
-//! Bevy at all — synthesis has no dependency on a running app, which is what
-//! makes this twenty lines rather than a second capture harness.
+//! Bevy at all — loading and processing a recording has no dependency on a
+//! running app, which is what makes this a page rather than a second capture
+//! harness. What is written is the *processed* buffer — mono, resampled,
+//! faded, normalised, seam-wrapped — so what you audition is what the game
+//! plays, not what the fetch script downloaded. A register entry with no
+//! recording on disk is printed as MISSING instead of written; with the
+//! synthesis gone, the audition needs `tools/fetch-materials.sh` to have run,
+//! the same as the game itself.
 //!
 //! WAV is written by hand rather than by a crate. The format needed here is
 //! forty-four bytes of header in front of the samples, and adding a dependency
@@ -41,10 +47,19 @@ pub fn write(directory: &Path) {
         return;
     }
 
-    let mut all = bank::every_one_shot();
-    all.extend(bank::every_loop());
-    let count = all.len();
-    for (name, sound) in all {
+    let sounds = super::files::dir();
+    let mut written = 0usize;
+    let mut missing = 0usize;
+    for (name, _, shape) in bank::REGISTER {
+        let loaded = match shape {
+            bank::Shape::Shot => super::files::one_shot(&sounds, name, peak_of(name)),
+            bank::Shape::Loop => super::files::looping(&sounds, name, peak_of(name)),
+        };
+        let Some(sound) = loaded else {
+            println!("MISSING   {name}  (run tools/fetch-materials.sh)");
+            missing += 1;
+            continue;
+        };
         let path = directory.join(format!("{name}.wav"));
         let samples: Vec<f32> = sound_samples(&sound);
         if let Err(problem) = std::fs::write(&path, wav(&samples)) {
@@ -56,8 +71,25 @@ pub fn write(directory: &Path) {
             sound.duration().as_secs_f32(),
             path.display()
         );
+        written += 1;
     }
-    println!("{count} sounds written to {}", directory.display());
+    println!(
+        "{written} sounds written to {}{}",
+        directory.display(),
+        if missing > 0 {
+            format!("; {missing} missing")
+        } else {
+            String::new()
+        }
+    );
+}
+
+fn peak_of(name: &str) -> f32 {
+    bank::REGISTER
+        .iter()
+        .find(|(n, ..)| n == &name)
+        .map(|(_, peak, _)| *peak)
+        .unwrap_or(1.0)
 }
 
 fn sound_samples(sound: &SynthSound) -> Vec<f32> {
@@ -65,8 +97,9 @@ fn sound_samples(sound: &SynthSound) -> Vec<f32> {
     sound.decoder().collect()
 }
 
-/// One mono 16-bit PCM WAV file.
-fn wav(samples: &[f32]) -> Vec<u8> {
+/// One mono 16-bit PCM WAV file. `pub(crate)` because the bank's tests use it
+/// to write fixture recordings for the load pipeline.
+pub(crate) fn wav(samples: &[f32]) -> Vec<u8> {
     const BITS: u16 = 16;
     let bytes_per_sample = BITS as u32 / 8;
     let data_len = samples.len() as u32 * bytes_per_sample;

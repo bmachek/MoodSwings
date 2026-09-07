@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fetches the optional scanned/recorded assets: PBR materials and sounds.
+# Fetches the scanned materials (optional) and the recorded sound bank
+# (required — the synthesised bank was retired).
 #
 # Everything here is CC0 1.0 — public domain, no attribution required, no
 # restrictions on use. The project is FOSS and any licence-compatible source
@@ -15,10 +16,11 @@
 # is not the bottleneck.
 #
 # The download lands in assets/materials/ and assets/sounds/, both gitignored.
-# The game runs without either: `world::texture` generates a procedural
-# stand-in for every material it cannot find on disk, and `audio::bank`
-# synthesises every sound `audio::files` cannot find, so a fresh clone still
-# starts.
+# The materials remain an optional upgrade — `world::texture` paints a
+# procedural stand-in for anything missing — but the sounds stopped being
+# one: the synthesised bank was retired, so this script is the required setup
+# step for audio. A clone that has not run it still starts, and plays silence
+# where the missing sounds should be, warning per gap in the log.
 #
 # KEEP IN SYNC with tools/fetch-materials.bat — the Windows twin of this
 # script. Any material or sound added here must be added there too.
@@ -80,16 +82,14 @@ done
 
 # ------------------------------------------------------------------ sounds ----
 #
-# One entry per sound bank name (see `audio::bank`): "<name>|<url>". The file
-# keeps its source extension; `audio::files` tries wav/flac/ogg/mp3 in turn.
-# Sounds with no entry here stay synthesised — the fallback is per sound, and
-# `audio::files` says so in the log at startup. That is currently the screech
-# (deliberately synth: it has to track slip continuously), the spoken flummi
-# voices (instruments by design, see `audio::bank`), and the three mouth
-# noises nobody has recorded under a compatible licence yet: raspberry, fart
-# and sorry. The bank loads each by name the moment a file appears, so a
-# recording dropped into assets/sounds/ by hand works without touching this
-# script.
+# One entry per sound bank name (see `audio::bank::REGISTER`): "<name>|<url>".
+# The file keeps its source extension; `audio::files` tries wav/flac/ogg/mp3
+# in turn. This half of the script stopped being optional when the synthesis
+# was retired: every sound the game makes is one of these recordings, a
+# missing file plays as silence with a warning, and the bank's tests hold
+# this list and the REGISTER against each other. A recording dropped into
+# assets/sounds/ by hand still wins over a fetch, so replacing a take is
+# just replacing a file.
 SOUNDS_DEST="assets/sounds"
 SOUNDS=(
     "boing|https://opengameart.org/sites/default/files/boing.flac"
@@ -111,6 +111,30 @@ SOUNDS=(
     # prop leaving its bolts.
     "wheee|https://cdn.freesound.org/previews/497/497092_942821-hq.mp3"
     "sproing|https://cdn.freesound.org/previews/540/540790_11537497-hq.mp3"
+    # The voices, by actual people, all CC0 and all wordless — which was the
+    # line that let recordings in here at all. Reitanna's giggle and her
+    # three flavours of frustrated groan carry the grumbles; the curses are
+    # angry grunts from Rocotilos, lipalearning and ssierra1202; the gasp is
+    # kanyonwyvern's. Playback still pitches every take per speaker.
+    "giggle|https://cdn.freesound.org/previews/323/323702_950925-hq.mp3"
+    "grumble-0|https://cdn.freesound.org/previews/351/351163_950925-hq.mp3"
+    "grumble-1|https://cdn.freesound.org/previews/343/343929_950925-hq.mp3"
+    "grumble-2|https://cdn.freesound.org/previews/351/351157_950925-hq.mp3"
+    "curse-0|https://cdn.freesound.org/previews/341/341489_1400623-hq.mp3"
+    "curse-1|https://cdn.freesound.org/previews/427/427972_4687265-hq.mp3"
+    "curse-2|https://cdn.freesound.org/previews/391/391939_6450069-hq.mp3"
+    "gasp|https://cdn.freesound.org/previews/740/740310_15125504-hq.mp3"
+    # The last of the taunt rotation to be recorded: Reitanna's tongue
+    # raspberry and one of Blubberfreak's many farts. The sorry is
+    # theuncertainman's contrite NPC — the one entry with a word in it,
+    # allowed in since the wordless rule was retired by decision.
+    "raspberry|https://cdn.freesound.org/previews/252/252262_950925-hq.mp3"
+    "fart|https://cdn.freesound.org/previews/732/732936_15881540-hq.mp3"
+    "sorry|https://cdn.freesound.org/previews/458/458075_6492957-hq.mp3"
+    # Real tyres squealing round a real corner (audible-edge, CC0). The slip
+    # tracking that kept this synthesised for so long lives in playback
+    # speed, which works on a recording just as well.
+    "screech|https://cdn.freesound.org/previews/71/71739_995351-hq.mp3"
 )
 # These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
 CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"
@@ -118,13 +142,14 @@ CAR_PACK=(
     "engine|Car_Engine_Loop.ogg"
     "car-door|Car_Door_Close.ogg"
 )
-# And the taunt rotation's recordable half, from rubberduck's CC0 creature
-# pack. cough_03 is the double cough — performed, like the synthesised one —
-# and spit_01 is the closest to the synthesised length.
+# More of the taunt rotation, from rubberduck's CC0 creature pack. cough_03
+# is the double cough, spit_01 the tidiest spit, and burp_01 the burp that
+# finally earned the mystery burp.ogg its slot in the rotation.
 CREATURE_PACK_URL="https://opengameart.org/sites/default/files/80-CC0-creature-SFX_0.zip"
 CREATURE_PACK=(
     "cough|cough_03.ogg"
     "spit|spit_01.ogg"
+    "burp|burp_01.ogg"
 )
 # Footsteps and the traffic bed, from rubberduck's second CC0 SFX hundred.
 # The highway loop *is* the city ambience: what the mood mixer wants from
@@ -147,7 +172,7 @@ for entry in "${SOUNDS[@]}"; do
     fi
     echo "fetch   $name"
     if ! curl -fsSL --retry 3 --retry-delay 2 -o "$target" "$url"; then
-        echo "        failed; skipping (the game synthesises it instead)" >&2
+        echo "        failed; skipping (the game plays silence there until it is fetched)" >&2
         rm -f "$target"
     fi
 done
@@ -168,7 +193,7 @@ if [[ "$need_pack" == true ]]; then
             unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"
         done
     else
-        echo "        failed; skipping (the game synthesises them instead)" >&2
+        echo "        failed; skipping (the game plays silence there until they are fetched)" >&2
     fi
     rm -f "$pack"
 fi
@@ -191,7 +216,7 @@ if [[ "$need_pack" == true ]]; then
             unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"
         done
     else
-        echo "        failed; skipping (the game synthesises them instead)" >&2
+        echo "        failed; skipping (the game plays silence there until they are fetched)" >&2
     fi
     rm -f "$pack"
 fi
@@ -213,7 +238,7 @@ if [[ "$need_pack" == true ]]; then
             unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"
         done
     else
-        echo "        failed; skipping (the game synthesises them instead)" >&2
+        echo "        failed; skipping (the game plays silence there until they are fetched)" >&2
     fi
     rm -f "$pack"
 fi
