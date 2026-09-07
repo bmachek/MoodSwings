@@ -351,6 +351,9 @@ fn maintain_population(
                 Provoker::default(),
                 Visibility::default(),
             ));
+            if archetype.steadfast() {
+                person.insert(crate::bounce::launch::NeverTumbles);
+            }
             super::figure::dress(
                 &mut person,
                 &figures,
@@ -458,7 +461,8 @@ fn walk_pavements(
         // The mood is in the body as well as on the face: the hop the bounce
         // controller takes at the bottom of every arc is scaled here, every
         // frame, because the controller spends the scale on each landing.
-        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max);
+        // Who they are scales it again — a skater glides, a wheelchair rolls.
+        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max) * archetype.hop();
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's

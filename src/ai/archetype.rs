@@ -39,10 +39,18 @@ pub enum Archetype {
     /// They walk in a saffron line and cheer at everybody. The only gang in
     /// the city whose drive-by raises your mood.
     Missionary,
+    /// Faster than a walk, lower than a hop: a glide with a kick in it.
+    Skater,
+    /// A stick, a shuffle, and all the time in the world.
+    CaneUser,
+    /// Wheels instead of a hop. Steadfast: nothing tips a wheelchair user
+    /// over — they glide, they get punted like everybody else, they land
+    /// on their wheels.
+    Wheelchair,
 }
 
 impl Archetype {
-    pub const ALL: [Archetype; 8] = [
+    pub const ALL: [Archetype; 11] = [
         Archetype::Everyday,
         Archetype::Wutbuerger,
         Archetype::Punk,
@@ -51,6 +59,9 @@ impl Archetype {
         Archetype::Beggar,
         Archetype::Shy,
         Archetype::Missionary,
+        Archetype::Skater,
+        Archetype::CaneUser,
+        Archetype::Wheelchair,
     ];
 
     /// The name the character menu shows. Player-facing, so German.
@@ -64,6 +75,9 @@ impl Archetype {
             Archetype::Beggar => "Bettler",
             Archetype::Shy => "Schüchterne",
             Archetype::Missionary => "Missionar",
+            Archetype::Skater => "Skater",
+            Archetype::CaneUser => "Mit Gehstock",
+            Archetype::Wheelchair => "Im Rollstuhl",
         }
     }
 
@@ -98,8 +112,28 @@ impl Archetype {
             Archetype::Beggar => 0.6,
             Archetype::Shy => 0.85,
             Archetype::Missionary => 0.9,
+            Archetype::Skater => 1.4,
+            Archetype::CaneUser => 0.68,
             _ => 1.0,
         }
+    }
+
+    /// Multiplier on the hop the bounce controller takes: a skater glides
+    /// more than it bounces, and a wheelchair does not bounce at all — the
+    /// controller's steering still works with the hop at zero, it just rolls.
+    pub fn hop(self) -> f32 {
+        match self {
+            Archetype::Skater => 0.55,
+            Archetype::Wheelchair => 0.0,
+            _ => 1.0,
+        }
+    }
+
+    /// Never knocked head over heels — see `bounce::launch::NeverTumbles`.
+    /// A launched wheelchair flies level and lands rolling, which is both
+    /// kinder and funnier than the alternative.
+    pub fn steadfast(self) -> bool {
+        self == Archetype::Wheelchair
     }
 
     /// Cannot hear a taunt or a cheer.
@@ -140,7 +174,7 @@ pub struct Cast(pub Vec<(Archetype, f32)>);
 impl Default for Cast {
     fn default() -> Self {
         Self(vec![
-            (Archetype::Everyday, 0.55),
+            (Archetype::Everyday, 0.44),
             (Archetype::Wutbuerger, 0.07),
             (Archetype::Punk, 0.07),
             // One in fifty. An Elvis is a sighting, not a demographic.
@@ -149,6 +183,9 @@ impl Default for Cast {
             (Archetype::Beggar, 0.05),
             (Archetype::Shy, 0.10),
             (Archetype::Missionary, 0.06),
+            (Archetype::Skater, 0.05),
+            (Archetype::CaneUser, 0.04),
+            (Archetype::Wheelchair, 0.02),
         ])
     }
 }

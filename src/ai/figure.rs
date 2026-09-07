@@ -134,6 +134,11 @@ pub struct FigureAssets {
     plastic: Handle<StandardMaterial>,
     paper_cup: Handle<Mesh>,
     paper: Handle<StandardMaterial>,
+    board: Handle<Mesh>,
+    wood: Handle<StandardMaterial>,
+    cane: Handle<Mesh>,
+    wheel: Handle<Mesh>,
+    seat: Handle<Mesh>,
 }
 
 /// Proportions, in metres, measured from the middle of the collider capsule.
@@ -167,6 +172,14 @@ mod body {
     pub const PHONES_BAR: f32 = 0.757;
     pub const PHONES_BAR_HEIGHT: f32 = 0.022;
     pub const CUP_RADIUS: f32 = 0.048;
+    /// A skateboard under the feet, flush with the capsule's bottom cap.
+    pub const BOARD_CENTRE: f32 = -0.825;
+    pub const BOARD_THICKNESS: f32 = 0.04;
+    /// A cane at the side, and the wheels a wheelchair rolls on.
+    pub const CANE_CENTRE: f32 = -0.45;
+    pub const CANE_HALF: f32 = 0.39;
+    pub const WHEEL_CENTRE: f32 = -0.575;
+    pub const WHEEL_RADIUS: f32 = 0.27;
 }
 
 /// Half the collider capsule's height, which is what the figure has to fit in.
@@ -233,6 +246,18 @@ const _: () = {
     assert!(
         body::PHONES_BAR + body::PHONES_BAR_HEIGHT * 0.5 <= CAPSULE_HALF,
         "the headphone bridge stands above the capsule"
+    );
+    assert!(
+        body::BOARD_CENTRE - body::BOARD_THICKNESS * 0.5 >= -CAPSULE_HALF,
+        "the skateboard hangs below the capsule"
+    );
+    assert!(
+        body::CANE_CENTRE - body::CANE_HALF >= -CAPSULE_HALF,
+        "the cane pokes through the pavement"
+    );
+    assert!(
+        body::WHEEL_CENTRE - body::WHEEL_RADIUS >= -CAPSULE_HALF,
+        "the wheels sink below the capsule"
     );
 };
 
@@ -317,6 +342,15 @@ pub fn build_assets(
             perceptual_roughness: 0.9,
             ..default()
         }),
+        board: meshes.add(Cuboid::new(0.22, body::BOARD_THICKNESS, 0.56)),
+        wood: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.42, 0.28, 0.16),
+            perceptual_roughness: 0.7,
+            ..default()
+        }),
+        cane: meshes.add(Cylinder::new(0.018, body::CANE_HALF * 2.0)),
+        wheel: meshes.add(Cylinder::new(body::WHEEL_RADIUS, 0.03)),
+        seat: meshes.add(Cuboid::new(0.4, 0.06, 0.4)),
     }
 }
 
@@ -436,6 +470,46 @@ pub fn dress(
                     MeshMaterial3d(assets.paper.clone()),
                     Transform::from_translation(at),
                 ));
+            }
+            Archetype::Skater => {
+                // The board rides under the feet, flush with the capsule's
+                // bottom — the legs still pump above it, which is the joke.
+                let at = Vec3::new(0.0, body::BOARD_CENTRE, 0.0);
+                parent.spawn((
+                    Rest::at(at),
+                    Mesh3d(assets.board.clone()),
+                    MeshMaterial3d(assets.wood.clone()),
+                    Transform::from_translation(at),
+                ));
+            }
+            Archetype::CaneUser => {
+                let at = Vec3::new(0.26, body::CANE_CENTRE, 0.05);
+                parent.spawn((
+                    Rest::at(at),
+                    Mesh3d(assets.cane.clone()),
+                    MeshMaterial3d(assets.wood.clone()),
+                    Transform::from_translation(at),
+                ));
+            }
+            Archetype::Wheelchair => {
+                let seat = Vec3::new(0.0, -0.38, 0.0);
+                parent.spawn((
+                    Rest::at(seat),
+                    Mesh3d(assets.seat.clone()),
+                    MeshMaterial3d(assets.plastic.clone()),
+                    Transform::from_translation(seat),
+                ));
+                for side in [-1.0f32, 1.0] {
+                    let hub = Vec3::new(side * 0.24, body::WHEEL_CENTRE, 0.0);
+                    parent.spawn((
+                        Rest::at(hub),
+                        Mesh3d(assets.wheel.clone()),
+                        MeshMaterial3d(assets.plastic.clone()),
+                        // A cylinder stands on Y; a wheel rolls on X.
+                        Transform::from_translation(hub)
+                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+                    ));
+                }
             }
             _ => {}
         }

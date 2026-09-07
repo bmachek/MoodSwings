@@ -223,7 +223,9 @@ fn drive_player(
     // each landing, the same contract `ai::pedestrian` uses for the crowd. See
     // `BounceConfig::player_hop_scale` for why the player of all people
     // bounces least.
-    bouncer.hop_scale = config.bounce.player_hop_scale;
+    // The chosen archetype scales it again — a player in the wheelchair
+    // glides exactly as the crowd's wheelchair users do.
+    bouncer.hop_scale = config.bounce.player_hop_scale * config.character.hop();
 
     // Only off the ground. Held down, this would otherwise be a pogo stick with
     // no ceiling: every landing would take the bigger hop, and each one lands
