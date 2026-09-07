@@ -78,6 +78,11 @@ pub mod stream {
     /// like the roofs are, and on its own stream for the usual reason — the
     /// street's dressing must never move a roof, a lot or a bin.
     pub const FRONTAGE: u64 = 22;
+    /// The pigeons: where a flock settles, how many are in it, and which one
+    /// is the white one. Its own stream rather than `ANIMALS` — how many birds
+    /// are on the paving must not move a cat, and startling a flock must not
+    /// change a dog's coat.
+    pub const PIGEONS: u64 = 23;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
