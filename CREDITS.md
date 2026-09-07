@@ -69,6 +69,9 @@ on load.
 - **fimrod** — the warehouse drone over the industrial blocks.
 - **kwahmah_02**, **skymary** — the dog's bark and the cat's meow, one take
   each, pitched per animal the same way the crowd's voices are.
+- **deadrobotmusic** — the strummed acoustic loop the busker plays whenever
+  the street grants him an audience.
+- **Kodack** — the camera shutter click, one decisive moment at a time.
 
 ## Software
 

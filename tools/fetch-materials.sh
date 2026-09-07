@@ -172,6 +172,11 @@ SOUNDS=(
     # meow, one take each, pitched per animal like the crowd's voices.
     "bark|https://cdn.freesound.org/previews/277/277058_4486188-hq.mp3"
     "meow|https://cdn.freesound.org/previews/412/412017_3652520-hq.mp3"
+    # The street performers (both CC0): deadrobotmusic's strummed acoustic
+    # loop is what a busker plays when the street grants him an audience,
+    # and Kodack's shutter snap is the photographer's decisive moment.
+    "busking|https://cdn.freesound.org/previews/628/628766_11532701-hq.mp3"
+    "camera|https://cdn.freesound.org/previews/271/271010_2276808-hq.mp3"
 )
 # These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
 CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"

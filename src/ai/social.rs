@@ -80,6 +80,29 @@ const RANT_STING: f32 = 0.22;
 const AUDIENCE: usize = 3;
 const STAGE: f32 = 8.0;
 const SHOWOFF_CHANCE: f32 = 0.06;
+
+/// A busker settles for less of a crowd than an Elvis — two listeners is a
+/// gig — and holds the pitch for a whole loop of the recording. While he
+/// plays, everyone in stage range who can hear drifts gently upward: the
+/// one provocation in the city that only ever improves things.
+const BUSK_AUDIENCE: usize = 2;
+const BUSK_CHANCE: f32 = 0.10;
+const BUSK_SECONDS: f32 = 16.0;
+const BUSK_LIFT: f32 = 0.035;
+const BUSK_GAIN: f32 = 0.55;
+const BUSK_EARSHOT: f32 = 26.0;
+
+/// The photographer's decisive moment: range, chance, and what being
+/// photographed does to somebody. Most citizens are flattered. The Shy are
+/// having the worst moment of their week, which is the joke with the
+/// sting left in — er knipst, sie leidet.
+const SNAP_RANGE: f32 = 6.5;
+const SNAP_CHANCE: f32 = 0.06;
+const SNAP_SECONDS: f32 = 2.4;
+const SNAP_FLATTERY: f32 = 0.10;
+const SNAP_INTRUSION: f32 = 0.18;
+const SNAP_GAIN: f32 = 0.6;
+const SNAP_EARSHOT: f32 = 14.0;
 /// And a skater pops an ollie now and then whatever the gait setting says —
 /// a deliberate trick, like a jump, not a way of travelling.
 const OLLIE_CHANCE: f32 = 0.07;
@@ -110,6 +133,15 @@ pub struct Rubbernecking {
     pub left: f32,
 }
 
+/// Mid-set. The emitter is the looping recording, hung as a child so the
+/// music travels with the musician — a launched busker keeps playing all
+/// the way through the arc, which is the correct amount of professionalism.
+#[derive(Component, Debug)]
+pub struct Busking {
+    pub left: f32,
+    pub emitter: Entity,
+}
+
 /// Recently finished being sociable; not about to start again. One cooldown
 /// for chats and loiters both, so a citizen does something at most once per
 /// block rather than stuttering down the pavement.
@@ -137,6 +169,8 @@ impl Plugin for SocialPlugin {
                     rubberneck_at_wallops,
                     sour_at_traffic,
                     show_off,
+                    busk,
+                    snap,
                 ),
                 (hold_chats, hold_loiters, gawk),
             )
@@ -607,6 +641,194 @@ fn show_off(
                 bouncer.hop_scale = OLLIE;
             }
             _ => {}
+        }
+    }
+}
+
+/// The busker's set: given a modest audience he stops, plays the recording,
+/// and gently lifts every mood in earshot for as long as the set runs. The
+/// music is a child entity, so it flies with him if somebody launches him
+/// mid-song.
+#[allow(clippy::type_complexity)]
+fn busk(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut rng: ResMut<AudioRng>,
+    config: Res<GameConfig>,
+    bank: Option<Res<crate::audio::bank::SoundBank>>,
+    mut buskers: Query<
+        (
+            Entity,
+            &Transform,
+            &Archetype,
+            Option<&Loitering>,
+            Option<&Composure>,
+            Option<&Chatting>,
+            Option<&Grudge>,
+            Option<&Launched>,
+            Option<&mut Busking>,
+        ),
+        With<Pedestrian>,
+    >,
+    mut street: Query<(&Transform, &Archetype, &mut Mood), With<Pedestrian>>,
+) {
+    let dt = time.delta_secs();
+
+    // The running sets: tick them down, and strike the stage when the set
+    // ends or something ended the stop for him — a panic clears Loitering,
+    // and a launch is its own kind of encore.
+    let mut stages: Vec<Vec3> = Vec::new();
+    for (entity, transform, _, loitering, .., launched, busking) in &mut buskers {
+        let Some(mut busking) = busking else { continue };
+        busking.left -= dt;
+        if busking.left <= 0.0 || loitering.is_none() || launched.is_some() {
+            commands.entity(busking.emitter).despawn();
+            commands.entity(entity).remove::<Busking>();
+            continue;
+        }
+        stages.push(transform.translation);
+    }
+
+    // New sets, for any busker at liberty with a crowd worth playing to.
+    let crowd: Vec<Vec3> = street.iter().map(|(t, ..)| t.translation).collect();
+    for (entity, transform, archetype, loitering, composure, chatting, grudge, launched, busking) in
+        &buskers
+    {
+        if *archetype != Archetype::Busker
+            || busking.is_some()
+            || loitering.is_some()
+            || composure.is_some()
+            || chatting.is_some()
+            || grudge.is_some()
+            || launched.is_some()
+        {
+            continue;
+        }
+        if rng.random::<f32>() > BUSK_CHANCE * dt {
+            continue;
+        }
+        let here = transform.translation;
+        let audience = crowd
+            .iter()
+            .filter(|at| {
+                let apart = at.distance(here);
+                apart > f32::EPSILON && apart < STAGE
+            })
+            .count();
+        if audience < BUSK_AUDIENCE {
+            continue;
+        }
+        let Some(bank) = bank.as_ref() else { continue };
+        let emitter = commands
+            .spawn((
+                bevy::audio::AudioPlayer(bank.busking.clone()),
+                bevy::audio::PlaybackSettings::LOOP
+                    .with_volume(bevy::audio::Volume::Linear(crate::audio::effect_gain(
+                        &config, BUSK_GAIN,
+                    )))
+                    .with_spatial(true)
+                    .with_spatial_scale(bevy::audio::SpatialScale::new(1.0 / BUSK_EARSHOT)),
+                ChildOf(entity),
+            ))
+            .id();
+        commands.entity(entity).insert((
+            Busking {
+                left: BUSK_SECONDS,
+                emitter,
+            },
+            Loitering {
+                left: BUSK_SECONDS,
+                face: None,
+            },
+        ));
+        stages.push(here);
+    }
+
+    // The lift. Deafness works on music exactly as it works on cheers —
+    // headphones are a commitment.
+    if !stages.is_empty() {
+        for (transform, archetype, mut mood) in &mut street {
+            if archetype.deaf() {
+                continue;
+            }
+            if stages
+                .iter()
+                .any(|stage| stage.distance(transform.translation) < STAGE)
+            {
+                mood.value = (mood.value + BUSK_LIFT * dt).clamp(-1.0, 1.0);
+            }
+        }
+    }
+}
+
+/// The street photographer: point-blank portraits of strangers. The subject
+/// is flattered — being seen is most of what anybody wants — except the
+/// Shy, for whom this is the worst moment of the week.
+#[allow(clippy::type_complexity)]
+fn snap(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut rng: ResMut<AudioRng>,
+    config: Res<GameConfig>,
+    bank: Option<Res<crate::audio::bank::SoundBank>>,
+    photographers: Query<
+        (Entity, &Transform, &Archetype),
+        (
+            With<Pedestrian>,
+            Without<Launched>,
+            Without<Chatting>,
+            Without<Grudge>,
+            Without<Loitering>,
+            Without<Composure>,
+        ),
+    >,
+    mut subjects: Query<(Entity, &Transform, &Archetype, &mut Mood), With<Pedestrian>>,
+) {
+    let dt = time.delta_secs();
+    for (photographer, transform, archetype) in &photographers {
+        if *archetype != Archetype::Photographer || rng.random::<f32>() > SNAP_CHANCE * dt {
+            continue;
+        }
+        let here = transform.translation;
+        let Some((subject, apart)) = subjects
+            .iter()
+            .filter(|(entity, ..)| *entity != photographer)
+            .map(|(entity, t, ..)| (entity, t.translation.distance(here)))
+            .filter(|(_, apart)| *apart < SNAP_RANGE)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        else {
+            continue;
+        };
+        let _ = apart;
+        let Ok((_, towards, subject_archetype, mut mood)) = subjects.get_mut(subject) else {
+            continue;
+        };
+        let sting = if subject_archetype.shy() {
+            -SNAP_INTRUSION
+        } else {
+            SNAP_FLATTERY
+        };
+        mood.value = (mood.value + sting).clamp(-1.0, 1.0);
+
+        let face = (towards.translation - here).xz();
+        commands.entity(photographer).insert((
+            Loitering {
+                left: SNAP_SECONDS,
+                face: (face.length_squared() > f32::EPSILON).then_some(face),
+            },
+            Composure {
+                left: rng.random_range(8.0..20.0),
+            },
+        ));
+        if let Some(bank) = bank.as_ref() {
+            commands.spawn((
+                bevy::audio::AudioPlayer(bank.camera.clone()),
+                crate::audio::spatial_once(
+                    crate::audio::effect_gain(&config, SNAP_GAIN),
+                    SNAP_EARSHOT,
+                ),
+                Transform::from_translation(here + Vec3::Y * 0.6),
+            ));
         }
     }
 }

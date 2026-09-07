@@ -665,8 +665,11 @@ fn line_up_cast(
     let right = *anchor.right();
     let along = *anchor.forward();
 
+    // Centred on however many the cast holds today, not on the thirteen it
+    // held when this was written — a new archetype must land in frame.
+    let middle_index = (Archetype::ALL.len() as f32 - 1.0) * 0.5;
     for (i, archetype) in Archetype::ALL.iter().enumerate() {
-        let at = anchor.translation + along * 6.0 + right * ((i as f32 - 6.0) * spacing);
+        let at = anchor.translation + along * 6.0 + right * ((i as f32 - middle_index) * spacing);
         let worn = faces.wear(0.0);
         let coat = materials.add(StandardMaterial {
             // The fixed wardrobe where the archetype has one, and one neutral
@@ -694,8 +697,11 @@ fn line_up_cast(
     // this cast's costume is at ground level and edge-on — a board, a cane,
     // a pair of wheels — and a frontal shot is the one angle from which
     // none of it can be told apart.
+    // Backed off proportionally to the row's actual width, so the frame
+    // keeps holding the whole cast as it grows.
+    let span = (Archetype::ALL.len() as f32 - 1.0) * spacing;
     let middle = anchor.translation + along * 6.0;
-    let eye = middle - along * 17.0 + right * 7.0 + Vec3::Y * 3.0;
+    let eye = middle - along * (span * 0.9) + right * (span * 0.36) + Vec3::Y * 3.0;
     for (mut transform, mut rig) in &mut cameras {
         rig.mode = CameraMode::Free;
         *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.6, Vec3::Y);

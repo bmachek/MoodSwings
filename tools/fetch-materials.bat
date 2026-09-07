@@ -97,6 +97,10 @@ call :fetch_sound court mp3 "https://cdn.freesound.org/previews/453/453757_61268
 call :fetch_sound industry mp3 "https://cdn.freesound.org/previews/278/278987_5322055-hq.mp3"
 call :fetch_sound bark mp3 "https://cdn.freesound.org/previews/277/277058_4486188-hq.mp3"
 call :fetch_sound meow mp3 "https://cdn.freesound.org/previews/412/412017_3652520-hq.mp3"
+rem The street performers - mirror of the .sh: the busker's strummed loop
+rem and the photographer's shutter.
+call :fetch_sound busking mp3 "https://cdn.freesound.org/previews/628/628766_11532701-hq.mp3"
+call :fetch_sound camera mp3 "https://cdn.freesound.org/previews/271/271010_2276808-hq.mp3"
 
 rem The car pack zip — mirror of CAR_PACK in the .sh.
 set "NEED_PACK="

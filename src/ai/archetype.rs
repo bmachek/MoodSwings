@@ -52,10 +52,21 @@ pub enum Archetype {
     /// over — they glide, they get punted like everybody else, they land
     /// on their wheels.
     Wheelchair,
+    /// A guitar and an unshakeable conviction that this corner is a venue.
+    /// Given an audience, he plays, and the street's mood actually lifts —
+    /// see `ai::social::busk`.
+    Busker,
+    /// A camera where a face should be pointed. Photographs strangers at
+    /// point-blank range; most are flattered, the Shy emphatically are not.
+    Photographer,
+    /// A tray of unspecified wares and all the patter in the world. No
+    /// mechanic of his own: a fixed sunny temper and the city's highest
+    /// chattiness *are* the business model.
+    Vendor,
 }
 
 impl Archetype {
-    pub const ALL: [Archetype; 13] = [
+    pub const ALL: [Archetype; 16] = [
         Archetype::Everyday,
         Archetype::Wutbuerger,
         Archetype::Punk,
@@ -69,6 +80,9 @@ impl Archetype {
         Archetype::Skater,
         Archetype::CaneUser,
         Archetype::Wheelchair,
+        Archetype::Busker,
+        Archetype::Photographer,
+        Archetype::Vendor,
     ];
 
     /// The name the character menu shows. Player-facing, so German.
@@ -87,6 +101,9 @@ impl Archetype {
             Archetype::Skater => "Skater",
             Archetype::CaneUser => "Mit Gehstock",
             Archetype::Wheelchair => "Im Rollstuhl",
+            Archetype::Busker => "Straßenmusiker",
+            Archetype::Photographer => "Streetfotograf",
+            Archetype::Vendor => "Fliegender Händler",
         }
     }
 
@@ -98,6 +115,10 @@ impl Archetype {
             Archetype::Missionary => Some(Temperament::easygoing()),
             Archetype::Hooligan => Some(Temperament::touchy()),
             Archetype::Rocker => Some(Temperament::easygoing()),
+            // Playing music all day and selling things to strangers are both
+            // jobs you keep only if nothing much dents you.
+            Archetype::Busker => Some(Temperament::easygoing()),
+            Archetype::Vendor => Some(Temperament::easygoing()),
             _ => None,
         }
     }
@@ -115,6 +136,12 @@ impl Archetype {
             Archetype::Missionary => Some(Color::srgb(0.87, 0.49, 0.10)),
             Archetype::Hooligan => Some(Color::srgb(0.88, 0.88, 0.90)),
             Archetype::Rocker => Some(Color::srgb(0.09, 0.08, 0.08)),
+            // A corduroy sort of brown; every busker owns exactly one coat.
+            Archetype::Busker => Some(Color::srgb(0.42, 0.30, 0.18)),
+            // The many-pocketed khaki vest, worn as a uniform worldwide.
+            Archetype::Photographer => Some(Color::srgb(0.52, 0.48, 0.34)),
+            // Mustard: loud enough to be its own advertising.
+            Archetype::Vendor => Some(Color::srgb(0.78, 0.60, 0.14)),
             _ => None,
         }
     }
@@ -127,6 +154,11 @@ impl Archetype {
             Archetype::Missionary => 0.9,
             Archetype::Skater => 1.4,
             Archetype::CaneUser => 0.68,
+            // A guitar is luggage; a tray of wares is furniture.
+            Archetype::Busker => 0.85,
+            Archetype::Vendor => 0.75,
+            // Always hurrying after the next shot.
+            Archetype::Photographer => 1.15,
             _ => 1.0,
         }
     }
@@ -200,6 +232,11 @@ impl Archetype {
             Archetype::CaneUser => 1.4,
             // Recruiting is talking. Of course they stop.
             Archetype::Missionary => 1.6,
+            // Mid-set there is no small talk; the guitar does the talking.
+            Archetype::Busker => 0.5,
+            Archetype::Photographer => 0.6,
+            // Selling is talking with a tray. Outranks even the recruiters.
+            Archetype::Vendor => 1.8,
             _ => 1.0,
         }
     }
@@ -216,6 +253,10 @@ impl Archetype {
             Archetype::Beggar => Some((0.05, 9.0, false)),
             Archetype::Punk => Some((0.03, 7.0, false)),
             Archetype::CaneUser => Some((0.04, 5.0, false)),
+            // A busker between sets is a busker scouting the next pitch,
+            // and a vendor's whole trade is standing somewhere promising.
+            Archetype::Busker => Some((0.04, 8.0, false)),
+            Archetype::Vendor => Some((0.05, 10.0, false)),
             _ => None,
         }
     }
@@ -327,19 +368,25 @@ impl Default for Cast {
     fn default() -> Self {
         Self(vec![
             (Archetype::Everyday, 0.41),
-            (Archetype::Wutbuerger, 0.07),
-            (Archetype::Punk, 0.07),
+            (Archetype::Wutbuerger, 0.06),
+            (Archetype::Punk, 0.06),
             // One in fifty. An Elvis is a sighting, not a demographic.
             (Archetype::Elvis, 0.02),
-            (Archetype::Headphones, 0.08),
-            (Archetype::Beggar, 0.05),
-            (Archetype::Shy, 0.10),
+            (Archetype::Headphones, 0.07),
+            (Archetype::Beggar, 0.04),
+            (Archetype::Shy, 0.09),
             (Archetype::Missionary, 0.04),
             (Archetype::Hooligan, 0.03),
             (Archetype::Rocker, 0.02),
-            (Archetype::Skater, 0.05),
+            (Archetype::Skater, 0.04),
             (Archetype::CaneUser, 0.04),
             (Archetype::Wheelchair, 0.02),
+            // The street performers, paid for with a sliver off everybody
+            // else's share rather than off the Everyday crowd — a city needs
+            // its plain majority more than it needs a fourth punk per block.
+            (Archetype::Busker, 0.02),
+            (Archetype::Photographer, 0.02),
+            (Archetype::Vendor, 0.02),
         ])
     }
 }

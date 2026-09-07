@@ -215,6 +215,12 @@ pub struct FigureAssets {
     castor: Handle<Mesh>,
     seat: Handle<Mesh>,
     seat_back: Handle<Mesh>,
+    guitar_body: Handle<Mesh>,
+    guitar_neck: Handle<Mesh>,
+    camera_body: Handle<Mesh>,
+    camera_lens: Handle<Mesh>,
+    tray: Handle<Mesh>,
+    ware: Handle<Mesh>,
 }
 
 /// Proportions, in metres, measured from the middle of the collider capsule.
@@ -472,6 +478,14 @@ pub fn build_assets(
             body::BACK_HEIGHT,
             0.05,
         )),
+        // The performers' tools. Boxes and cylinders, like everything the
+        // cast owns: at pedestrian distance a silhouette does all the work.
+        guitar_body: meshes.add(Cuboid::new(0.26, 0.34, 0.09)),
+        guitar_neck: meshes.add(Cuboid::new(0.05, 0.38, 0.04)),
+        camera_body: meshes.add(Cuboid::new(0.17, 0.11, 0.09)),
+        camera_lens: meshes.add(Cylinder::new(0.035, 0.07)),
+        tray: meshes.add(Cuboid::new(0.48, 0.05, 0.30)),
+        ware: meshes.add(Cuboid::new(0.09, 0.07, 0.09)),
     }
 }
 
@@ -619,6 +633,71 @@ pub fn dress(
                     MeshMaterial3d(assets.wood.clone()),
                     Transform::from_translation(at),
                 ));
+            }
+            Archetype::Busker => {
+                // The guitar, slung across the chest with the neck rising
+                // past the left shoulder. The figure faces -Z, the way the
+                // castors say, so the instrument hangs on the minus side.
+                let strings = Vec3::new(0.03, body::TORSO_CENTRE - 0.06, -0.19);
+                parent.spawn((
+                    Rest::at(strings),
+                    Mesh3d(assets.guitar_body.clone()),
+                    MeshMaterial3d(assets.wood.clone()),
+                    Transform::from_translation(strings)
+                        .with_rotation(Quat::from_rotation_z(-0.35)),
+                ));
+                let neck = Vec3::new(-0.17, body::TORSO_CENTRE + 0.16, -0.19);
+                parent.spawn((
+                    Rest::at(neck),
+                    Mesh3d(assets.guitar_neck.clone()),
+                    MeshMaterial3d(assets.leather.clone()),
+                    Transform::from_translation(neck).with_rotation(Quat::from_rotation_z(-0.55)),
+                ));
+            }
+            Archetype::Photographer => {
+                // The camera lives at the face, permanently raised: the
+                // figure *is* mid-shot, whatever else it is doing.
+                let camera = Vec3::new(0.0, body::HEAD_CENTRE - 0.04, -(body::HEAD_RADIUS + 0.10));
+                parent.spawn((
+                    Rest::at(camera),
+                    Mesh3d(assets.camera_body.clone()),
+                    MeshMaterial3d(assets.plastic.clone()),
+                    Transform::from_translation(camera),
+                ));
+                // A cylinder stands on Y; a lens looks where the figure does.
+                let lens = Vec3::new(0.0, body::HEAD_CENTRE - 0.04, -(body::HEAD_RADIUS + 0.17));
+                parent.spawn((
+                    Rest::at(lens),
+                    Mesh3d(assets.camera_lens.clone()),
+                    MeshMaterial3d(assets.leather.clone()),
+                    Transform::from_translation(lens)
+                        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                ));
+            }
+            Archetype::Vendor => {
+                // The tray, carried in front like the beggar's cup grown a
+                // business plan, with three unspecified wares on it in
+                // whatever colours the wardrobe was already holding.
+                let tray = Vec3::new(0.0, body::TORSO_CENTRE - 0.20, -0.26);
+                parent.spawn((
+                    Rest::at(tray),
+                    Mesh3d(assets.tray.clone()),
+                    MeshMaterial3d(assets.wood.clone()),
+                    Transform::from_translation(tray),
+                ));
+                for (slot, material) in [
+                    (-0.14, assets.paper.clone()),
+                    (0.0, crest.clone()),
+                    (0.14, assets.plastic.clone()),
+                ] {
+                    let ware = Vec3::new(slot, body::TORSO_CENTRE - 0.14, -0.26);
+                    parent.spawn((
+                        Rest::at(ware),
+                        Mesh3d(assets.ware.clone()),
+                        MeshMaterial3d(material),
+                        Transform::from_translation(ware),
+                    ));
+                }
             }
             Archetype::Wheelchair => {
                 // A cylinder stands on Y, so every wheel here is laid onto an

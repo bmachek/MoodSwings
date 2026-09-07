@@ -86,6 +86,14 @@ pub struct SoundBank {
     pub court: Handle<SynthSound>,
     /// The factory-floor drone that hangs over an industrial block.
     pub industry: Handle<SynthSound>,
+
+    // --- performers ---
+    /// A strummed acoustic loop: what a busker plays when the street grants
+    /// him an audience. A loop rather than a shot because a pitch lasts as
+    /// long as the crowd does.
+    pub busking: Handle<SynthSound>,
+    /// One camera shutter, for the street photographer's decisive moment.
+    pub camera: Handle<SynthSound>,
 }
 
 /// How many takes of each spoken sound the bank holds.
@@ -169,6 +177,8 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("ambience", 0.55, Shape::Loop),
     ("birdsong", 0.5, Shape::Loop),
     ("uproar", 0.6, Shape::Loop),
+    ("busking", 0.5, Shape::Loop),
+    ("camera", 0.6, Shape::Shot),
 ];
 
 /// Loads one register entry, or the silence that stands in for it.
@@ -229,6 +239,8 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         meow: add("meow"),
         court: add("court"),
         industry: add("industry"),
+        busking: add("busking"),
+        camera: add("camera"),
     }
 }
 
