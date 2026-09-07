@@ -47,6 +47,27 @@ pub fn ground_axes(transform: &Transform) -> (Vec2, Vec2) {
     )
 }
 
+/// A push away from every neighbour inside `radius`, in the XZ plane.
+///
+/// Inverse-linear falloff: a neighbour at the edge of the radius contributes
+/// nothing, one nose-to-nose contributes a full unit of push, and several
+/// neighbours sum — a citizen in a knot is pushed harder than one meeting a
+/// stranger. Clamped to unit length so the sum can bend a path but never
+/// catapult anybody, and a coincident neighbour contributes nothing rather
+/// than a NaN: the solver owns actual depenetration, this only owns intent.
+pub fn separation(me: Vec2, neighbours: &[Vec2], radius: f32) -> Vec2 {
+    let mut push = Vec2::ZERO;
+    for other in neighbours {
+        let away = me - *other;
+        let distance = away.length();
+        if distance >= radius || distance <= 1e-4 {
+            continue;
+        }
+        push += away / distance * (1.0 - distance / radius);
+    }
+    push.clamp_length_max(1.0)
+}
+
 /// Steering input in -1..1 that turns towards `to_target`.
 ///
 /// Positive is right, matching `VehicleInput::steer`.
@@ -145,6 +166,49 @@ mod tests {
         let right = Vec2::new(1.0, 0.0);
         assert_eq!(steer_towards(forward, right, Vec2::new(1.0, 10.0)), 1.0);
         assert_eq!(steer_towards(forward, right, Vec2::new(-1.0, 10.0)), -1.0);
+    }
+
+    #[test]
+    fn separation_pushes_away_from_a_near_neighbour() {
+        let push = separation(Vec2::ZERO, &[Vec2::new(0.3, 0.0)], 1.0);
+        assert!(push.x < 0.0, "should push away from +X, got {push:?}");
+        assert!(push.y.abs() < 1e-5);
+    }
+
+    #[test]
+    fn separation_is_zero_when_alone_or_at_arms_length() {
+        assert_eq!(separation(Vec2::ZERO, &[], 1.0), Vec2::ZERO);
+        let at_radius = separation(Vec2::ZERO, &[Vec2::new(1.0, 0.0)], 1.0);
+        assert_eq!(at_radius, Vec2::ZERO, "the edge of the radius is peace");
+    }
+
+    #[test]
+    fn a_knot_pushes_harder_than_a_stranger_but_never_catapults() {
+        let one = separation(Vec2::ZERO, &[Vec2::new(0.5, 0.0)], 1.0).length();
+        let two = separation(
+            Vec2::ZERO,
+            &[Vec2::new(0.5, 0.1), Vec2::new(0.5, -0.1)],
+            1.0,
+        )
+        .length();
+        assert!(two > one, "two neighbours should push harder than one");
+        let crush = separation(
+            Vec2::ZERO,
+            &[
+                Vec2::new(0.1, 0.0),
+                Vec2::new(0.1, 0.05),
+                Vec2::new(0.1, -0.05),
+            ],
+            1.0,
+        );
+        assert!(crush.length() <= 1.0 + 1e-5, "the push is capped at a unit");
+    }
+
+    #[test]
+    fn standing_inside_somebody_is_the_solvers_problem() {
+        // Two flummis at the same spot: depenetration belongs to physics, and
+        // a direction invented from noise would fling them somewhere random.
+        assert_eq!(separation(Vec2::ZERO, &[Vec2::ZERO], 1.0), Vec2::ZERO);
     }
 
     #[test]

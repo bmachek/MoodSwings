@@ -308,6 +308,7 @@ fn drift_towards_company(
 fn settle_scores(
     mut commands: Commands,
     knocked: Query<(), With<KnockedDown>>,
+    steadfast: Query<(), With<crate::bounce::launch::NeverTumbles>>,
     positions: Query<&Transform>,
     mut bodies: ParamSet<(
         Query<(Entity, &Transform, &LinearVelocity, &Grudge), Without<Launched>>,
@@ -345,7 +346,13 @@ fn settle_scores(
         let Ok(mut velocity) = velocities.get_mut(victim) else {
             continue;
         };
-        launch(&mut commands, victim, &mut velocity, throw);
+        launch(
+            &mut commands,
+            victim,
+            &mut velocity,
+            throw,
+            !steadfast.contains(victim),
+        );
         // Satisfied. Without this the pursuer stays glued to whoever it just
         // launched and rams them again the moment they land.
         commands.entity(rammer).remove::<Grudge>();
@@ -396,7 +403,7 @@ mod tests {
         let ram = crate::core::config::GameConfig::default().mood.grudge_speed;
         assert!(ram > BUMP_SPEED, "a ram is no faster than a friendly bump");
         assert!(
-            ram < crate::ai::pedestrian::FLEE_SPEED + 1.0,
+            ram < crate::core::config::GameConfig::default().crowd.flee_speed + 1.0,
             "being chased has to be survivable on foot"
         );
     }

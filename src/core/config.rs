@@ -18,6 +18,11 @@ pub struct GameConfig {
     pub bounce: BounceConfig,
     /// How quick this city's temper is.
     pub mood: MoodConfig,
+    /// How many people are on the pavements and how they move around each
+    /// other. `#[serde(default)]` so an options file from before the crowd had
+    /// dials still parses instead of resetting everything else in it.
+    #[serde(default)]
+    pub crowd: CrowdConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
@@ -258,6 +263,49 @@ pub struct MoodConfig {
     pub grudge_speed: f32,
 }
 
+/// The crowd on the pavements.
+///
+/// These lived as private constants in `ai::pedestrian` until the crowd grew
+/// dials worth turning. Only the feel numbers moved here: the capsule sizes
+/// and the pavement offset are geometry, and a slider on geometry is a way to
+/// clip a crowd through a wall from a panel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrowdConfig {
+    /// How many pedestrians are kept walking around the player.
+    pub population: usize,
+    /// New arrivals appear on road edges between these distances, in metres:
+    /// far enough not to pop in on camera, near enough to arrive on screen
+    /// within a stroll.
+    pub spawn_min: f32,
+    pub spawn_max: f32,
+    /// And past this they are quietly recycled.
+    pub despawn: f32,
+    /// Metres per second of an unhurried citizen. Individuals vary around it
+    /// at spawn, and mood scales it live — see `ai::pedestrian::stride`.
+    pub walk_speed: f32,
+    /// Flat out, ahead of a car. Panic overrides temperament.
+    pub flee_speed: f32,
+    /// A vehicle closer than this and faster than `scare_speed` is worth
+    /// running from.
+    pub scare_radius: f32,
+    pub scare_speed: f32,
+    /// Personal space, in metres. Inside it a citizen leans its intent away
+    /// from the neighbours so the crowd flows instead of stacking. Kept small
+    /// on purpose: contact must stay possible, because a small knock is a
+    /// friendly bop and the bop is load-bearing comedy — see
+    /// `mood::feeling::jolt`.
+    pub separation_radius: f32,
+    /// How hard the lean is, in m/s at a full push. Against a walk of
+    /// 1.5 m/s this bends paths without ever pinning anybody in place.
+    pub separation_push: f32,
+}
+
+impl Default for CrowdConfig {
+    fn default() -> Self {
+        GameConfig::default().crowd
+    }
+}
+
 /// The mixer. Three numbers rather than one, because the background bed and
 /// the things that happen in front of it want independent control.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,6 +374,18 @@ impl Default for GameConfig {
                 crash_spin: 0.35,
                 player_hop_scale: 0.6,
                 npc_spring_max: 1.5,
+            },
+            crowd: CrowdConfig {
+                population: 45,
+                spawn_min: 25.0,
+                spawn_max: 110.0,
+                despawn: 165.0,
+                walk_speed: 1.5,
+                flee_speed: 5.4,
+                scare_radius: 14.0,
+                scare_speed: 6.0,
+                separation_radius: 0.9,
+                separation_push: 1.2,
             },
             mood: MoodConfig {
                 contagion_radius: 9.0,
@@ -407,6 +467,24 @@ mod tests {
         let parsed: GameConfig = ron::from_str(&text).expect("old options should parse");
         assert_eq!(parsed.audio.master, 0.42);
         assert_eq!(parsed.window.resolution, Resolution::default());
+    }
+
+    #[test]
+    fn an_options_file_without_a_crowd_section_still_parses() {
+        // What `saves/options.ron` looked like before the crowd had dials:
+        // the whole config, minus the `crowd` section.
+        let mut old = GameConfig::default();
+        old.audio.master = 0.42;
+        let mut text = ron::ser::to_string(&old).unwrap();
+        let start = text.find("crowd:(").unwrap();
+        let end = start + text[start..].find(')').unwrap() + 2;
+        text.replace_range(start..end, "");
+        let parsed: GameConfig = ron::from_str(&text).expect("old options should parse");
+        assert_eq!(parsed.audio.master, 0.42);
+        assert_eq!(
+            parsed.crowd.population,
+            GameConfig::default().crowd.population
+        );
     }
 
     #[test]
