@@ -31,6 +31,7 @@ exits:
 cargo run -- --screenshot shots/street.png --at-node 300 --eye 1.7 --hour 21.5
 cargo run -- --screenshot shots/city.png --at 0,620,900 --look 0,20,-200 --stream-radius 1800
 cargo run -- --screenshot shots/cast.png --lineup --hour 12
+cargo run -- --screenshot shots/minga.png --city minga --at-node 300 --hour 12
 tools/shoot.sh                 # the whole battery of framings into shots/
 tools/shoot.sh --only street,night --out shots/after
 ```
@@ -43,8 +44,14 @@ goes wrong and the ones a street framing cannot be relied on to contain, so
 `tools/shoot.sh` exists so a rendering change is judged against the last render
 rather than against a memory of it: shoot the same framings before and after.
 Pin `--hour` on any shot being compared — the clock and the weather run together,
-so an unpinned shot drifts its own sky between runs. `--fps-log` reports median,
-p95 and worst frame time. Full flag table is in README.md.
+so an unpinned shot drifts its own sky between runs. `--city` builds a given
+`CityStyle` instead of the persisted one, which is the only way to shoot a
+postcard the player has not selected. `--fps-log` reports median, p95 and worst
+frame time. Full flag table is in README.md.
+
+The seed a capture builds is the *persisted* one from the player's options file,
+not the code default — so a position probed in a citygen unit test is a position
+in a different city. Probe with a temporary `info!` in the spawn path instead.
 
 Capture mode is not just a camera: `core::capture::is_capture_mode()` gates the
 dev panel off (`ui`) and mutes audio, and several systems check it. Anything that
@@ -72,7 +79,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), lot furnishing (`lots`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), churches & cathedrals (`church`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning |
@@ -132,6 +139,15 @@ keeps it resident — traffic and the minimap query parts of the city the player
 cannot see. Only meshes and colliders stream, per 250 m chunk, in
 `world::streaming`. Anything spawned by streaming must keep its `ChunkOf`, or it
 leaks.
+
+`CityStyle` (`core::config`) is the second input to that layout, next to the
+seed: a postcard, not a map. It is a handful of dials — height scale, palette
+override, how many churches and whether one of them is a cathedral, how wide
+the market band runs, how much the walls advertise — so a style is a *tuning*
+of the same generator, and a new one costs a match arm rather than a data file.
+Anything a style decides belongs on `CityStyle`, not as a `match` at the use
+site; the layout must stay a pure function of `(seed, style)` or the chunks
+stop respawning the same city.
 
 ### The traps
 

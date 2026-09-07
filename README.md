@@ -215,6 +215,7 @@ afforded.
 | `--quality Q` | Renderer tier: `low`, `medium`, `high`, `ultra`, `photo` |
 | `--mood F` | Hold every face in the city at this mood, −1 to 1 |
 | `--fps-log` | Log median, p95 and worst frame time alongside the shot |
+| `--city S` | Build this `CityStyle` instead of the persisted one (`landshuepf`, `newdork`, …) |
 
 ## Licence
 
@@ -667,6 +668,33 @@ Street furniture roughly doubled at the same time: parking meters, benches,
 newspaper boxes, planters, phone boxes. Junctions with three or more arms, at
 least one of them arterial, get a signal on each approach.
 
+## Landmarks
+
+The city stopped being anonymous in stages. The signs learned German first —
+the shared 5×7 font grew umlauts and punctuation, and with them jokes: the
+chains compete (HÜPF & GUT against FRISCHE-ECK, HOTEL BOING against PENSION
+SORGENFREI), every civic building carries a deadpan subline in its own
+institutional register, and the anonymous blocks rent their gables out to a
+rotation of eight parody posters. Parks keep monuments — the unknown flummi
+(launchable, with enough speed; being launched is this city's honour), the
+memorial to the inventor of the bollard (unbreakable, keeping the family
+promise), and an empty plinth in progress since 1874 — each with a painted
+bronze plaque.
+
+Then came the skyline: churches with naves, towers and four-sided spires;
+a museum, schools, market lots with scatterable crates; one stadium whose
+seated crowd does die Welle forever over an eternal nil-nil; and a canal —
+one street of the grid surrendered to trampoline-elastic water, its kerbs
+reading as quays and its crossings as bridges. Two cultural quarters lie
+over the middle ring as wedges: Klein-Neapel in terracotta with a mandolin
+on the air, the Fernost-Viertel in lacquer and jade with a guzheng, each
+forcing its own restaurant chain, which is how real quarters advertise.
+
+And the whole thing answers to a `CityStyle`: the same seed builds
+Irgendstadt, Landshüpf (low pastels under the world's tallest brick tower),
+New Dork (1.8× heights, twice the advertising), Londoof, Minga (extra
+markets) or Paree — chosen in the settings, applied at the next launch.
+
 ## Deferred
 
 The opaque pass writes a g-buffer rather than shading in place, at every quality
@@ -965,6 +993,28 @@ through playback speed, and everything but the player's own car is positioned
 in the world.
 
 ## Known limitations
+
+- A `CityStyle` is a postcard, not a map. Landshüpf gets the real
+  Landshut's heights, pastels, spire count and one absurdly tall St. Martin,
+  but the street plan underneath is still the same perturbed grid — the
+  whole world is axis-aligned rectangles from the kerbs up, and a layout
+  that follows the real Altstadt needs curved blocks the pipeline cannot
+  hold yet. Map-faithful cities are their own future milestone.
+
+- The canal is one straight street of water. It reads as a river because the
+  kerbs read as quays and every crossing reads as a bridge, but it neither
+  bends nor branches, and the city has exactly one. Water anywhere else —
+  a second river, a lake in a park — is plumbing that does not exist yet.
+
+- The stadium's crowd is furniture. The spectators have no moods, no AI and
+  no legs; they are seats with faces that do the wave off a clock. Nobody
+  walks in through a turnstile, and the fixture on the scoreboard will never
+  progress past nil-nil, which is at least thematically consistent.
+
+- The cultural quarters recolour; they do not rebuild. Klein-Neapel and the
+  Fernost-Viertel wear their own palettes, force their own restaurants and
+  hum their own music, but the buildings under the paint are the same six
+  wall sets the rest of the city wears.
 
 - The sky itself has no clouds in it. Bevy's atmosphere is a scattering model, so
   cover is expressed entirely through the light — dimmer, flatter, cooler,
