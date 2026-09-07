@@ -11,8 +11,10 @@
 //! know how lucky they are. The dog propels itself — the joint is not a tow
 //! rope — but when a car launches the owner across the junction, the leash
 //! is what takes the dog along, and that is the joint earning its keep. The
-//! leash itself is not drawn yet; a taut invisible bond reads surprisingly
-//! well, and a slack rope needs segments this milestone does not.
+//! drawn leash is one straight rod restretched between hand and collar every
+//! frame — no slack, no segments. A leash under comedy tension is always
+//! taut anyway, and the eye forgives a straight line long before it forgives
+//! a dog towed by nothing.
 //!
 //! The cat answers to nobody. It carries no `Mood` — not a suppressed mood,
 //! *no* mood, so every contagion, provocation and grudge system skips it by
@@ -56,6 +58,9 @@ const _: () = assert!(LEASH > HEEL + 0.5);
 #[derive(Component)]
 pub struct Dog {
     pub owner: Entity,
+    /// This dog's voice. One recorded bark, many dogs — the pitch is the
+    /// identity, the same trick the crowd's voiceboxes play.
+    pub pitch: f32,
 }
 
 #[derive(Component)]
@@ -64,6 +69,15 @@ pub struct Cat {
     target: Vec2,
     /// Seconds until it changes its mind.
     whim: f32,
+    /// The voice it almost never uses.
+    pub pitch: f32,
+}
+
+/// The visible leash: a thin rod restretched between owner and dog every
+/// frame. Purely cosmetic — the physics is the [`DistanceJoint`]'s job.
+#[derive(Component)]
+pub struct LeashRope {
+    dog: Entity,
 }
 
 #[derive(Resource)]
@@ -88,6 +102,9 @@ struct AnimalKit {
     cat_body: Handle<Mesh>,
     cat_head: Handle<Mesh>,
     cat_leg: Handle<Mesh>,
+    /// A unit-height rod, scaled to whatever span the leash covers.
+    rope: Handle<Mesh>,
+    leather: Handle<StandardMaterial>,
     dog_coats: Vec<Handle<StandardMaterial>>,
     cat_coats: Vec<Handle<StandardMaterial>>,
 }
@@ -106,7 +123,7 @@ impl Plugin for AnimalPlugin {
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
-                (maintain_animals, heel_and_prowl)
+                (maintain_animals, heel_and_prowl, draw_leashes)
                     .chain()
                     .in_set(GameSet::Ai)
                     .after(super::pedestrian::Walking),
@@ -141,6 +158,12 @@ fn setup(
         cat_leg: meshes.add(Capsule3d {
             radius: 0.025,
             half_length: 0.045,
+        }),
+        rope: meshes.add(Cylinder::new(0.014, 1.0)),
+        leather: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.42, 0.16, 0.12),
+            perceptual_roughness: 0.8,
+            ..default()
         }),
         dog_coats: [
             Color::srgb(0.45, 0.32, 0.18),
@@ -284,7 +307,10 @@ fn maintain_animals(
                 * 1.2;
             let mut dog = commands.spawn((
                 Name::new("Dog"),
-                Dog { owner },
+                Dog {
+                    owner,
+                    pitch: rng.0.random_range(0.75..1.35),
+                },
                 Transform::from_xyz(at.x + side.x, DOG_STAND + 0.3, at.y + side.y),
                 RigidBody::Dynamic,
                 Collider::sphere(DOG_STAND),
@@ -315,6 +341,14 @@ fn maintain_animals(
                     .with_limits(0.0, LEASH)
                     .with_compliance(0.001),
             );
+            // And the rod the eye sees, kept honest by `draw_leashes`.
+            commands.spawn((
+                Name::new("Leash"),
+                LeashRope { dog },
+                Mesh3d(kit.rope.clone()),
+                MeshMaterial3d(kit.leather.clone()),
+                Transform::from_scale(Vec3::ZERO),
+            ));
         }
     }
 
@@ -329,6 +363,7 @@ fn maintain_animals(
             Cat {
                 target: at,
                 whim: 0.0,
+                pitch: rng.0.random_range(0.9..1.25),
             },
             Transform::from_xyz(at.x, CAT_STAND + 0.3, at.y),
             RigidBody::Dynamic,
@@ -403,6 +438,46 @@ fn heel_and_prowl(
         // Cats do not bounce. Cats have never bounced.
         bouncer.hop_scale = 0.3;
         cycle.speed = desired.length();
+    }
+}
+
+/// Keeps every drawn leash spanning from its owner's hand to its dog's
+/// collar: the rod is a unit cylinder, so midpoint, point the axis down the
+/// span, scale Y to the length. Runs a frame behind the physics at worst,
+/// which on a 2.4 m strap is invisible. If either end is gone the rope goes
+/// too — `maintain_animals` buries the dog, this buries the leash.
+fn draw_leashes(
+    mut commands: Commands,
+    dogs: Query<(&Dog, &Transform), Without<LeashRope>>,
+    owners: Query<&Transform, (With<Pedestrian>, Without<LeashRope>, Without<Dog>)>,
+    mut ropes: Query<(Entity, &LeashRope, &mut Transform), (Without<Dog>, Without<Pedestrian>)>,
+) {
+    for (entity, rope, mut transform) in &mut ropes {
+        let ends = dogs.get(rope.dog).ok().and_then(|(dog, at)| {
+            owners.get(dog.owner).ok().map(|owner| {
+                (
+                    // The hand rides below the capsule's centre; the collar
+                    // sits just over the dog's back.
+                    owner.translation + Vec3::new(0.0, -0.25, 0.0),
+                    at.translation + Vec3::new(0.0, 0.06, 0.0),
+                )
+            })
+        });
+        let Some((hand, collar)) = ends else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let reach = collar - hand;
+        let length = reach.length();
+        if length < 0.05 {
+            transform.scale = Vec3::ZERO;
+            continue;
+        }
+        *transform = Transform {
+            translation: hand.midpoint(collar),
+            rotation: Quat::from_rotation_arc(Vec3::Y, reach / length),
+            scale: Vec3::new(1.0, length, 1.0),
+        };
     }
 }
 

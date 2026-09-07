@@ -21,10 +21,11 @@ use rand::RngExt;
 use super::bank::SoundBank;
 use super::synth::SynthSound;
 use super::{AudioRng, close_once, effect_gain, spatial_once};
+use crate::ai::animal::{Cat, Dog};
 use crate::bounce::launch::KnockedDown;
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
-use crate::mood::feeling::CityMood;
+use crate::mood::feeling::{CityMood, Mood};
 use crate::player::interact::{DrivenBy, Driving};
 use crate::player::on_foot::Player;
 use crate::vehicle::controller::{VehicleInput, VehicleState};
@@ -69,6 +70,8 @@ pub mod gain {
     pub const CHATTER: f32 = 0.5;
     pub const FORECOURT: f32 = 0.45;
     pub const PARK_BIRDS: f32 = 0.45;
+    pub const BARK: f32 = 0.55;
+    pub const MEOW: f32 = 0.5;
 }
 
 /// How much of a vehicle's voice survives its distance from the player.
@@ -174,6 +177,43 @@ fn tend_emitters(
     }
 }
 
+/// The animals speak. A dog barks about how it feels — the further its mood
+/// is from level, the more it has to say, delighted or furious alike. A cat
+/// almost never says anything, which is the correct amount; when it does,
+/// the meow is addressed to nobody and means nothing.
+fn play_animal_voices(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut rng: ResMut<AudioRng>,
+    dogs: Query<(&Dog, &Transform, &Mood)>,
+    cats: Query<(&Cat, &Transform)>,
+) {
+    let dt = time.delta_secs();
+    for (dog, here, mood) in &dogs {
+        let eagerness = 0.03 + 0.22 * mood.value.abs();
+        if rng.random::<f32>() < eagerness * dt {
+            at(
+                &mut commands,
+                bank.bark.clone(),
+                here.translation,
+                spatial_once(effect_gain(&config, gain::BARK), 24.0).with_speed(dog.pitch),
+            );
+        }
+    }
+    for (cat, here) in &cats {
+        if rng.random::<f32>() < 0.008 * dt {
+            at(
+                &mut commands,
+                bank.meow.clone(),
+                here.translation,
+                spatial_once(effect_gain(&config, gain::MEOW), 14.0).with_speed(cat.pitch),
+            );
+        }
+    }
+}
+
 pub struct SfxPlugin;
 
 impl Plugin for SfxPlugin {
@@ -194,10 +234,11 @@ impl Plugin for SfxPlugin {
                     update_vehicle_voices,
                     update_ambience,
                     tend_emitters,
+                    play_animal_voices,
                 )
                     .in_set(GameSet::Simulation),
             )
-                // The bank is synthesised in `Startup`; nothing here can run
+                // The bank is loaded in `Startup`; nothing here can run
                 // before it lands.
                 .run_if(resource_exists::<SoundBank>),
         );

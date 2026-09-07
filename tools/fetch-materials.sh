@@ -143,6 +143,10 @@ SOUNDS=(
     # Zone ambience: mycompasstv's restaurant chatter, hung on restaurant
     # frontages by the streaming emitters.
     "chatter|https://cdn.freesound.org/previews/474/474740_3902754-hq.mp3"
+    # The animals: kwahmah_02's single dog bark and skymary's short cat
+    # meow, one take each, pitched per animal like the crowd's voices.
+    "bark|https://cdn.freesound.org/previews/277/277058_4486188-hq.mp3"
+    "meow|https://cdn.freesound.org/previews/412/412017_3652520-hq.mp3"
 )
 # These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
 CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"

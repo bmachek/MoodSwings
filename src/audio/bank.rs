@@ -73,6 +73,10 @@ pub struct SoundBank {
     // city. `world::streaming` hangs these on emitter entities per block.
     pub chatter: Handle<SynthSound>,
     pub forecourt: Handle<SynthSound>,
+    /// The animals. One take each — the per-animal pitch does the rest,
+    /// exactly the way the crowd's voices work.
+    pub bark: Handle<SynthSound>,
+    pub meow: Handle<SynthSound>,
 }
 
 /// How many takes of each spoken sound the bank holds.
@@ -124,6 +128,8 @@ pub const REGISTER: &[(&str, f32, Shape)] = &[
     ("murmur-0", 0.5, Shape::Shot),
     ("murmur-1", 0.5, Shape::Shot),
     ("murmur-2", 0.5, Shape::Shot),
+    ("bark", 0.7, Shape::Shot),
+    ("meow", 0.55, Shape::Shot),
     ("chatter", 0.5, Shape::Loop),
     ("forecourt", 0.45, Shape::Loop),
     ("spray", 0.6, Shape::Loop),
@@ -186,6 +192,8 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         murmur: std::array::from_fn(|take| add(&format!("murmur-{take}"))),
         chatter: add("chatter"),
         forecourt: add("forecourt"),
+        bark: add("bark"),
+        meow: add("meow"),
     }
 }
 
