@@ -25,6 +25,7 @@ mod ai;
 mod audio;
 mod bounce;
 mod core;
+mod events;
 mod mood;
 mod player;
 mod render;
@@ -79,6 +80,7 @@ fn main() {
         .add_plugins((
             crate::core::CorePlugin,
             crate::ai::AiPlugin,
+            crate::events::EventsPlugin,
             crate::audio::AudioPlugin,
             crate::bounce::BouncePlugin,
             crate::mood::MoodPlugin,

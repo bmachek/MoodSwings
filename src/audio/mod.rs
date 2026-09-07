@@ -1,16 +1,15 @@
 //! Audio.
 //!
-//! Every sound in the game is synthesised into a buffer at startup — `synth`
-//! is how, `bank` is what — and this module is the wiring: it registers the
-//! synthetic asset with Bevy's audio backend, puts the listener on the camera,
-//! and decides how big the world sounds.
+//! Every sound in the game is a recording loaded into a buffer at startup —
+//! `files` is how, `bank` is what — and this module is the wiring: it
+//! registers the in-memory asset with Bevy's audio backend, puts the listener
+//! on the camera, and decides how big the world sounds.
 
 pub mod audition;
 pub mod bank;
 pub mod files;
 pub mod sfx;
 pub mod synth;
-pub mod voice;
 
 use bevy::audio::{AddAudioSource, DefaultSpatialScale, GlobalVolume, SpatialScale, Volume};
 use bevy::prelude::*;
@@ -62,7 +61,7 @@ fn build_bank(mut commands: Commands, mut sounds: ResMut<Assets<synth::SynthSoun
     commands.insert_resource(bank);
     commands.insert_resource(AudioRng(stream_for(0, stream::AUDIO)));
     info!(
-        "sound bank synthesised in {:.1}ms",
+        "sound bank loaded in {:.1}ms",
         started.elapsed().as_secs_f32() * 1000.0
     );
 }

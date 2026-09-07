@@ -119,7 +119,30 @@ impl Default for PedestrianTimer {
 #[derive(Resource)]
 struct PedestrianAssets {
     clothes: Vec<Handle<StandardMaterial>>,
+    /// Archetype-fixed coats. Small: most of the cast dresses off the street
+    /// palette above.
+    coats: Vec<(super::archetype::Archetype, Handle<StandardMaterial>)>,
 }
+
+impl PedestrianAssets {
+    fn coat_for(&self, archetype: super::archetype::Archetype) -> Option<Handle<StandardMaterial>> {
+        self.coats
+            .iter()
+            .find(|(a, _)| *a == archetype)
+            .map(|(_, handle)| handle.clone())
+    }
+}
+
+/// A gang member walks where the gang walks.
+///
+/// Groups spawn down one pavement, but every citizen re-rolls its route at
+/// each junction, and five hooligans who each pick their own next street are
+/// five pedestrians, not a gang. So a group has a leader — the first member
+/// spawned — and the rest copy the leader's route whenever it changes. A
+/// leader who despawns (streamed out, mostly) orphans the others into
+/// ordinary citizens, which reads as the gang calling it a night.
+#[derive(Component)]
+pub struct Follows(pub Entity);
 
 /// Everything that decides where the crowd is walking.
 ///
@@ -135,11 +158,14 @@ pub struct PedestrianPlugin;
 impl Plugin for PedestrianPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PedestrianTimer>()
+            .init_resource::<super::archetype::Cast>()
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
                 (
                     maintain_population,
+                    // Routes copy before anybody steers along them.
+                    flock,
                     walk_pavements,
                     // After the intent, before anything reads it: the lean
                     // away from the neighbours is part of walking, not an
@@ -168,6 +194,10 @@ fn setup(
         config.world_seed,
         stream::PEDESTRIANS,
     )));
+    commands.insert_resource(super::archetype::CrowdRng(stream_for(
+        config.world_seed,
+        stream::CROWD,
+    )));
 
     let palette = [
         Color::srgb(0.24, 0.30, 0.42),
@@ -177,16 +207,26 @@ fn setup(
         Color::srgb(0.20, 0.22, 0.26),
         Color::srgb(0.42, 0.38, 0.52),
     ];
+    let cloth = |materials: &mut Assets<StandardMaterial>, color: Color| {
+        materials.add(StandardMaterial {
+            base_color: color,
+            perceptual_roughness: 0.85,
+            ..default()
+        })
+    };
     commands.insert_resource(super::figure::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(PedestrianAssets {
         clothes: palette
             .into_iter()
-            .map(|color| {
-                materials.add(StandardMaterial {
-                    base_color: color,
-                    perceptual_roughness: 0.85,
-                    ..default()
-                })
+            .map(|color| cloth(&mut materials, color))
+            .collect(),
+        // The fixed wardrobes, one material per archetype that has one.
+        coats: super::archetype::Archetype::ALL
+            .into_iter()
+            .filter_map(|archetype| {
+                archetype
+                    .coat()
+                    .map(|color| (archetype, cloth(&mut materials, color)))
             })
             .collect(),
     });
@@ -212,6 +252,8 @@ fn maintain_population(
     mut rng: ResMut<PedestrianRng>,
     mut tempers: ResMut<MoodRng>,
     mix: Res<Tempers>,
+    mut crowd_rng: ResMut<super::archetype::CrowdRng>,
+    cast: Res<super::archetype::Cast>,
     players: Query<&Transform, With<Player>>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
 ) {
@@ -265,49 +307,99 @@ fn maintain_population(
             -1.0
         };
         let t: f32 = rng.0.random_range(0.1..0.9);
-        let position = pavement_point(a, b, edge.width, side, t);
-        let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
 
-        // Drawn from its own stream: a citizen's disposition must not depend on
-        // how many of them have been spawned already, and retuning the mix must
-        // not move anybody's route.
-        let temper = mix.draw(&mut tempers.0);
-        let mood = temper.baseline;
-        let worn = faces.wear(mood);
-        // Their own voice, for as long as they are resident. The same stream as
-        // the temperament: how somebody sounds is part of who they are, and
-        // both are drawn once and never again.
-        let pitch = tempers.0.random_range(0.82..1.28);
+        // Who they are, from the crowd's own stream — see `ai::archetype` for
+        // why it is neither of the two streams drawn from below. A group
+        // shares one draw and arrives in single file down the same pavement.
+        let archetype = cast.draw(&mut crowd_rng.0);
+        let mut leader: Option<Entity> = None;
+        for member in 0..archetype.group_size() {
+            // And how old. Drawn per member — a group of missionaries spans
+            // the generations — and bent to Adult where the combination
+            // would not be a joke.
+            let mut age = super::archetype::AgeClass::draw(&mut crowd_rng.0);
+            if !age.suits(archetype) {
+                age = super::archetype::AgeClass::Adult;
+            }
+            let size = age.size();
+            if alive >= crowd.population {
+                break;
+            }
+            let t = (t + member as f32 * 0.03).min(0.95);
+            let position = pavement_point(a, b, edge.width, side, t);
+            let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
+            // The fixed wardrobe overrides the draw; it never replaces it.
+            // Every stream must consume the same draws whoever is spawned, or
+            // retuning the cast's shares would reshuffle everybody after them.
+            let material = assets.coat_for(archetype).unwrap_or(material);
 
-        let mut person = commands.spawn((
-            Name::new("Pedestrian"),
-            Pedestrian {
-                from,
-                to,
-                side,
-                speed: rng
-                    .0
-                    .random_range(crowd.walk_speed - 0.4..crowd.walk_speed + 0.4),
-                panic: 0.0,
-                current_speed: 0.0,
-            },
-            Transform::from_xyz(position.x, SIDEWALK_HEIGHT + STAND_HEIGHT, position.y),
-            // Dynamic, so a car can send them across the junction.
-            RigidBody::Dynamic,
-            Collider::capsule(RADIUS, HEIGHT),
-            // Upright until something knocks them over; `bounce::launch` takes
-            // this off for as long as they are tumbling.
-            LockedAxes::ROTATION_LOCKED,
-            Bouncer::new(STAND_HEIGHT),
-            temper,
-            Mood::new(mood),
-            FaceLevel(worn.level),
-            Voicebox::new(pitch),
-            Provoker::default(),
-            Visibility::default(),
-        ));
-        super::figure::dress(&mut person, &figures, material, &worn, &mut rng.0);
-        alive += 1;
+            // Drawn from its own stream: a citizen's disposition must not
+            // depend on how many of them have been spawned already, and
+            // retuning the mix must not move anybody's route.
+            let drawn = mix.draw(&mut tempers.0);
+            let temper = archetype.temper().unwrap_or(drawn);
+            let mood = temper.baseline;
+            let worn = faces.wear(mood);
+            // Their own voice, for as long as they are resident. The same
+            // stream as the temperament: how somebody sounds is part of who
+            // they are, and both are drawn once and never again.
+            let pitch = tempers.0.random_range(0.82..1.28) * age.pitch() * archetype.pitch();
+
+            let mut person = commands.spawn((
+                Name::new("Pedestrian"),
+                Pedestrian {
+                    from,
+                    to,
+                    side,
+                    speed: rng
+                        .0
+                        .random_range(crowd.walk_speed - 0.4..crowd.walk_speed + 0.4),
+                    panic: 0.0,
+                    current_speed: 0.0,
+                },
+                // Nested: a flat tuple would pass Bevy's fifteen-element
+                // bundle ceiling, and who-they-are is one thing anyway.
+                (archetype, age, super::figure::Stature(size)),
+                Transform::from_xyz(
+                    position.x,
+                    SIDEWALK_HEIGHT + STAND_HEIGHT * size,
+                    position.y,
+                ),
+                // Dynamic, so a car can send them across the junction.
+                RigidBody::Dynamic,
+                // The collider scales with the age, the same number the
+                // figure's pose is multiplied by — see `figure::Stature`.
+                Collider::capsule(RADIUS * size, HEIGHT * size),
+                // Upright until something knocks them over; `bounce::launch`
+                // takes this off for as long as they are tumbling.
+                LockedAxes::ROTATION_LOCKED,
+                Bouncer::new(STAND_HEIGHT * size),
+                temper,
+                Mood::new(mood),
+                FaceLevel(worn.level),
+                Voicebox::new(pitch),
+                Provoker::default(),
+                Visibility::default(),
+            ));
+            if archetype.steadfast() {
+                person.insert(crate::bounce::launch::NeverTumbles);
+            }
+            match leader {
+                None => leader = Some(person.id()),
+                Some(leader) => {
+                    person.insert(Follows(leader));
+                }
+            }
+            super::figure::dress(
+                &mut person,
+                &figures,
+                material,
+                &worn,
+                archetype,
+                &mut rng.0,
+            );
+            alive += 1;
+        }
     }
 }
 
@@ -319,7 +411,14 @@ fn walk_pavements(
     mut rng: ResMut<PedestrianRng>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut pedestrians: Query<
-        (&mut Pedestrian, &mut Bouncer, &mut Transform, &Mood),
+        (
+            &mut Pedestrian,
+            &mut Bouncer,
+            &mut Transform,
+            &Mood,
+            &super::archetype::Archetype,
+            &super::archetype::AgeClass,
+        ),
         (Without<crate::vehicle::spawn::Vehicle>, Without<Launched>),
     >,
 ) {
@@ -340,7 +439,7 @@ fn walk_pavements(
     }
     let mut sample = None;
 
-    for (mut pedestrian, mut bouncer, mut transform, mood) in &mut pedestrians {
+    for (mut pedestrian, mut bouncer, mut transform, mood, archetype, age) in &mut pedestrians {
         let position = transform.translation.xz();
         let a = city.graph.node(pedestrian.from).pos;
         let b = city.graph.node(pedestrian.to).pos;
@@ -393,12 +492,19 @@ fn walk_pavements(
             // Panic overrides temperament: a trudge does not outrun a car.
             crowd.flee_speed
         } else {
-            pedestrian.speed.min(crowd.walk_speed * 1.3) * stride(mood.value)
+            // Who they are — and how old they are — scales how they amble,
+            // on top of how they feel.
+            pedestrian.speed.min(crowd.walk_speed * 1.3)
+                * stride(mood.value)
+                * archetype.pace()
+                * age.pace()
         };
         // The mood is in the body as well as on the face: the hop the bounce
         // controller takes at the bottom of every arc is scaled here, every
         // frame, because the controller spends the scale on each landing.
-        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max);
+        // Who they are scales it again — a skater glides, a wheelchair rolls.
+        bouncer.hop_scale =
+            spring(mood.value, config.bounce.npc_spring_max) * archetype.hop() * age.spring();
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's
@@ -442,25 +548,65 @@ fn walk_pavements(
 /// One query, iterated twice — a read pass into a snapshot, then the write
 /// pass — rather than two queries that both touch `Transform`, which is the
 /// panic the schedule trap in CLAUDE.md is about.
+/// Copies the leader's route onto everybody following one.
+///
+/// Disjoint by construction rather than by luck: a leader is exactly a
+/// pedestrian `Without<Follows>`, so the read and the write can never alias
+/// one component — this is the honest version of the filter trick the
+/// schedule traps warn about, because here the filter *is* the semantics.
+fn flock(
+    leaders: Query<&Pedestrian, Without<Follows>>,
+    mut followers: Query<(&mut Pedestrian, &Follows)>,
+) {
+    for (mut own, follows) in &mut followers {
+        // A despawned leader orphans the gang into ordinary citizens.
+        let Ok(leader) = leaders.get(follows.0) else {
+            continue;
+        };
+        if own.to != leader.to || own.side != leader.side {
+            own.from = leader.from;
+            own.to = leader.to;
+            own.side = leader.side;
+        }
+    }
+}
+
+/// How wide a berth a shy citizen keeps around the player, in metres.
+const SHY_BERTH: f32 = 6.0;
+
 fn give_way(
     config: Res<GameConfig>,
-    mut pedestrians: Query<(&Transform, &mut Bouncer), (With<Pedestrian>, Without<Launched>)>,
+    players: Query<&Transform, (With<Player>, Without<Pedestrian>)>,
+    mut pedestrians: Query<
+        (&Transform, &super::archetype::Archetype, &mut Bouncer),
+        (With<Pedestrian>, Without<Launched>),
+    >,
 ) {
     let crowd = &config.crowd;
     if crowd.separation_push <= 0.0 {
         return;
     }
+    let player = players.single().ok().map(|t| t.translation.xz());
 
     let positions: Vec<Vec2> = pedestrians
         .iter()
-        .map(|(transform, _)| transform.translation.xz())
+        .map(|(transform, ..)| transform.translation.xz())
         .collect();
 
-    for (transform, mut bouncer) in &mut pedestrians {
+    for (transform, archetype, mut bouncer) in &mut pedestrians {
         let me = transform.translation.xz();
         let push = super::steering::separation(me, &positions, crowd.separation_radius);
         if push != Vec2::ZERO {
             bouncer.desired += push * crowd.separation_push;
+        }
+        // The shy give the player a whole street's width of respect — the
+        // same lean, from much further out and rather harder. They can still
+        // be cornered; that is what makes cheering one up worth the chase.
+        if archetype.shy()
+            && let Some(player) = player
+        {
+            let berth = super::steering::separation(me, &[player], SHY_BERTH);
+            bouncer.desired += berth * (crowd.separation_push * 2.5);
         }
     }
 }

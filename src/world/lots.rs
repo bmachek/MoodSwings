@@ -55,6 +55,8 @@ pub struct LotKit {
     board_white: Handle<StandardMaterial>,
     ring: Handle<Mesh>,
     ring_red: Handle<StandardMaterial>,
+    ball: Handle<Mesh>,
+    ball_orange: Handle<StandardMaterial>,
 }
 
 /// Worn white paint, the same reasoning as the road markings: a flat white
@@ -110,6 +112,12 @@ pub fn build_assets(
             base_color: Color::srgb(0.78, 0.28, 0.12),
             perceptual_roughness: 0.4,
             metallic: 0.4,
+            ..default()
+        }),
+        ball: meshes.add(Sphere::new(0.24)),
+        ball_orange: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.85, 0.44, 0.14),
+            perceptual_roughness: 0.85,
             ..default()
         }),
     }
@@ -408,6 +416,24 @@ fn spawn_court(commands: &mut Commands, kit: &LotKit, rect: &Rect, chunk: IVec2)
     } else {
         painted_line(commands, kit, chunk, centre, 0.0, 0.1, size.x);
     }
+
+    // The ball. A flummi that is only a flummi: a pure bounce body with no
+    // mood, no face and no opinions — taunting it does nothing, which any
+    // citizen could have told you. Anybody who walks into it kicks it, and
+    // it respawns centre-court with the chunk, which is more than most
+    // courts can say for their ball.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.ball.clone()),
+        MeshMaterial3d(kit.ball_orange.clone()),
+        Transform::from_xyz(centre.x, SIDEWALK_HEIGHT + 1.2, centre.y),
+        RigidBody::Dynamic,
+        Collider::sphere(0.24),
+        // Bouncier than the city's baseline: it is the one object here whose
+        // entire job is the bounce.
+        Restitution::new(0.88).with_combine_rule(CoefficientCombine::Max),
+        Mass(0.6),
+    ));
 
     // A hoop at each end of the long axis, facing back down the court.
     let (along, extent) = if along_x {

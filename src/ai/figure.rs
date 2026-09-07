@@ -103,6 +103,17 @@ impl Rest {
     }
 }
 
+/// How tall this figure stands, relative to the adult every part was
+/// proportioned for.
+///
+/// Read by [`animate`], which multiplies it into the squash pose — so the
+/// scale reaches every `Rest`-carrying part, and the limbs' children inherit
+/// it through their parents' transforms. The body entity is never scaled
+/// (Avian would shrink the collider with it); whoever spawns a small figure
+/// scales the capsule and the stand height by the same number instead.
+#[derive(Component, Clone, Copy)]
+pub struct Stature(pub f32);
+
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
 /// The speed is written by whoever owns the figure — the pedestrian AI for a
@@ -126,6 +137,19 @@ pub struct FigureAssets {
     trousers: Vec<Handle<StandardMaterial>>,
     hair_colours: Vec<Handle<StandardMaterial>>,
     leather: Handle<StandardMaterial>,
+    // The archetype wardrobe. Small, shared, and deliberately silly.
+    crest: Handle<Mesh>,
+    crest_colours: Vec<Handle<StandardMaterial>>,
+    cup: Handle<Mesh>,
+    phones_bar: Handle<Mesh>,
+    plastic: Handle<StandardMaterial>,
+    paper_cup: Handle<Mesh>,
+    paper: Handle<StandardMaterial>,
+    board: Handle<Mesh>,
+    wood: Handle<StandardMaterial>,
+    cane: Handle<Mesh>,
+    wheel: Handle<Mesh>,
+    seat: Handle<Mesh>,
 }
 
 /// Proportions, in metres, measured from the middle of the collider capsule.
@@ -152,6 +176,21 @@ mod body {
     pub const HAIR_RISE: f32 = 0.026;
     pub const SHOE_HEIGHT: f32 = 0.062;
     pub const SHOE_LENGTH: f32 = 0.245;
+    /// A punk's crest, standing on the crown.
+    pub const CREST_CENTRE: f32 = 0.785;
+    pub const CREST_HEIGHT: f32 = 0.10;
+    /// The headphone bridge, lying over the crown, and the cups over the ears.
+    pub const PHONES_BAR: f32 = 0.757;
+    pub const PHONES_BAR_HEIGHT: f32 = 0.022;
+    pub const CUP_RADIUS: f32 = 0.048;
+    /// A skateboard under the feet, flush with the capsule's bottom cap.
+    pub const BOARD_CENTRE: f32 = -0.825;
+    pub const BOARD_THICKNESS: f32 = 0.04;
+    /// A cane at the side, and the wheels a wheelchair rolls on.
+    pub const CANE_CENTRE: f32 = -0.45;
+    pub const CANE_HALF: f32 = 0.39;
+    pub const WHEEL_CENTRE: f32 = -0.575;
+    pub const WHEEL_RADIUS: f32 = 0.27;
 }
 
 /// Half the collider capsule's height, which is what the figure has to fit in.
@@ -203,6 +242,33 @@ const _: () = {
     assert!(
         body::HAIR_RADIUS > body::HEAD_RADIUS,
         "the hair is narrower than the head it is on"
+    );
+    // The archetype furniture is the newest thing to test the ceiling: a
+    // mohawk is exactly the shape that wants to stand out of the collider.
+    assert!(
+        body::CREST_CENTRE + body::CREST_HEIGHT * 0.5 <= CAPSULE_HALF,
+        "the crest stands above the capsule"
+    );
+    assert!(
+        body::CREST_CENTRE - body::CREST_HEIGHT * 0.5
+            >= body::HEAD_CENTRE + body::HEAD_RADIUS * 0.3,
+        "the crest grows out of the forehead"
+    );
+    assert!(
+        body::PHONES_BAR + body::PHONES_BAR_HEIGHT * 0.5 <= CAPSULE_HALF,
+        "the headphone bridge stands above the capsule"
+    );
+    assert!(
+        body::BOARD_CENTRE - body::BOARD_THICKNESS * 0.5 >= -CAPSULE_HALF,
+        "the skateboard hangs below the capsule"
+    );
+    assert!(
+        body::CANE_CENTRE - body::CANE_HALF >= -CAPSULE_HALF,
+        "the cane pokes through the pavement"
+    );
+    assert!(
+        body::WHEEL_CENTRE - body::WHEEL_RADIUS >= -CAPSULE_HALF,
+        "the wheels sink below the capsule"
     );
 };
 
@@ -263,6 +329,39 @@ pub fn build_assets(
         .into_iter()
         .map(|color| materials.add(cloth(color)))
         .collect(),
+        // A blade of hair rather than a fan of spikes: at pavement distance
+        // the crest is a silhouette, and a box is the silhouette.
+        crest: meshes.add(Cuboid::new(0.035, body::CREST_HEIGHT, 0.24)),
+        crest_colours: [Color::srgb(0.08, 0.72, 0.32), Color::srgb(0.85, 0.16, 0.55)]
+            .into_iter()
+            .map(|color| materials.add(cloth(color)))
+            .collect(),
+        cup: meshes.add(Cylinder::new(body::CUP_RADIUS, 0.035)),
+        phones_bar: meshes.add(Cuboid::new(
+            (body::HEAD_RADIUS + 0.02) * 2.0,
+            body::PHONES_BAR_HEIGHT,
+            0.032,
+        )),
+        plastic: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.11, 0.11, 0.13),
+            perceptual_roughness: 0.35,
+            ..default()
+        }),
+        paper_cup: meshes.add(Cylinder::new(0.045, 0.095)),
+        paper: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.85, 0.80, 0.70),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
+        board: meshes.add(Cuboid::new(0.22, body::BOARD_THICKNESS, 0.56)),
+        wood: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.42, 0.28, 0.16),
+            perceptual_roughness: 0.7,
+            ..default()
+        }),
+        cane: meshes.add(Cylinder::new(0.018, body::CANE_HALF * 2.0)),
+        wheel: meshes.add(Cylinder::new(body::WHEEL_RADIUS, 0.03)),
+        seat: meshes.add(Cuboid::new(0.4, 0.06, 0.4)),
     }
 }
 
@@ -271,15 +370,27 @@ pub fn build_assets(
 /// The face and the complexion arrive already chosen, because which ones they
 /// are depends on how the figure feels — see [`crate::mood::face::Worn`].
 /// Nobody in this city has a skin tone; every head is an emoji.
+///
+/// The archetype decides the extras — a crest, a pompadour, headphones, a
+/// paper cup — and every one of them is a child with a [`Rest`], because a
+/// child without one is silently skipped by [`animate`] and pops off the
+/// figure at the first squash.
 pub fn dress(
     entity: &mut EntityCommands,
     assets: &FigureAssets,
     coat: Handle<StandardMaterial>,
     worn: &crate::mood::face::Worn,
+    archetype: crate::ai::archetype::Archetype,
     rng: &mut ChaCha8Rng,
 ) {
+    use crate::ai::archetype::Archetype;
+
     let trousers = assets.trousers[rng.random_range(0..assets.trousers.len())].clone();
+    // Always drawn, even for the bald and the crested: the wardrobe stream
+    // must consume the same draws whoever is being dressed, or retuning the
+    // cast would reshuffle every trouser leg after it.
     let hair = assets.hair_colours[rng.random_range(0..assets.hair_colours.len())].clone();
+    let crest = assets.crest_colours[rng.random_range(0..assets.crest_colours.len())].clone();
 
     entity.insert(WalkCycle::default());
     entity.with_children(|parent| {
@@ -304,14 +415,115 @@ pub fn dress(
         // still fit inside the collider — but at the distance a pedestrian is
         // seen it is the dark top to the silhouette that does the work, not
         // where exactly it starts.
-        let cap = Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, 0.018);
-        let flattened = Vec3::new(1.0, body::HAIR_FLATTEN, 1.0);
-        parent.spawn((
-            Rest::posed(cap, flattened),
-            Mesh3d(assets.hair.clone()),
-            MeshMaterial3d(hair.clone()),
-            Transform::from_translation(cap).with_scale(flattened),
-        ));
+        //
+        // A missionary goes without: the shaved head is most of the costume.
+        if !archetype.bald() {
+            let (cap, cap_scale, cap_hair) = if archetype == Archetype::Elvis {
+                // The pompadour: the same cap, always black, worn taller and
+                // pushed forward until it is a hairstyle rather than a hat.
+                (
+                    Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, -0.016),
+                    Vec3::new(0.96, body::HAIR_FLATTEN * 1.28, 1.08),
+                    assets.hair_colours[0].clone(),
+                )
+            } else {
+                (
+                    Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, 0.018),
+                    Vec3::new(1.0, body::HAIR_FLATTEN, 1.0),
+                    hair.clone(),
+                )
+            };
+            parent.spawn((
+                Rest::posed(cap, cap_scale),
+                Mesh3d(assets.hair.clone()),
+                MeshMaterial3d(cap_hair),
+                Transform::from_translation(cap).with_scale(cap_scale),
+            ));
+        }
+
+        match archetype {
+            Archetype::Punk => {
+                let at = Vec3::new(0.0, body::CREST_CENTRE, 0.0);
+                parent.spawn((
+                    Rest::at(at),
+                    Mesh3d(assets.crest.clone()),
+                    MeshMaterial3d(crest),
+                    Transform::from_translation(at),
+                ));
+            }
+            Archetype::Headphones => {
+                let bar = Vec3::new(0.0, body::PHONES_BAR, 0.0);
+                parent.spawn((
+                    Rest::at(bar),
+                    Mesh3d(assets.phones_bar.clone()),
+                    MeshMaterial3d(assets.plastic.clone()),
+                    Transform::from_translation(bar),
+                ));
+                for side in [-1.0f32, 1.0] {
+                    let cup = Vec3::new(side * (body::HEAD_RADIUS + 0.012), body::HEAD_CENTRE, 0.0);
+                    parent.spawn((
+                        Rest::at(cup),
+                        Mesh3d(assets.cup.clone()),
+                        MeshMaterial3d(assets.plastic.clone()),
+                        Transform::from_translation(cup)
+                            // A cylinder stands on Y; an ear cup lies on X.
+                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+                    ));
+                }
+            }
+            Archetype::Beggar => {
+                // The cup, held out in front. It travels with the figure,
+                // which is not how begging works and exactly how comedy does.
+                let at = Vec3::new(0.0, -0.26, 0.22);
+                parent.spawn((
+                    Rest::at(at),
+                    Mesh3d(assets.paper_cup.clone()),
+                    MeshMaterial3d(assets.paper.clone()),
+                    Transform::from_translation(at),
+                ));
+            }
+            Archetype::Skater => {
+                // The board rides under the feet, flush with the capsule's
+                // bottom — the legs still pump above it, which is the joke.
+                let at = Vec3::new(0.0, body::BOARD_CENTRE, 0.0);
+                parent.spawn((
+                    Rest::at(at),
+                    Mesh3d(assets.board.clone()),
+                    MeshMaterial3d(assets.wood.clone()),
+                    Transform::from_translation(at),
+                ));
+            }
+            Archetype::CaneUser => {
+                let at = Vec3::new(0.26, body::CANE_CENTRE, 0.05);
+                parent.spawn((
+                    Rest::at(at),
+                    Mesh3d(assets.cane.clone()),
+                    MeshMaterial3d(assets.wood.clone()),
+                    Transform::from_translation(at),
+                ));
+            }
+            Archetype::Wheelchair => {
+                let seat = Vec3::new(0.0, -0.38, 0.0);
+                parent.spawn((
+                    Rest::at(seat),
+                    Mesh3d(assets.seat.clone()),
+                    MeshMaterial3d(assets.plastic.clone()),
+                    Transform::from_translation(seat),
+                ));
+                for side in [-1.0f32, 1.0] {
+                    let hub = Vec3::new(side * 0.24, body::WHEEL_CENTRE, 0.0);
+                    parent.spawn((
+                        Rest::at(hub),
+                        Mesh3d(assets.wheel.clone()),
+                        MeshMaterial3d(assets.plastic.clone()),
+                        // A cylinder stands on Y; a wheel rolls on X.
+                        Transform::from_translation(hub)
+                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+                    ));
+                }
+            }
+            _ => {}
+        }
 
         for (limb, side) in [(Limb::LeftArm, -1.0f32), (Limb::RightArm, 1.0)] {
             let joint = Vec3::new(side * body::SHOULDER_X, body::SHOULDER, 0.0);
@@ -391,11 +603,16 @@ pub fn limb_angle(limb: Limb, phase: f32) -> f32 {
 pub fn animate(
     time: Res<Time>,
     config: Res<crate::core::config::GameConfig>,
-    figures: Query<(&mut WalkCycle, Option<&Bouncer>, &Children)>,
+    figures: Query<(
+        &mut WalkCycle,
+        Option<&Bouncer>,
+        Option<&Stature>,
+        &Children,
+    )>,
     mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cycle, bouncer, children) in figures {
+    for (mut cycle, bouncer, stature, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
@@ -406,7 +623,11 @@ pub fn animate(
             }
             None => (1.0, 1.0),
         };
-        let pose = Vec3::new(horizontal, vertical, horizontal);
+        // The stature multiplies straight into the pose: a child is an adult
+        // squashed evenly, every frame, which is also exactly what a rubber
+        // city would say about children.
+        let size = stature.map_or(1.0, |stature| stature.0);
+        let pose = Vec3::new(horizontal, vertical, horizontal) * size;
 
         for &child in children {
             let Ok((mut transform, rest, limb)) = parts.get_mut(child) else {

@@ -146,6 +146,7 @@ pub struct BuildingKits<'w> {
     shells: Res<'w, crate::world::shell::ShellKit>,
     signs: Res<'w, crate::world::signage::SignKit>,
     lots: Res<'w, crate::world::lots::LotKit>,
+    bank: Option<Res<'w, crate::audio::bank::SoundBank>>,
 }
 
 pub fn update_streaming(
@@ -179,6 +180,7 @@ pub fn update_streaming(
         shells: &kits.shells,
         signs: &kits.signs,
         lots: &kits.lots,
+        bank: kits.bank.as_deref(),
         seed: config.world_seed,
         lod_scale: config.graphics.lod_scale,
     };

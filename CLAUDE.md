@@ -12,7 +12,7 @@ cargo test                     # ~324 unit tests, all inline #[cfg(test)] module
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
-tools/fetch-materials.sh       # optional CC0 assets: PBR sets into assets/materials/, recorded sounds into assets/sounds/
+tools/fetch-materials.sh       # CC0 assets: PBR sets (optional) and the recorded sound bank (REQUIRED — see below)
 tools/fetch-materials.bat      # the same for Windows — KEEP THE TWO IN SYNC (see below)
 cargo run -- --audition shots/audio   # write the whole sound bank out as WAVs
 ```
@@ -48,13 +48,14 @@ would spoil an unattended shot should check it too.
 
 Same problem, same answer. `--audition <dir>` writes every sound in the bank to
 a WAV and exits without starting Bevy at all, so a curse can be listened to
-without finding a flummi cross enough to say one. `audio::bank::every_one_shot`
-and `every_loop` are what it enumerates — and what the bank's own tests iterate,
-so a sound that is not in one of those lists is exempt from the rules the rest
-of the bank is held to. Both enumerate the *synthesised* versions: recordings
-fetched into `assets/sounds/` (see `audio::files`) are auditioned by playing
-the files directly, and are held to the bank's rules mechanically at load
-(mono mix, resample, fade, normalise, seam-wrap) rather than by test.
+without finding a flummi cross enough to say one. `audio::bank::REGISTER` is
+what it enumerates — the one list of every sound, its peak and its shape, which
+the loader and the fetch-script sync tests read too, so a sound cannot exist in
+one of them and be forgotten by another. What is auditioned is the *processed*
+buffer: every recording is held to the bank's rules mechanically at load (mono
+mix, resample, fade, normalise, seam-wrap), and the load pipeline itself is
+tested with fixture files. A register entry with no recording on disk prints
+as MISSING and plays in-game as a short silence with a warning.
 
 ## Architecture
 
@@ -70,10 +71,11 @@ bevy_egui, saves are RON.
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning |
 | `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
-| `ai` | Traffic, pedestrians, shared steering, walk cycles, the figure itself |
+| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself |
+| `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
-| `audio` | Startup waveform synthesis, source-filter voices (`voice`), the sound bank, triggers, the WAV audition tool |
+| `audio` | The recorded sound bank (`bank::REGISTER`), the load-time discipline (`files`), triggers, the WAV audition tool |
 | `save` | RON quick save / load |
 
 ### What this game is
@@ -159,16 +161,17 @@ are pure functions so they can be unit-tested without a GPU.
 
 ### Assets are generated, or absent
 
-No third-party art ships. Every texture is painted per-pixel at startup
-(`world::texture`) and every sound is synthesised into a buffer
-(`audio::synth`). CC0 downloads are an *optional* upgrade on both fronts:
-`world::material` returns `Option` for every material lookup, and
-`audio::files` returns `Option` for every sound in `assets/sounds/` — callers
-fall back to the procedural/synthesised version, so a fresh clone with neither
-directory runs identically and just looks and sounds worse. Adding a scanned
-material set means adding its name to both `world::material::set` and the
-fetch scripts; adding a recorded sound means an entry in the fetch scripts
-under the sound's bank name. Bevy has no runtime mip generator, so the texture
+No third-party art ships in the repo. Every texture is painted per-pixel at
+startup (`world::texture`), and `world::material` returns `Option` for every
+scanned-set lookup — the CC0 material downloads remain an *optional* upgrade,
+and a fresh clone renders identically without them. Sound stopped being
+symmetrical: the synthesised bank was retired (the recordings won), so the
+CC0 sound half of `tools/fetch-materials.sh` is a REQUIRED setup step. A
+clone that has not run it still starts, but every missing sound plays as a
+short silence with a loud warning. Adding a scanned material set means adding
+its name to both `world::material::set` and the fetch scripts; adding a sound
+means an entry in `audio::bank::REGISTER` (name, peak, shape) plus a download
+in both fetch scripts — a test fails if either script lacks one. Bevy has no runtime mip generator, so the texture
 modules build mip chains on the CPU (averaged in linear space for sRGB
 images).
 
@@ -202,7 +205,8 @@ declaration order.
 - Feel constants belong in `core::config::GameConfig` so the dev panel can tune
   them at runtime, not as literals at the use site. The five temperaments are a
   `Tempers` resource for the same reason.
-- Sound bank entries must end with `fade_edges` and `normalize`: the bank's
-  tests require every one-shot to start at exactly zero and every sound to peak
-  inside `0.3..=1.0`. Add new sounds to `every_one_shot`/`every_loop`, which is
-  what both those tests and the audition tool enumerate.
+- Every sound is a CC0 recording, held to the bank's rules at load: one-shots
+  start at exactly zero and everything peaks at its `REGISTER` peak (inside
+  `0.3..=1.0`). Add new sounds to `audio::bank::REGISTER` and to both fetch
+  scripts; the register is what the loader, the audition tool and the
+  fetch-sync tests all enumerate.

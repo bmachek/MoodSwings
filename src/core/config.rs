@@ -38,6 +38,11 @@ pub struct GameConfig {
     /// still parses instead of resetting everything else in it.
     #[serde(default)]
     pub window: WindowConfig,
+    /// Which figure the player wears, chosen in the pause menu's character
+    /// screen. In the options rather than the save: a costume is a
+    /// preference, like a keybinding, not a fact about one city.
+    #[serde(default)]
+    pub character: crate::ai::archetype::Archetype,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -418,6 +423,7 @@ impl Default for GameConfig {
             },
             graphics: GraphicsSettings::default(),
             window: WindowConfig::default(),
+            character: crate::ai::archetype::Archetype::default(),
         }
     }
 }

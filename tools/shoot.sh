@@ -68,6 +68,10 @@ FRAMINGS=(
     "showroom|--showroom --hour 11"
     # The hydrant geyser. Long enough for the column to fill with droplets.
     "geyser|--geyser --frames 240 --hour 15"
+    # The CSD column at its default-seed forming point (day zero's route),
+    # long enough for it to form and start marching. `--event` is the one
+    # door through the events-sit-out-capture rule.
+    "parade|--at -4,4,-714 --look -4,1.5,-748 --hour 12 --event csd --frames 400"
     "driving|--follow --drive --frames 2000 --hour 15"
     "map|--follow --map"
     # The faces, held at three points on the scale by `--mood`. Nothing else

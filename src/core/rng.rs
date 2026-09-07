@@ -46,6 +46,23 @@ pub mod stream {
     /// the whole layout is drawn — a new civic kind must never reshuffle a
     /// single lot, height or palette that `BUILDINGS` already decided.
     pub const ZONING: u64 = 14;
+    /// Who a citizen is: the archetype draw and everything that hangs off it.
+    /// Not `PEDESTRIANS` (retuning the cast must not move where anybody
+    /// spawns) and not `MOOD` (it must not move anybody's disposition either).
+    pub const CROWD: u64 = 15;
+    // 16 stays reserved for zone-ambience variation, per the roadmap's key
+    // budget — the emitters turned out to need no randomness yet, and a
+    // reserved number is cheaper than a renumbering ever is.
+    /// The city's event calendar: which day throws which parade. Sampled via
+    /// `key_for` like the weather, never drawn — a parade at 14:00 on this
+    /// seed must be a fact about the seed, reproducible under `--hour`.
+    pub const EVENTS: u64 = 17;
+    /// The animals: which pedestrian gets a dog, where the cats prowl.
+    pub const ANIMALS: u64 = 18;
+    /// Cyclists: where on the network they appear and what they wear. Their
+    /// own stream for the usual reason — retuning how many bikes the city
+    /// holds must not move a single pedestrian, mood or parked car.
+    pub const CYCLISTS: u64 = 19;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

@@ -227,16 +227,31 @@ fn npcs_provoke(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<AudioRng>,
     mut provocations: MessageWriter<Provocation>,
-    mut flummis: Query<(Entity, &Transform, &Mood, &mut Provoker), Without<Player>>,
+    mut flummis: Query<
+        (
+            Entity,
+            &Transform,
+            &Mood,
+            &mut Provoker,
+            Option<&crate::ai::archetype::Archetype>,
+        ),
+        Without<Player>,
+    >,
 ) {
     let dt = time.delta_secs();
-    for (entity, transform, mood, mut provoker) in &mut flummis {
+    for (entity, transform, mood, mut provoker, archetype) in &mut flummis {
         provoker.cooldown = (provoker.cooldown - dt).max(0.0);
         if provoker.cooldown > 0.0 {
             continue;
         }
 
-        let kind = if mood.value <= SPONTANEOUS_SPITE {
+        // A missionary cheers and a hooligan chants whatever the weather in
+        // their heads; everybody else needs to actually feel something
+        // before they say so.
+        let spam = archetype.and_then(|a| a.spam());
+        let kind = if let Some(kind) = spam {
+            kind
+        } else if mood.value <= SPONTANEOUS_SPITE {
             Rudeness::Taunt
         } else if mood.value >= SPONTANEOUS_JOY {
             Rudeness::Cheer
@@ -244,8 +259,14 @@ fn npcs_provoke(
             continue;
         };
         // Rolled per second rather than per frame, so how often the city is
-        // rude does not depend on how fast it is running.
-        if rng.random::<f32>() > SPONTANEITY * dt * mood.value.abs() * 60.0 {
+        // rude does not depend on how fast it is running. The spammer's zeal
+        // has a floor: their enthusiasm does not depend on their mood either.
+        let zeal = if spam.is_some() {
+            mood.value.abs().max(0.5)
+        } else {
+            mood.value.abs()
+        };
+        if rng.random::<f32>() > SPONTANEITY * dt * zeal * 60.0 {
             provoker.cooldown = config.mood.provoke_rest * 0.5;
             continue;
         }
@@ -297,7 +318,13 @@ fn announce(
             // predictable sequence reads as a jukebox and an unpredictable
             // one reads as a person deciding how rude to be today.
             Rudeness::Taunt => {
-                let rude = [&bank.raspberry, &bank.fart, &bank.cough, &bank.spit];
+                let rude = [
+                    &bank.raspberry,
+                    &bank.fart,
+                    &bank.cough,
+                    &bank.spit,
+                    &bank.burp,
+                ];
                 rude[rng.random_range(0..rude.len())].clone()
             }
             Rudeness::Cheer => bank.whistle[rng.random_range(0..VARIANTS)].clone(),
@@ -383,13 +410,24 @@ fn spread_ripples(
 fn feel_provocations(
     config: Res<GameConfig>,
     mut provocations: MessageReader<Provocation>,
-    mut flummis: Query<(Entity, &Transform, &mut Mood, &Temperament)>,
+    mut flummis: Query<(
+        Entity,
+        &Transform,
+        &mut Mood,
+        &Temperament,
+        Option<&crate::ai::archetype::Archetype>,
+    )>,
 ) {
     for provocation in provocations.read() {
-        for (entity, transform, mut mood, temper) in &mut flummis {
+        for (entity, transform, mut mood, temper, archetype) in &mut flummis {
             // Nobody is offended by their own raspberry, and nobody cheers
             // themselves up by whistling. Both would be funny once.
             if entity == provocation.by {
+                continue;
+            }
+            // Headphones. They cannot hear you, which is the whole bit: the
+            // one flummi a taunt bounces off is the one who never noticed it.
+            if archetype.is_some_and(|a| a.deaf()) {
                 continue;
             }
             let apart = transform.translation.distance(provocation.at);

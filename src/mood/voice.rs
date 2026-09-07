@@ -17,9 +17,9 @@
 //!   speaking once.
 //!
 //! What is said follows the mood's sign and how strongly it is held, so the
-//! street is audibly in the mood the faces say it is in — and a mood near zero
-//! says nothing at all, because somebody with no opinion has no reason to
-//! announce it.
+//! street is audibly in the mood the faces say it is in — and a mood near
+//! zero only murmurs, quietly and rarely, because somebody with no opinion
+//! still mutters about the weather.
 
 use bevy::prelude::*;
 use rand::RngExt;
@@ -83,6 +83,10 @@ pub enum Utterance {
     Giggle,
     Grumble,
     Curse,
+    /// Small talk. The indifferent middle of the scale used to be silent,
+    /// which read as a city holding its breath: people who feel nothing in
+    /// particular still mutter about the weather.
+    Murmur,
 }
 
 /// Which of the four a mood calls for, or nothing.
@@ -96,7 +100,7 @@ pub fn utterance(mood: f32) -> Option<Utterance> {
     } else if mood <= -INDIFFERENT {
         Some(Utterance::Grumble)
     } else {
-        None
+        Some(Utterance::Murmur)
     }
 }
 
@@ -106,6 +110,9 @@ pub fn utterance(mood: f32) -> Option<Utterance> {
 /// delighted flummi is exactly as talkative as a furious one, and that is what
 /// stops a happy city being a silent one.
 pub fn chance(mood: f32) -> f32 {
+    // The floor is what the indifferent speak with: a fifth as often as the
+    // delighted or the furious, which keeps the murmur a texture rather than
+    // a conversation the player is supposed to follow.
     (0.20 + 0.62 * mood.abs()).clamp(0.0, 0.95)
 }
 
@@ -147,6 +154,7 @@ fn voice_for(bank: &SoundBank, utterance: Utterance, take: usize) -> Handle<Synt
         Utterance::Giggle => bank.giggle.clone(),
         Utterance::Grumble => bank.grumble[take].clone(),
         Utterance::Curse => bank.curse[take].clone(),
+        Utterance::Murmur => bank.murmur[take].clone(),
     }
 }
 
@@ -252,10 +260,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn somebody_with_no_opinion_says_nothing() {
-        assert_eq!(utterance(0.0), None);
-        assert_eq!(utterance(INDIFFERENT * 0.5), None);
-        assert_eq!(utterance(-INDIFFERENT * 0.5), None);
+    fn somebody_with_no_opinion_murmurs_about_the_weather() {
+        // The middle of the scale used to be silent, and a street of people
+        // feeling nothing read as a street holding its breath. Now it
+        // murmurs — but only murmurs: the band must not leak an opinion.
+        assert_eq!(utterance(0.0), Some(Utterance::Murmur));
+        assert_eq!(utterance(INDIFFERENT * 0.5), Some(Utterance::Murmur));
+        assert_eq!(utterance(-INDIFFERENT * 0.5), Some(Utterance::Murmur));
+        // And the indifferent speak the least — the floor of the chance
+        // curve belongs to them.
+        assert!(chance(0.0) < chance(0.7));
     }
 
     #[test]
