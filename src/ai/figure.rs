@@ -114,6 +114,46 @@ impl Rest {
 #[derive(Component, Clone, Copy)]
 pub struct Stature(pub f32);
 
+/// A pose that overrides the walk swing while it is worn.
+///
+/// The walk cycle owns the limbs by default; a figure doing something *with*
+/// its arms — grabbing a collar, being shaken by one — wears a posture over
+/// it, and [`animate`] hands the limbs to the posture instead for as long as
+/// the component is on the body. Time-parameterised rather than distance-
+/// parameterised, because everything a posture animates happens standing
+/// still, where a distance-paced clock has stopped.
+#[derive(Component, Clone, Copy, Debug)]
+pub enum Posture {
+    /// Both arms out in front at collar height, feet planted: the grabber.
+    Grabbing,
+    /// Arms windmilling, legs pedalling air: the one being shaken.
+    Flailing,
+}
+
+impl Posture {
+    pub fn limb_angle(self, limb: Limb, seconds: f32) -> f32 {
+        // Positive rotation about X tips a hanging limb towards -Z, which is
+        // the way a figure faces — so positive is "forward" throughout.
+        match (self, limb) {
+            // Locked straight out: the grip is the whole statement.
+            (Posture::Grabbing, Limb::LeftArm | Limb::RightArm) => 1.35,
+            // Braced: one foot ahead of the other, holding the ground.
+            (Posture::Grabbing, Limb::LeftLeg) => 0.28,
+            (Posture::Grabbing, Limb::RightLeg) => -0.28,
+            // Windmilling, the two arms out of phase so it reads as panic
+            // rather than as a callisthenics routine.
+            (Posture::Flailing, Limb::LeftArm) => 1.0 + (seconds * 13.0).sin() * 0.75,
+            (Posture::Flailing, Limb::RightArm) => {
+                1.0 + (seconds * 13.0 + std::f32::consts::PI).sin() * 0.75
+            }
+            (Posture::Flailing, Limb::LeftLeg) => (seconds * 13.0).sin() * 0.35,
+            (Posture::Flailing, Limb::RightLeg) => {
+                (seconds * 13.0 + std::f32::consts::PI).sin() * 0.35
+            }
+        }
+    }
+}
+
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
 /// The speed is written by whoever owns the figure — the pedestrian AI for a
@@ -607,12 +647,14 @@ pub fn animate(
         &mut WalkCycle,
         Option<&Bouncer>,
         Option<&Stature>,
+        Option<&Posture>,
         &Children,
     )>,
     mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cycle, bouncer, stature, children) in figures {
+    let elapsed = time.elapsed_secs();
+    for (mut cycle, bouncer, stature, posture, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
@@ -642,7 +684,11 @@ pub fn animate(
             transform.translation = rest.at * pose;
             transform.scale = rest.scale * pose;
             if let Some(limb) = limb {
-                transform.rotation = Quat::from_rotation_x(limb_angle(*limb, cycle.phase));
+                let angle = match posture {
+                    Some(posture) => posture.limb_angle(*limb, elapsed),
+                    None => limb_angle(*limb, cycle.phase),
+                };
+                transform.rotation = Quat::from_rotation_x(angle);
             }
         }
     }

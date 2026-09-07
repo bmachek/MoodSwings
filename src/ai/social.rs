@@ -215,6 +215,7 @@ fn strike_up_chats(
             Without<Composure>,
             Without<Grudge>,
             Without<Launched>,
+            Without<crate::mood::scuffle::Scuffle>,
         ),
     >,
 ) {
@@ -331,7 +332,17 @@ fn hold_chats(
 /// launch ends the conversation mid-word.
 fn break_up_chats(
     mut commands: Commands,
-    interrupted: Query<Entity, (With<Chatting>, Or<(With<Grudge>, With<Launched>)>)>,
+    interrupted: Query<
+        Entity,
+        (
+            With<Chatting>,
+            Or<(
+                With<Grudge>,
+                With<Launched>,
+                With<crate::mood::scuffle::Scuffle>,
+            )>,
+        ),
+    >,
     panicked: Query<(Entity, &Pedestrian), With<Chatting>>,
 ) {
     for entity in &interrupted {

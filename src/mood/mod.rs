@@ -10,6 +10,7 @@ pub mod face;
 pub mod feeling;
 pub mod grudge;
 pub mod provoke;
+pub mod scuffle;
 pub mod voice;
 
 use bevy::prelude::*;
@@ -31,6 +32,7 @@ impl Plugin for MoodPlugin {
             feeling::FeelingPlugin,
             provoke::ProvokePlugin,
             grudge::GrudgePlugin,
+            scuffle::ScufflePlugin,
             apology::ApologyPlugin,
         ))
         .add_systems(Startup, build_faces)
