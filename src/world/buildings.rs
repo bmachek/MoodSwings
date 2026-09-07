@@ -388,6 +388,8 @@ pub struct BlockContext<'a> {
     pub assets: &'a CityAssets,
     pub roofs: &'a RoofKit,
     pub shells: &'a ShellKit,
+    pub signs: &'a crate::world::signage::SignKit,
+    pub lots: &'a crate::world::lots::LotKit,
     pub seed: u64,
     pub lod_scale: f32,
 }
@@ -438,17 +440,21 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     ));
 
     for building in &block.buildings {
-        spawn_building(commands, ctx, block.district, building, chunk);
+        spawn_building(commands, ctx, block, building, chunk);
+    }
+    for vacant in &block.vacants {
+        crate::world::lots::spawn_lot(commands, ctx.lots, ctx.signs, block, vacant, chunk);
     }
 }
 
 fn spawn_building(
     commands: &mut Commands,
     ctx: &BlockContext,
-    district: District,
+    block: &Block,
     building: &Building,
     chunk: IVec2,
 ) {
+    let district = block.district;
     let assets = ctx.assets;
     let size = building.footprint.size();
     let center = building.footprint.center();
@@ -566,6 +572,64 @@ fn spawn_building(
         // pass over every building in the city.
         NotShadowCaster,
     ));
+
+    // The sign, for any kind that hangs one. It goes on the face nearest the
+    // block perimeter — the side the lot fronts, which is the side with a
+    // pavement under it — centred on the fascia band the facade painter
+    // reserves over the ground storey, and scaled down if the board would
+    // outgrow the wall it is bolted to.
+    if let Some((mesh, material, board)) = ctx.signs.get(building.kind) {
+        let footprint = building.footprint;
+        let gaps = [
+            footprint.min.x - block.area.min.x,
+            block.area.max.x - footprint.max.x,
+            footprint.min.y - block.area.min.y,
+            block.area.max.y - footprint.max.y,
+        ];
+        let front = gaps
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(side, _)| side)
+            .unwrap_or(3);
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let proud = crate::world::signage::PROUD;
+        let (at, yaw, face_width) = match front {
+            0 => (
+                Vec2::new(footprint.min.x - proud, center.y),
+                -FRAC_PI_2,
+                size.y,
+            ),
+            1 => (
+                Vec2::new(footprint.max.x + proud, center.y),
+                FRAC_PI_2,
+                size.y,
+            ),
+            2 => (Vec2::new(center.x, footprint.min.y - proud), PI, size.x),
+            _ => (Vec2::new(center.x, footprint.max.y + proud), 0.0, size.x),
+        };
+        // The fascia band sits at the top of the ground storey, wherever the
+        // class puts its storeys for this height.
+        let storey = height / class.grid().1;
+        let fascia = SIDEWALK_HEIGHT + storey * 0.875;
+        let fit = (face_width * 0.8 / board.x).min(1.0);
+        let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(at.x, fascia, at.y)
+                .with_rotation(Quat::from_rotation_y(yaw))
+                .with_scale(Vec3::splat(fit)),
+            VisibilityRange {
+                start_margin: 0.0..0.0,
+                end_margin: (sign_draw * 0.9)..sign_draw,
+                use_aabb: false,
+            },
+            // The wall behind it casts the same shadow from the same place.
+            NotShadowCaster,
+        ));
+    }
 
     // And what accumulated on the deck. Sits on top of the slab, so nothing is
     // buried in it and nothing floats over it.

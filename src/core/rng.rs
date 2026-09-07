@@ -41,6 +41,11 @@ pub mod stream {
     /// must still not draw from a generation stream, or knocking a hydrant
     /// over would reshuffle where the props around it spawn.
     pub const MAYHEM: u64 = 13;
+    /// The civic zoning pass: which buildings become the town hall, the fire
+    /// stations, the parking garages. Its own stream because it runs *after*
+    /// the whole layout is drawn — a new civic kind must never reshuffle a
+    /// single lot, height or palette that `BUILDINGS` already decided.
+    pub const ZONING: u64 = 14;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

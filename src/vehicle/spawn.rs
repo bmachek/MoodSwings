@@ -505,6 +505,39 @@ pub fn spawn_parked_vehicles(
         spawned += 1;
     }
 
+    // And into the parking lots, which is what the bays are painted for. This
+    // block draws *after* every kerb draw above, so adding it moved no car
+    // that was already parked. Cars are startup-resident rather than chunk-
+    // streamed, so the lots — which are — get their paint from `world::lots`
+    // and their occupants from here, sharing `lots::bays` as the contract.
+    for block in &city.0.blocks {
+        for vacant in &block.vacants {
+            if vacant.purpose != crate::world::citygen::VacantUse::ParkingLot {
+                continue;
+            }
+            for (at, heading) in crate::world::lots::bays(&vacant.rect) {
+                // A lot two-thirds full reads as a lot; a full one reads as a
+                // wall of cars, and an empty one as a mistake.
+                if rng.random_range(0.0..1.0) > 0.62 {
+                    continue;
+                }
+                let class =
+                    VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
+                let mut spec = class.spec();
+                (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+                // Lots sit on the kerb slab, a step above the carriageway.
+                let transform = Transform::from_xyz(
+                    at.x,
+                    crate::world::buildings::SIDEWALK_HEIGHT + resting_height(&spec),
+                    at.y,
+                )
+                .with_rotation(Quat::from_rotation_y(heading));
+                spawn_vehicle(&mut commands, &assets, &mut materials, spec, transform);
+                spawned += 1;
+            }
+        }
+    }
+
     info!("{spawned} vehicles parked around the city");
 }
 
