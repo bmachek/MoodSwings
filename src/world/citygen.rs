@@ -131,6 +131,13 @@ pub enum BuildingKind {
     PoliceStation,
     Barracks,
     ParkingGarage,
+    /// Free entry, uncertain exit. Sealed for now; its jokes hang outside.
+    Museum,
+    /// Where the city's children learn to hop quietly.
+    School,
+    /// The one building that is not a box: `world::church` raises a nave,
+    /// a tower and a spire where the stamped building's box would stand.
+    Church,
 }
 
 impl BuildingKind {
@@ -159,6 +166,9 @@ impl BuildingKind {
                 | BuildingKind::PoliceStation
                 | BuildingKind::Barracks
                 | BuildingKind::ParkingGarage
+                | BuildingKind::Museum
+                | BuildingKind::School
+                | BuildingKind::Church
         )
     }
 }
@@ -178,6 +188,9 @@ pub enum VacantUse {
     GasStation,
     /// A basketball court or kickabout cage — the street-sports venue.
     Court,
+    /// A row of market stalls: canopies, counters, and crates that a car
+    /// can send everywhere, which is the whole reason to drive there.
+    Market,
     /// Genuinely nothing. A city needs a few.
     Yard,
 }
@@ -613,6 +626,13 @@ fn vacant_purpose(seed: u64, lot: &Rect, buildable: &Rect, arterial: [bool; 4]) 
     if size.min_element() > 14.0 && roll > 0.72 {
         return VacantUse::Court;
     }
+    // Carved out of the parking band rather than appended past it, so the
+    // roll keeps meaning the same thing for the uses that already existed.
+    // The band is deliberately narrow: a market you can find is a treat, a
+    // market on every second block is a supermarket with weather.
+    if size.min_element() > 14.0 && (0.30..0.335).contains(&roll) {
+        return VacantUse::Market;
+    }
     if size.min_element() > 8.0 && roll > 0.30 {
         return VacantUse::ParkingLot;
     }
@@ -735,6 +755,41 @@ fn zone_civics(seed: u64, blocks: &mut [Block]) {
         &[Downtown, Midtown],
         14.0..20.0,
         250.0,
+    );
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        Museum,
+        1,
+        &[Downtown, Midtown],
+        11.0..15.0,
+        0.0,
+    );
+    // Two schools, far apart — every catchment area deserves its own bell.
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        School,
+        2,
+        &[Residential, Midtown],
+        7.0..10.0,
+        500.0,
+    );
+    // Three churches, spread like the fire stations: a skyline needs its
+    // spires the way a street needs its hydrants. The height claimed here is
+    // the *presence* — `world::church` builds a lower nave and a taller
+    // tower out of it, so the box the layout stores never appears.
+    claim(
+        blocks,
+        &mut claimed,
+        &mut rng,
+        Church,
+        3,
+        &[Downtown, Midtown, Residential],
+        10.0..14.0,
+        400.0,
     );
 }
 

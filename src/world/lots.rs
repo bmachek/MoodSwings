@@ -57,7 +57,21 @@ pub struct LotKit {
     ring_red: Handle<StandardMaterial>,
     ball: Handle<Mesh>,
     ball_orange: Handle<StandardMaterial>,
+    stall_post: Handle<Mesh>,
+    stall_counter: Handle<Mesh>,
+    stall_canopy: Handle<Mesh>,
+    stall_wood: Handle<StandardMaterial>,
+    /// Three awning colours, dealt round the stalls in rotation.
+    awnings: [Handle<StandardMaterial>; 3],
+    crate_box: Handle<Mesh>,
+    crate_wood: Handle<StandardMaterial>,
 }
+
+/// A market stall's proportions.
+const STALL_W: f32 = 2.6;
+const STALL_D: f32 = 1.8;
+const STALL_GAP: f32 = 1.3;
+const STALL_CANOPY_H: f32 = 2.2;
 
 /// Worn white paint, the same reasoning as the road markings: a flat white
 /// quad reads as a decal laid on the world, paint that has been parked on
@@ -118,6 +132,32 @@ pub fn build_assets(
         ball_orange: materials.add(StandardMaterial {
             base_color: Color::srgb(0.85, 0.44, 0.14),
             perceptual_roughness: 0.85,
+            ..default()
+        }),
+        stall_post: meshes.add(Cuboid::new(0.1, STALL_CANOPY_H, 0.1)),
+        stall_counter: meshes.add(Cuboid::new(STALL_W * 0.85, 0.9, STALL_D * 0.7)),
+        stall_canopy: meshes.add(Cuboid::new(STALL_W, 0.06, STALL_D)),
+        stall_wood: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.48, 0.36, 0.22),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
+        awnings: [
+            Color::srgb(0.70, 0.22, 0.18),
+            Color::srgb(0.22, 0.48, 0.28),
+            Color::srgb(0.86, 0.68, 0.20),
+        ]
+        .map(|color| {
+            materials.add(StandardMaterial {
+                base_color: color,
+                perceptual_roughness: 0.85,
+                ..default()
+            })
+        }),
+        crate_box: meshes.add(Cuboid::new(0.52, 0.4, 0.52)),
+        crate_wood: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.62, 0.50, 0.32),
+            perceptual_roughness: 0.95,
             ..default()
         }),
     }
@@ -220,7 +260,123 @@ pub fn spawn_lot(
         VacantUse::ParkingLot => spawn_parking(commands, kit, &lot.rect, chunk),
         VacantUse::GasStation => spawn_gas_station(commands, kit, signs, block, &lot.rect, chunk),
         VacantUse::Court => spawn_court(commands, kit, &lot.rect, chunk),
+        VacantUse::Market => spawn_market(commands, kit, signs, &lot.rect, chunk),
         VacantUse::Yard => {}
+    }
+}
+
+/// A market: two rows of stalls facing a central lane, an awning each, and
+/// loose crates by the counters — dynamic on purpose, because a car through
+/// a market that does not scatter crates is a missed appointment.
+fn spawn_market(commands: &mut Commands, kit: &LotKit, signs: &SignKit, rect: &Rect, chunk: IVec2) {
+    let inner = rect.inset(1.2);
+    if !inner.is_valid() {
+        return;
+    }
+    let size = inner.size();
+    let along_x = size.x >= size.y;
+    let (long, short) = if along_x {
+        (size.x, size.y)
+    } else {
+        (size.y, size.x)
+    };
+    let (along, across) = if along_x {
+        (Vec2::X, Vec2::Y)
+    } else {
+        (Vec2::Y, Vec2::X)
+    };
+    let count = (long / (STALL_W + STALL_GAP)).floor() as usize;
+    if count == 0 {
+        return;
+    }
+    let step = long / count as f32;
+    let centre = inner.center();
+    // Two rows if a lane fits between them, one down the middle otherwise.
+    let offsets: &[f32] = if short >= STALL_D * 2.0 + 3.0 {
+        &[-1.0, 1.0]
+    } else {
+        &[0.0]
+    };
+
+    for (row, &side) in offsets.iter().enumerate() {
+        let edge = centre + across * (side * (short * 0.5 - STALL_D * 0.5));
+        for i in 0..count {
+            let at = edge + along * ((i as f32 + 0.5) * step - long * 0.5);
+            // The counter, solid: the one piece of a stall you bounce off.
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(kit.stall_counter.clone()),
+                MeshMaterial3d(kit.stall_wood.clone()),
+                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + 0.45, at.y),
+                RigidBody::Static,
+                Collider::cuboid(STALL_W * 0.85, 0.9, STALL_D * 0.7),
+            ));
+            // Two posts and the awning. Visual only — the stall's body is
+            // the collider, and a canopy you clip on a hop is comedy tax.
+            for end in [-1.0f32, 1.0] {
+                let foot = at + along * (end * STALL_W * 0.45);
+                commands.spawn((
+                    ChunkOf(chunk),
+                    Mesh3d(kit.stall_post.clone()),
+                    MeshMaterial3d(kit.stall_wood.clone()),
+                    Transform::from_xyz(foot.x, SIDEWALK_HEIGHT + STALL_CANOPY_H * 0.5, foot.y),
+                ));
+            }
+            let yaw = if along_x {
+                0.0
+            } else {
+                std::f32::consts::FRAC_PI_2
+            };
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(kit.stall_canopy.clone()),
+                MeshMaterial3d(kit.awnings[(i + row * 2) % kit.awnings.len()].clone()),
+                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + STALL_CANOPY_H, at.y)
+                    .with_rotation(Quat::from_rotation_y(yaw)),
+                NotShadowCaster,
+            ));
+            // A crate or two beside the counter, loose. Every other stall
+            // keeps its stock packed away, so the ground stays walkable.
+            if i % 2 == 0 {
+                let spot = at + across * (STALL_D * 0.85) + along * (STALL_W * 0.2);
+                commands.spawn((
+                    ChunkOf(chunk),
+                    Mesh3d(kit.crate_box.clone()),
+                    MeshMaterial3d(kit.crate_wood.clone()),
+                    Transform::from_xyz(spot.x, SIDEWALK_HEIGHT + 0.2, spot.y),
+                    RigidBody::Dynamic,
+                    Collider::cuboid(0.52, 0.4, 0.52),
+                    Mass(8.0),
+                ));
+            }
+        }
+    }
+
+    // The board on its pole at the lot's centre front, over the lane.
+    let (mesh, material, board) = signs.markt();
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.hoop_post.clone()),
+        MeshMaterial3d(kit.steel.clone()),
+        Transform::from_xyz(centre.x, SIDEWALK_HEIGHT + 1.5, centre.y),
+        RigidBody::Static,
+        Collider::cylinder(0.07, 3.05),
+    ));
+    let lift = SIDEWALK_HEIGHT + 3.05 + board.y * 0.5;
+    let yaw = if along_x {
+        0.0
+    } else {
+        std::f32::consts::FRAC_PI_2
+    };
+    for flip in [0.0, std::f32::consts::PI] {
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(centre.x, lift, centre.y)
+                .with_rotation(Quat::from_rotation_y(yaw + flip)),
+            NotShadowCaster,
+        ));
     }
 }
 

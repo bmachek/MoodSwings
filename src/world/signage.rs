@@ -152,12 +152,33 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
             field: [28, 62, 136, 255],
             letter: 0.60,
         }],
+        Museum => &[Plaque {
+            title: "MUSEUM",
+            subline: Some("EINTRITT FREI, AUSGANG UNGEWISS"),
+            ink: [40, 36, 30, 255],
+            field: [200, 186, 158, 255],
+            letter: 0.68,
+        }],
+        School => &[Plaque {
+            title: "SCHULE",
+            subline: Some("BITTE LEISE HÜPFEN"),
+            ink: [250, 248, 242, 255],
+            field: [164, 88, 22, 255],
+            letter: 0.58,
+        }],
+        Church => &[Plaque {
+            title: "SANKT BOING",
+            subline: Some("TURMSPRINGEN VERBOTEN"),
+            ink: [236, 226, 206, 255],
+            field: [58, 48, 40, 255],
+            letter: 0.50,
+        }],
         Apartments | Offices => &[],
     }
 }
 
 /// Every kind that gets a board, for building the kit and for tests.
-const SIGNED: [BuildingKind; 8] = [
+const SIGNED: [BuildingKind; 11] = [
     BuildingKind::Supermarket,
     BuildingKind::Restaurant,
     BuildingKind::Hotel,
@@ -166,6 +187,9 @@ const SIGNED: [BuildingKind; 8] = [
     BuildingKind::PoliceStation,
     BuildingKind::Barracks,
     BuildingKind::ParkingGarage,
+    BuildingKind::Museum,
+    BuildingKind::School,
+    BuildingKind::Church,
 ];
 
 /// Width of one glyph cell relative to the height of its letters. The glyph
@@ -316,6 +340,70 @@ fn frontage_texture(kind: BuildingKind) -> Option<Image> {
                 [92, 100, 66, 255]
             }
         },
+        Museum => |u, v| {
+            // Pale stone, a colonnade, and one dark doorway up a band of
+            // steps. The columns are what sells "museum" at any distance.
+            if v > 0.9 {
+                // The steps, by way of three grey bands.
+                let tread = (v * 30.0).fract() < 0.5;
+                return if tread {
+                    [172, 162, 142, 255]
+                } else {
+                    [198, 188, 166, 255]
+                };
+            }
+            if (u - 0.5).abs() < 0.045 && v > 0.30 {
+                return [52, 42, 34, 255];
+            }
+            let column = ((u * 9.0).fract() - 0.5).abs() < 0.16;
+            if column && v > 0.08 {
+                let flute = ((u * 9.0).fract() - 0.5).abs() > 0.12;
+                return if flute {
+                    [186, 176, 154, 255]
+                } else {
+                    [214, 204, 182, 255]
+                };
+            }
+            if v < 0.08 {
+                return [168, 158, 138, 255];
+            }
+            [204, 192, 168, 255]
+        },
+        School => |u, v| {
+            // Warm plaster, a row of tall windows, a double door — and a
+            // band of coloured tiles at child height, because somebody let
+            // the pupils decorate and never regretted it.
+            if (u - 0.5).abs() < 0.06 && v > 0.30 {
+                return if (u - 0.5).abs() > 0.052 {
+                    [122, 74, 30, 255]
+                } else {
+                    [88, 52, 24, 255]
+                };
+            }
+            for centre in [0.14f32, 0.30, 0.70, 0.86] {
+                if (u - centre).abs() < 0.055 && (0.15..0.60).contains(&v) {
+                    let frame = (u - centre).abs() > 0.048 || v < 0.17 || v > 0.58;
+                    return if frame {
+                        [236, 230, 218, 255]
+                    } else {
+                        [64, 78, 92, 255]
+                    };
+                }
+            }
+            if (0.72..0.88).contains(&v) {
+                // The mosaic: one bright tile per hand-width, no two
+                // neighbours alike because the hash stripes them.
+                let tile = (u * 40.0) as u32;
+                let palette = [
+                    [206, 82, 60, 255u8],
+                    [232, 178, 48, 255],
+                    [82, 148, 88, 255],
+                    [70, 118, 182, 255],
+                ];
+                return palette[(tile.wrapping_mul(2654435761) >> 8) as usize % 4];
+            }
+            [226, 196, 148, 255]
+        },
         _ => return None,
     };
     Some(painted_rect(
@@ -327,11 +415,13 @@ fn frontage_texture(kind: BuildingKind) -> Option<Image> {
 }
 
 /// The kinds that paint their ground storey, for the kit and the tests.
-const FRONTED: [BuildingKind; 4] = [
+const FRONTED: [BuildingKind; 6] = [
     BuildingKind::FireStation,
     BuildingKind::TownHall,
     BuildingKind::PoliceStation,
     BuildingKind::Barracks,
+    BuildingKind::Museum,
+    BuildingKind::School,
 ];
 
 /// The filling station's board. Not a [`BuildingKind`] — a Tankstelle is a
@@ -344,6 +434,18 @@ fn tankstelle_plaque() -> Plaque {
         ink: [252, 250, 244, 255],
         field: [206, 96, 22, 255],
         letter: 0.58,
+    }
+}
+
+/// The market's board, over the stalls on a market lot. Same arrangement as
+/// the Tankstelle: a lot occupant, not a [`BuildingKind`], same kit.
+fn markt_plaque() -> Plaque {
+    Plaque {
+        title: "MARKT",
+        subline: Some("HEUTE: ALLES MUSS WEG"),
+        ink: [250, 246, 236, 255],
+        field: [44, 108, 52, 255],
+        letter: 0.60,
     }
 }
 
@@ -493,6 +595,7 @@ pub struct SignKit {
         Vec<(Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
     )>,
     tankstelle: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
+    markt: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
     /// A shared unit quad, scaled per building to its ground storey.
     strip: Handle<Mesh>,
     frontages: Vec<(BuildingKind, Handle<StandardMaterial>)>,
@@ -525,6 +628,11 @@ impl SignKit {
 
     pub fn tankstelle(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
         let (mesh, material, size) = &self.tankstelle;
+        (mesh, material, *size)
+    }
+
+    pub fn markt(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
+        let (mesh, material, size) = &self.markt;
         (mesh, material, *size)
     }
 
@@ -566,17 +674,20 @@ pub fn build_assets(
         })
         .collect();
 
-    let plaque = tankstelle_plaque();
-    let size = board_size(&plaque);
-    let tankstelle = (
-        meshes.add(Rectangle::new(size.x, size.y)),
-        materials.add(StandardMaterial {
-            base_color_texture: Some(images.add(board_texture(&plaque))),
-            perceptual_roughness: 0.72,
-            ..default()
-        }),
-        size,
-    );
+    let mut lot_board = |plaque: &Plaque| {
+        let size = board_size(plaque);
+        (
+            meshes.add(Rectangle::new(size.x, size.y)),
+            materials.add(StandardMaterial {
+                base_color_texture: Some(images.add(board_texture(plaque))),
+                perceptual_roughness: 0.72,
+                ..default()
+            }),
+            size,
+        )
+    };
+    let tankstelle = lot_board(&tankstelle_plaque());
+    let markt = lot_board(&markt_plaque());
 
     let frontages = FRONTED
         .iter()
@@ -607,6 +718,7 @@ pub fn build_assets(
     SignKit {
         boards,
         tankstelle,
+        markt,
         strip: meshes.add(Rectangle::new(1.0, 1.0)),
         frontages,
         poster: meshes.add(Rectangle::new(POSTER.x, POSTER.y)),
@@ -629,10 +741,11 @@ mod tests {
                 }
             }
         }
-        let tankstelle = tankstelle_plaque();
-        texts.push(("tankstelle", tankstelle.title.to_string()));
-        if let Some(sub) = tankstelle.subline {
-            texts.push(("tankstelle", sub.to_string()));
+        for plaque in [tankstelle_plaque(), markt_plaque()] {
+            texts.push(("lot board", plaque.title.to_string()));
+            if let Some(sub) = plaque.subline {
+                texts.push(("lot board", sub.to_string()));
+            }
         }
         for advert in &ADVERTS {
             texts.push(("advert", advert.title.to_string()));

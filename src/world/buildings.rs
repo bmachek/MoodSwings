@@ -75,6 +75,9 @@ pub struct CityAssets {
     /// One per entry in [`GROUND_BUCKETS`].
     paving: Vec<Handle<StandardMaterial>>,
     grass: Vec<Handle<StandardMaterial>>,
+    /// A four-sided unit cone — the church spire's pyramid, built once here
+    /// because chunks respawn and a mesh added per spawn would leak.
+    spire: Handle<Mesh>,
 }
 
 /// Marks which chunk an entity belongs to, so streaming can despawn it.
@@ -356,6 +359,7 @@ pub fn build_assets(
         }),
         paving,
         grass,
+        spire: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(4).build()),
     }
 }
 
@@ -379,6 +383,16 @@ impl CityAssets {
     /// The kerb concrete, for structures that are honestly made of it.
     pub fn concrete(&self) -> Handle<StandardMaterial> {
         self.kerb.clone()
+    }
+
+    /// The tarred-roof material, for anything that wants to read as roofing.
+    pub fn roof_material(&self) -> Handle<StandardMaterial> {
+        self.roof.clone()
+    }
+
+    /// The unit pyramid the church spires scale from.
+    pub fn spire(&self) -> Handle<Mesh> {
+        self.spire.clone()
     }
 
     /// The block paving tiled for a surface `extent` metres across — the
@@ -529,6 +543,15 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                     &bank.court,
                     gain::COURT,
                 ),
+                // A market sounds like a restaurant with the walls removed,
+                // which is what it is.
+                super::citygen::VacantUse::Market => emitter(
+                    commands,
+                    vacant.rect.center(),
+                    2.0,
+                    &bank.chatter,
+                    gain::CHATTER,
+                ),
                 _ => {}
             }
         }
@@ -610,6 +633,27 @@ fn spawn_building(
     // facade at all. Its whole structure comes from `world::garage`, plus
     // the sign over its mouth, and nothing else of a building's anatomy
     // applies: no shells, no roof slab, no plinth, no rooftop clutter.
+    // The church replaces its box the same way the garage does: the whole
+    // structure comes from `world::church`, plus the sign on the nave.
+    if building.kind == super::citygen::BuildingKind::Church {
+        super::church::spawn(
+            commands, assets, center, frontage, throat, height, yaw, chunk,
+        );
+        hang_sign(
+            commands,
+            ctx,
+            building,
+            variant,
+            front,
+            yaw,
+            // The board hangs on the tower, which is much narrower than the
+            // footprint — the same clamp the tower's own side length uses.
+            (frontage * 0.32).min(5.5),
+            SIDEWALK_HEIGHT + 3.9,
+            chunk,
+        );
+        return;
+    }
     if building.kind == super::citygen::BuildingKind::ParkingGarage {
         super::garage::spawn(
             commands, assets, center, frontage, throat, height, yaw, chunk,

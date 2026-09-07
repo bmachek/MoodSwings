@@ -1,6 +1,7 @@
 //! The world: procedural city, physics, streaming, and the day/night cycle.
 
 pub mod buildings;
+pub mod church;
 pub mod citygen;
 pub mod decals;
 pub mod facade;
