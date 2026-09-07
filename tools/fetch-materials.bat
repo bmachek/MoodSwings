@@ -71,6 +71,10 @@ call :fetch_sound gasp mp3 "https://cdn.freesound.org/previews/740/740310_151255
 call :fetch_sound raspberry mp3 "https://cdn.freesound.org/previews/252/252262_950925-hq.mp3"
 call :fetch_sound fart mp3 "https://cdn.freesound.org/previews/732/732936_15881540-hq.mp3"
 call :fetch_sound sorry mp3 "https://cdn.freesound.org/previews/458/458075_6492957-hq.mp3"
+rem The disgust department - mirror of the .sh: retching and gagging, for
+rem one particular gentleman rather than the taunt rotation.
+call :fetch_sound retch mp3 "https://cdn.freesound.org/previews/117/117605_2056891-hq.mp3"
+call :fetch_sound gag mp3 "https://cdn.freesound.org/previews/382/382663_4297074-hq.mp3"
 call :fetch_sound screech mp3 "https://cdn.freesound.org/previews/71/71739_995351-hq.mp3"
 call :fetch_sound murmur-0 mp3 "https://cdn.freesound.org/previews/554/554017_1433422-hq.mp3"
 call :fetch_sound murmur-1 mp3 "https://cdn.freesound.org/previews/554/554018_1433422-hq.mp3"

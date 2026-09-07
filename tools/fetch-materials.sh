@@ -131,6 +131,11 @@ SOUNDS=(
     "raspberry|https://cdn.freesound.org/previews/252/252262_950925-hq.mp3"
     "fart|https://cdn.freesound.org/previews/732/732936_15881540-hq.mp3"
     "sorry|https://cdn.freesound.org/previews/458/458075_6492957-hq.mp3"
+    # The disgust department (both CC0): mefrancis13's dry retching and
+    # bbrocer's cartoon gagging. Deliberately kept out of the taunt
+    # rotation; they belong to one particular gentleman.
+    "retch|https://cdn.freesound.org/previews/117/117605_2056891-hq.mp3"
+    "gag|https://cdn.freesound.org/previews/382/382663_4297074-hq.mp3"
     # Real tyres squealing round a real corner (audible-edge, CC0). The slip
     # tracking that kept this synthesised for so long lives in playback
     # speed, which works on a recording just as well.
