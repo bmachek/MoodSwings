@@ -3,6 +3,7 @@
 
 pub mod animal;
 pub mod archetype;
+pub mod brolly;
 pub mod captain;
 pub mod cyclist;
 pub mod figure;
@@ -26,6 +27,7 @@ impl Plugin for AiPlugin {
             cyclist::CyclistPlugin,
             animal::AnimalPlugin,
             pigeon::PigeonPlugin,
+            brolly::BrollyPlugin,
         ));
     }
 }

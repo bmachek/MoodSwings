@@ -95,6 +95,11 @@ pub mod stream {
     /// stream so that hanging a line over a lane cannot move anything standing
     /// under it.
     pub const BUNTING: u64 = 26;
+    /// Who in the crowd owns an umbrella and what colour it is. Runtime
+    /// behaviour rather than world generation — it depends on what the sky is
+    /// doing — so it takes its own stream for the reason `MAYHEM` does: a
+    /// shower must not reshuffle anything the seed decided.
+    pub const UMBRELLAS: u64 = 27;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

@@ -228,7 +228,11 @@ pub struct FigureAssets {
 /// The capsule is unchanged, so these have to fit inside it: feet on its bottom
 /// cap, head under its top. A figure that pokes out of its own collider is one
 /// that can be shot through the head without being hit.
-mod body {
+/// The figure's own dimensions, in metres from the body's origin.
+///
+/// Public because anything that hangs something *on* a figure needs them —
+/// an umbrella has to clear a head, and a head is a number that lives here.
+pub mod body {
     pub const FEET: f32 = -0.845;
     pub const HIP: f32 = -0.09;
     pub const SHOULDER: f32 = 0.34;
