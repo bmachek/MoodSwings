@@ -100,6 +100,9 @@ pub mod stream {
     /// doing — so it takes its own stream for the reason `MAYHEM` does: a
     /// shower must not reshuffle anything the seed decided.
     pub const UMBRELLAS: u64 = 27;
+    /// Which roofs have a chimney going and which gullies are steaming. Its
+    /// own stream so that lighting a fire cannot move a lamp post.
+    pub const PLUMES: u64 = 28;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

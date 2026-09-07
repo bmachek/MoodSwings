@@ -14,6 +14,7 @@ pub mod lots;
 pub mod markings;
 pub mod material;
 pub mod mayhem;
+pub mod plume;
 pub mod props;
 pub mod river;
 pub mod road;
@@ -66,6 +67,7 @@ impl Plugin for WorldPlugin {
             litter::LitterPlugin,
             worksite::WorksitePlugin,
             bunting::BuntingPlugin,
+            plume::PlumePlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
@@ -121,6 +123,7 @@ fn generate_city(
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(bunting::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(plume::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(worksite::build_assets(
         &mut meshes,
         &mut materials,

@@ -8,6 +8,7 @@
 
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use rand::RngExt;
 
 use super::City;
 use super::buildings::{ChunkOf, CityAssets, spawn_block};
@@ -175,6 +176,7 @@ pub struct StreetKits<'w> {
     rubbish: Res<'w, crate::world::litter::LitterKit>,
     works: Res<'w, crate::world::worksite::WorksiteKit>,
     lines: Res<'w, crate::world::bunting::BuntingKit>,
+    plumes: Res<'w, crate::world::plume::PlumeKit>,
 }
 
 pub fn update_streaming(
@@ -209,6 +211,7 @@ pub fn update_streaming(
         stadium: &kits.stadium,
         interior: &kits.interior,
         frontage: &kits.frontage,
+        plumes: &street.plumes,
         bank: kits.bank.as_deref(),
         cast: match (&kits.figures, &kits.faces, &kits.tempers) {
             (Some(figures), Some(faces), Some(tempers)) => {
@@ -231,6 +234,7 @@ pub fn update_streaming(
     let litter_range = config.graphics.lod_distance(crate::world::litter::RANGE);
     let works_range = config.graphics.lod_distance(crate::world::worksite::RANGE);
     let bunting_range = config.graphics.lod_distance(crate::world::bunting::RANGE);
+    let plume_range = crate::world::plume::draw_range(config.graphics.lod_scale);
     for chunk in arriving {
         // One stream per chunk and per subsystem, so a chunk's furniture is
         // identical every time it is walked back into rather than reshuffling,
@@ -344,6 +348,26 @@ pub fn update_streaming(
                     chunk,
                     works_range,
                 );
+                // Steam out of a gully, on the odd street. Its own draw rather
+                // than one inside `decals`, because a plume is geometry and the
+                // manholes are decals — they only share a hole in the ground.
+                let mut steaming = crate::core::rng::stream_for_chunk(
+                    config.world_seed,
+                    crate::core::rng::stream::PLUMES,
+                    (chunk.x, chunk.y),
+                );
+                if steaming.random_range(0.0..1.0) < 0.09 {
+                    let along = steaming.random_range(0.2..0.8);
+                    let at = from.lerp(to, along);
+                    super::plume::gully(
+                        &mut commands,
+                        &street.plumes,
+                        at,
+                        chunk,
+                        &plume_range,
+                        &mut steaming,
+                    );
+                }
                 super::bunting::spawn_edge(
                     &mut commands,
                     &street.lines,

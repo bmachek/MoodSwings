@@ -535,6 +535,7 @@ pub struct BlockContext<'a> {
     pub stadium: &'a crate::world::stadium::StadiumKit,
     pub interior: &'a crate::world::interior::InteriorKit,
     pub frontage: &'a crate::world::frontage::FrontageKit,
+    pub plumes: &'a crate::world::plume::PlumeKit,
     /// `None` only before the bank has landed — streaming simply spawns that
     /// chunk's emitters never, which resolves itself on the next re-entry.
     pub bank: Option<&'a crate::audio::bank::SoundBank>,
@@ -885,6 +886,23 @@ fn spawn_building(
         frontage,
         apron,
         chunk,
+    );
+
+    // And whether anybody has a fire going. On the roof rather than in front
+    // of the building, so it is `plume`'s business and not the frontage's, but
+    // spawned from the same place for the same reason: this is where a
+    // building's own seed, height and footprint are all in scope at once.
+    super::plume::maybe_chimney(
+        commands,
+        ctx.plumes,
+        ctx.seed,
+        building,
+        class,
+        center,
+        size,
+        yaw,
+        chunk,
+        &super::plume::draw_range(ctx.lod_scale),
     );
 
     let wall = if door_shell.is_some() {
