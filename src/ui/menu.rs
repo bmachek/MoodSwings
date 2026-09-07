@@ -465,6 +465,16 @@ fn settings_screen(
                 ui.selectable_value(&mut config.gait, gait, gait.label());
             }
         });
+    // Which city the seed builds. Unlike the gait this cannot apply live —
+    // the city is generated once at startup — so the label says so and the
+    // choice is persisted with the rest of the options for the next launch.
+    egui::ComboBox::from_label("Stadt (ab Neustart)")
+        .selected_text(config.city.label())
+        .show_ui(ui, |ui| {
+            for style in crate::core::config::CityStyle::ALL {
+                ui.selectable_value(&mut config.city, style, style.label());
+            }
+        });
 
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Steuerung").strong());

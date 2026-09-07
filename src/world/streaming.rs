@@ -205,6 +205,7 @@ pub fn update_streaming(
         },
         seed: config.world_seed,
         lod_scale: config.graphics.lod_scale,
+        style: config.city,
     };
     let foliage_range = config
         .graphics
@@ -327,7 +328,11 @@ mod tests {
     use crate::world::{City, citygen};
 
     fn index() -> (City, ChunkIndex) {
-        let city = City(citygen::generate(0xA17E_5EED, 1000.0));
+        let city = City(citygen::generate(
+            0xA17E_5EED,
+            1000.0,
+            crate::core::config::CityStyle::Generisch,
+        ));
         let index = ChunkIndex::build(&city);
         (city, index)
     }

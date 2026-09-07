@@ -29,6 +29,7 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use super::citygen::{Block, Building, District, PALETTE_SIZE, Quarter};
+use crate::core::config::CityStyle;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
 
@@ -124,6 +125,60 @@ fn palette(district: District) -> [Color; PALETTE_SIZE as usize] {
             Color::srgb(0.51, 0.49, 0.44),
         ],
         District::Park => [Color::srgb(0.30, 0.44, 0.26); PALETTE_SIZE as usize],
+    }
+}
+
+/// A style's own palette for a district, where the postcard demands one —
+/// `None` falls back to the generic city's. Only the districts a style is
+/// *about* are overridden: Landshüpf is its pastel Altstadt, New Dork its
+/// steel and brownstone, and nobody has opinions about industrial estates.
+fn style_palette(style: CityStyle, district: District) -> Option<[Color; PALETTE_SIZE as usize]> {
+    match (style, district) {
+        (CityStyle::Landshuepf, District::Residential | District::Midtown) => Some([
+            Color::srgb(0.74, 0.80, 0.62),
+            Color::srgb(0.87, 0.68, 0.64),
+            Color::srgb(0.87, 0.76, 0.52),
+            Color::srgb(0.90, 0.87, 0.78),
+        ]),
+        (CityStyle::Landshuepf, District::Downtown) => Some([
+            Color::srgb(0.85, 0.78, 0.62),
+            Color::srgb(0.80, 0.66, 0.52),
+            Color::srgb(0.88, 0.83, 0.72),
+            Color::srgb(0.76, 0.70, 0.58),
+        ]),
+        (CityStyle::NewDork, District::Downtown) => Some([
+            Color::srgb(0.34, 0.38, 0.44),
+            Color::srgb(0.28, 0.28, 0.32),
+            Color::srgb(0.46, 0.36, 0.30),
+            Color::srgb(0.24, 0.30, 0.40),
+        ]),
+        (CityStyle::NewDork, District::Residential | District::Midtown) => Some([
+            Color::srgb(0.52, 0.34, 0.26),
+            Color::srgb(0.44, 0.30, 0.26),
+            Color::srgb(0.60, 0.44, 0.34),
+            Color::srgb(0.38, 0.32, 0.30),
+        ]),
+        (CityStyle::Londoof, District::Residential | District::Midtown) => Some([
+            Color::srgb(0.56, 0.34, 0.27),
+            Color::srgb(0.63, 0.55, 0.48),
+            Color::srgb(0.74, 0.70, 0.62),
+            Color::srgb(0.42, 0.30, 0.26),
+        ]),
+        (CityStyle::Minga, District::Residential | District::Midtown) => Some([
+            Color::srgb(0.88, 0.80, 0.60),
+            Color::srgb(0.83, 0.71, 0.48),
+            Color::srgb(0.91, 0.87, 0.74),
+            Color::srgb(0.77, 0.66, 0.47),
+        ]),
+        (CityStyle::Paree, District::Downtown | District::Midtown | District::Residential) => {
+            Some([
+                Color::srgb(0.86, 0.82, 0.72),
+                Color::srgb(0.82, 0.78, 0.68),
+                Color::srgb(0.89, 0.85, 0.76),
+                Color::srgb(0.55, 0.57, 0.60),
+            ])
+        }
+        _ => None,
     }
 }
 
@@ -254,6 +309,7 @@ fn ground_bucket(extent: f32) -> usize {
 }
 
 pub fn build_assets(
+    style: CityStyle,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
@@ -289,7 +345,12 @@ pub fn build_assets(
     // what `material_for` and `quarter_index` agree on.
     let groups: Vec<([Color; PALETTE_SIZE as usize], District)> = districts
         .iter()
-        .map(|&district| (palette(district), district))
+        .map(|&district| {
+            (
+                style_palette(style, district).unwrap_or_else(|| palette(district)),
+                district,
+            )
+        })
         .chain(
             [Quarter::Italia, Quarter::Fernost]
                 .into_iter()
@@ -481,6 +542,7 @@ pub struct BlockContext<'a> {
     pub cast: Option<crate::world::interior::CastContext<'a>>,
     pub seed: u64,
     pub lod_scale: f32,
+    pub style: CityStyle,
 }
 
 pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, chunk: IVec2) {
@@ -747,10 +809,22 @@ fn spawn_building(
         return;
     }
     // The church replaces its box the same way the garage does: the whole
-    // structure comes from `world::church`, plus the sign on the nave.
-    if building.kind == super::citygen::BuildingKind::Church {
+    // structure comes from `world::church`, plus the sign on the nave. The
+    // cathedral is the same anatomy at postcard scale.
+    if matches!(
+        building.kind,
+        super::citygen::BuildingKind::Church | super::citygen::BuildingKind::Cathedral
+    ) {
         super::church::spawn(
-            commands, assets, center, frontage, throat, height, yaw, chunk,
+            commands,
+            assets,
+            center,
+            frontage,
+            throat,
+            height,
+            yaw,
+            building.kind == super::citygen::BuildingKind::Cathedral,
+            chunk,
         );
         hang_sign(
             commands,
@@ -951,7 +1025,7 @@ fn spawn_building(
         building.kind,
         BuildingKind::Apartments | BuildingKind::Offices
     ) && height >= 12.0
-        && (seed >> 27) & 0b111 < 3
+        && (seed >> 27) & 0b111 < ctx.style.advert_appetite()
     {
         let (mesh, material, poster) = ctx.signs.advert((seed >> 33) as u32);
         // The two faces perpendicular to the front are the blind ones; one

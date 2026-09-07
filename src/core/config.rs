@@ -48,6 +48,108 @@ pub struct GameConfig {
     /// options; see [`Gait`] for why both stayed in the game.
     #[serde(default)]
     pub gait: Gait,
+    /// Which city the seed builds — see [`CityStyle`]. Applied at startup,
+    /// because the city is generated once; the settings screen says so.
+    #[serde(default)]
+    pub city: CityStyle,
+}
+
+/// Which city the generator builds.
+///
+/// The roadmap's postcard list, as parody: the same grid, the same seed
+/// machinery, a different skyline and wardrobe per style. This is
+/// deliberately a *style* and not a map — the world is built of axis-aligned
+/// rectangles from the kerbs up, and a street plan that matches the real
+/// Landshut needs curved blocks the whole pipeline cannot hold yet. What a
+/// style *can* honestly deliver is what a postcard delivers: the heights,
+/// the colours, the number of spires, and the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CityStyle {
+    /// The city as it always was: nowhere in particular.
+    #[default]
+    Generisch,
+    /// Landshut. Low pastel townhouses, the Isar, and the world's tallest
+    /// brick tower with a plaque asking you not to lean on it.
+    Landshuepf,
+    /// New York. Everything is taller than it needs to be, including the
+    /// advertising.
+    NewDork,
+    /// London. Brick, more brick, and a skyline that apologises for its
+    /// one tall building.
+    Londoof,
+    /// München. Cream and ochre, more markets than strictly legal, and a
+    /// cathedral of its own. The name is what Munich already calls itself.
+    Minga,
+    /// Paris. Six storeys forever, in cream.
+    Paree,
+}
+
+impl CityStyle {
+    pub const ALL: [Self; 6] = [
+        Self::Generisch,
+        Self::Landshuepf,
+        Self::NewDork,
+        Self::Londoof,
+        Self::Minga,
+        Self::Paree,
+    ];
+
+    /// The settings label and the postcard caption. Player-facing.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Generisch => "Irgendstadt",
+            Self::Landshuepf => "Landshüpf",
+            Self::NewDork => "New Dork",
+            Self::Londoof => "Londoof",
+            Self::Minga => "Minga",
+            Self::Paree => "Paree",
+        }
+    }
+
+    /// Multiplier on every district's building-height range. This is the
+    /// single strongest lever a skyline has.
+    pub fn height_scale(self) -> f32 {
+        match self {
+            Self::Generisch => 1.0,
+            Self::Landshuepf => 0.5,
+            Self::NewDork => 1.8,
+            Self::Londoof => 0.8,
+            Self::Minga => 0.7,
+            Self::Paree => 0.75,
+        }
+    }
+
+    /// How many churches the zoning pass claims, and whether the last of
+    /// them is the cathedral — the one with the ridiculous tower.
+    pub fn churches(self) -> (usize, bool) {
+        match self {
+            Self::Generisch => (3, false),
+            // St. Martin's silhouette is the whole reason this style exists.
+            Self::Landshuepf => (5, true),
+            Self::NewDork => (1, false),
+            Self::Londoof => (3, true),
+            Self::Minga => (4, true),
+            Self::Paree => (2, true),
+        }
+    }
+
+    /// The vacant-lot roll band that becomes a market. Minga's is wide on
+    /// purpose; the Viktualienmarkt is a load-bearing cliché.
+    pub fn market_band(self) -> std::ops::Range<f32> {
+        match self {
+            Self::Minga => 0.30..0.40,
+            _ => 0.30..0.335,
+        }
+    }
+
+    /// The gable-poster roll ceiling, out of eight. New Dork wants to be
+    /// Times Square everywhere at once.
+    pub fn advert_appetite(self) -> u64 {
+        match self {
+            Self::NewDork => 6,
+            _ => 3,
+        }
+    }
 }
 
 /// Whether the city walks or bounces.
@@ -482,6 +584,7 @@ impl Default for GameConfig {
             window: WindowConfig::default(),
             character: crate::ai::archetype::Archetype::default(),
             gait: Gait::default(),
+            city: CityStyle::default(),
         }
     }
 }

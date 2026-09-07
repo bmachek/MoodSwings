@@ -14,6 +14,7 @@ use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 
 use super::roadgraph::RoadGraph;
+use crate::core::config::CityStyle;
 use crate::core::rng::{key_for, stream, stream_for};
 
 const ARTERIAL_WIDTH: f32 = 17.0;
@@ -141,6 +142,9 @@ pub enum BuildingKind {
     /// The bowl on the edge of town: pitch, stands, floodlights, and a
     /// crowd doing the wave — `world::stadium` owns the whole structure.
     Stadium,
+    /// The church, but the one the postcards are of: a style that claims a
+    /// cathedral gets exactly one, with a tower the city cannot justify.
+    Cathedral,
 }
 
 impl BuildingKind {
@@ -173,6 +177,7 @@ impl BuildingKind {
                 | BuildingKind::School
                 | BuildingKind::Church
                 | BuildingKind::Stadium
+                | BuildingKind::Cathedral
         )
     }
 }
@@ -333,15 +338,15 @@ impl CityLayout {
     }
 }
 
-pub fn generate(seed: u64, half_extent: f32) -> CityLayout {
+pub fn generate(seed: u64, half_extent: f32, style: CityStyle) -> CityLayout {
     let mut road_rng = stream_for(seed, stream::ROADS);
     let x_streets = streets(&mut road_rng, half_extent);
     let z_streets = streets(&mut road_rng, half_extent);
 
     let canal = canal_for(seed, &x_streets, &z_streets);
     let graph = build_graph(&x_streets, &z_streets, canal);
-    let mut blocks = build_blocks(seed, &x_streets, &z_streets);
-    zone_civics(seed, &mut blocks);
+    let mut blocks = build_blocks(seed, &x_streets, &z_streets, style);
+    zone_civics(seed, &mut blocks, style);
 
     CityLayout {
         seed,
@@ -490,7 +495,12 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street], canal: Option<Canal>)
     graph
 }
 
-fn build_blocks(seed: u64, x_streets: &[Street], z_streets: &[Street]) -> Vec<Block> {
+fn build_blocks(
+    seed: u64,
+    x_streets: &[Street],
+    z_streets: &[Street],
+    style: CityStyle,
+) -> Vec<Block> {
     let mut rng = stream_for(seed, stream::BLOCKS);
     let mut building_rng = stream_for(seed, stream::BUILDINGS);
     let mut blocks = Vec::new();
@@ -517,7 +527,7 @@ fn build_blocks(seed: u64, x_streets: &[Street], z_streets: &[Street]) -> Vec<Bl
             let district = district_for(area.center(), &mut rng);
             let arterial = [left.arterial, right.arterial, near.arterial, far.arterial];
             let (buildings, vacants) =
-                lay_out_buildings(seed, area, district, arterial, &mut building_rng);
+                lay_out_buildings(seed, area, district, arterial, style, &mut building_rng);
             blocks.push(Block {
                 area,
                 district,
@@ -551,6 +561,7 @@ fn lay_out_buildings(
     area: Rect,
     district: District,
     arterial: [bool; 4],
+    style: CityStyle,
     rng: &mut ChaCha8Rng,
 ) -> (Vec<Building>, Vec<VacantLot>) {
     if district == District::Park {
@@ -565,7 +576,11 @@ fn lay_out_buildings(
     let mut lots = Vec::new();
     subdivide(buildable, district.min_lot(), rng, 0, &mut lots);
 
+    // The style's one big lever: the same draws, a different skyline.
     let (min_h, max_h) = district.height_range();
+    let (min_h, max_h) = (min_h * style.height_scale(), max_h * style.height_scale());
+    let min_h = min_h.max(4.0);
+    let max_h = max_h.max(min_h + 1.0);
     let vacancy = district.vacancy();
 
     let mut buildings = Vec::new();
@@ -576,7 +591,7 @@ fn lay_out_buildings(
         if rng.random_range(0.0..1.0) < vacancy {
             vacants.push(VacantLot {
                 rect: lot,
-                purpose: vacant_purpose(seed, &lot, &buildable, arterial),
+                purpose: vacant_purpose(seed, &lot, &buildable, arterial, style),
             });
             continue;
         }
@@ -731,7 +746,13 @@ pub fn common_kind(seed: u64, footprint: &Rect, district: District) -> BuildingK
 }
 
 /// What one vacant lot is for: a pure function of (seed, lot).
-fn vacant_purpose(seed: u64, lot: &Rect, buildable: &Rect, arterial: [bool; 4]) -> VacantUse {
+fn vacant_purpose(
+    seed: u64,
+    lot: &Rect,
+    buildable: &Rect,
+    arterial: [bool; 4],
+    style: CityStyle,
+) -> VacantUse {
     let size = lot.size();
     let roll = footprint_roll(seed, lot, salt::VACANT);
 
@@ -754,7 +775,7 @@ fn vacant_purpose(seed: u64, lot: &Rect, buildable: &Rect, arterial: [bool; 4]) 
     // roll keeps meaning the same thing for the uses that already existed.
     // The band is deliberately narrow: a market you can find is a treat, a
     // market on every second block is a supermarket with weather.
-    if size.min_element() > 14.0 && (0.30..0.335).contains(&roll) {
+    if size.min_element() > 14.0 && style.market_band().contains(&roll) {
         return VacantUse::Market;
     }
     if size.min_element() > 8.0 && roll > 0.30 {
@@ -770,7 +791,7 @@ fn vacant_purpose(seed: u64, lot: &Rect, buildable: &Rect, arterial: [bool; 4]) 
 /// changes *which buildings get a new sign* and nothing else about the city.
 /// Heights are rewritten for the claimed buildings, because a fire station
 /// drawn as a 40 m slab is a fire station nobody recognises.
-fn zone_civics(seed: u64, blocks: &mut [Block]) {
+fn zone_civics(seed: u64, blocks: &mut [Block], style: CityStyle) {
     use BuildingKind::*;
     let mut rng = stream_for(seed, stream::ZONING);
 
@@ -901,20 +922,34 @@ fn zone_civics(seed: u64, blocks: &mut [Block]) {
         7.0..10.0,
         500.0,
     );
-    // Three churches, spread like the fire stations: a skyline needs its
-    // spires the way a street needs its hydrants. The height claimed here is
-    // the *presence* — `world::church` builds a lower nave and a taller
-    // tower out of it, so the box the layout stores never appears.
+    // Churches, spread like the fire stations: a skyline needs its spires
+    // the way a street needs its hydrants. How many is the style's call —
+    // Landshüpf keeps five, New Dork barely keeps one. The height claimed
+    // here is the *presence* — `world::church` builds a lower nave and a
+    // taller tower out of it, so the box the layout stores never appears.
+    let (churches, cathedral) = style.churches();
     claim(
         blocks,
         &mut claimed,
         &mut rng,
         Church,
-        3,
+        churches,
         &[Downtown, Midtown, Residential],
         10.0..14.0,
-        400.0,
+        350.0,
     );
+    if cathedral {
+        claim(
+            blocks,
+            &mut claimed,
+            &mut rng,
+            Cathedral,
+            1,
+            &[Downtown, Midtown],
+            13.0..16.0,
+            0.0,
+        );
+    }
     // One stadium, out where the land is cheap — which is where they
     // actually get built. The claimed height is only the stands' presence;
     // `world::stadium` builds tiers and floodlights out of the footprint.
@@ -976,17 +1011,27 @@ mod tests {
     use super::*;
 
     fn layout() -> CityLayout {
-        generate(0xA17E_5EED, 1000.0)
+        generate(
+            0xA17E_5EED,
+            1000.0,
+            crate::core::config::CityStyle::Generisch,
+        )
     }
 
     #[test]
     fn same_seed_rebuilds_the_same_city() {
-        assert_eq!(generate(7, 800.0).digest(), generate(7, 800.0).digest());
+        assert_eq!(
+            generate(7, 800.0, crate::core::config::CityStyle::Generisch).digest(),
+            generate(7, 800.0, crate::core::config::CityStyle::Generisch).digest()
+        );
     }
 
     #[test]
     fn different_seeds_differ() {
-        assert_ne!(generate(7, 800.0).digest(), generate(8, 800.0).digest());
+        assert_ne!(
+            generate(7, 800.0, crate::core::config::CityStyle::Generisch).digest(),
+            generate(8, 800.0, crate::core::config::CityStyle::Generisch).digest()
+        );
     }
 
     #[test]
@@ -1055,7 +1100,10 @@ mod tests {
 
     #[test]
     fn the_same_seed_zones_the_same_city() {
-        let (a, b) = (generate(7, 800.0), generate(7, 800.0));
+        let (a, b) = (
+            generate(7, 800.0, crate::core::config::CityStyle::Generisch),
+            generate(7, 800.0, crate::core::config::CityStyle::Generisch),
+        );
         let kinds = |city: &CityLayout| -> Vec<BuildingKind> {
             city.blocks
                 .iter()

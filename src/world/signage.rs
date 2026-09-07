@@ -189,12 +189,19 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
             field: [24, 40, 78, 255],
             letter: 0.62,
         }],
+        Cathedral => &[Plaque {
+            title: "KATHEDRALE ST. MARTIN",
+            subline: Some("HÖCHSTER BACKSTEINTURM DER WELT - NICHT ANLEHNEN"),
+            ink: [240, 230, 210, 255],
+            field: [96, 40, 30, 255],
+            letter: 0.48,
+        }],
         Apartments | Offices => &[],
     }
 }
 
 /// Every kind that gets a board, for building the kit and for tests.
-const SIGNED: [BuildingKind; 12] = [
+const SIGNED: [BuildingKind; 13] = [
     BuildingKind::Supermarket,
     BuildingKind::Restaurant,
     BuildingKind::Hotel,
@@ -207,6 +214,7 @@ const SIGNED: [BuildingKind; 12] = [
     BuildingKind::School,
     BuildingKind::Church,
     BuildingKind::Stadium,
+    BuildingKind::Cathedral,
 ];
 
 /// Width of one glyph cell relative to the height of its letters. The glyph

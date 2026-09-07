@@ -471,7 +471,11 @@ mod tests {
 
     #[test]
     fn a_route_crosses_the_city() {
-        let layout = crate::world::citygen::generate(0xA17E_5EED, 1000.0);
+        let layout = crate::world::citygen::generate(
+            0xA17E_5EED,
+            1000.0,
+            crate::core::config::CityStyle::Generisch,
+        );
         let city = City(layout);
         for day in 0..5 {
             let route = route(&city, 0xA17E_5EED, day);

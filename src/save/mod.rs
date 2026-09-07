@@ -25,6 +25,11 @@ pub struct SaveGame {
     pub version: u32,
     /// The city regenerates from this; nothing about it is stored.
     pub world_seed: u64,
+    /// Which style built the city this position was saved in. Recorded like
+    /// the seed — informational, not applied on load, and defaulted so older
+    /// saves keep parsing.
+    #[serde(default)]
+    pub city: crate::core::config::CityStyle,
     pub player: [f32; 3],
     pub hour: f32,
 }
@@ -66,6 +71,7 @@ pub fn write_save(
     let save = SaveGame {
         version: SAVE_VERSION,
         world_seed: config.world_seed,
+        city: config.city,
         player: transform.translation.to_array(),
         hour: clock.hours,
     };
@@ -154,6 +160,7 @@ mod tests {
         SaveGame {
             version: SAVE_VERSION,
             world_seed: 0xA17E_5EED,
+            city: crate::core::config::CityStyle::Generisch,
             player: [12.5, 1.0, -403.25],
             hour: 21.25,
         }

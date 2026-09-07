@@ -95,7 +95,7 @@ fn generate_city(
     mut wet: ResMut<weather::WetSurfaces>,
 ) {
     let started = std::time::Instant::now();
-    let layout = citygen::generate(config.world_seed, config.world.half_extent);
+    let layout = citygen::generate(config.world_seed, config.world.half_extent, config.city);
 
     info!(
         "city generated in {:.1}ms: {} blocks, {} buildings, {} intersections, {} roads",
@@ -139,6 +139,7 @@ fn generate_city(
         &mut images,
     ));
     commands.insert_resource(buildings::build_assets(
+        config.city,
         &mut meshes,
         &mut materials,
         &mut images,

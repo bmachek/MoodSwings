@@ -36,13 +36,17 @@ pub fn spawn(
     depth: f32,
     height: f32,
     yaw: f32,
+    cathedral: bool,
     chunk: IVec2,
 ) {
     let spin = Quat::from_rotation_y(yaw);
     let place = |at: Vec3| spin * at + Vec3::new(center.x, SIDEWALK_HEIGHT, center.y);
 
-    let nave_h = (height * 0.55).clamp(6.0, 10.0);
-    let tower_h = height * 1.5;
+    let nave_h = (height * 0.55).clamp(6.0, 12.0);
+    // A parish tower is one and a half claims tall. The cathedral's is not
+    // a multiple anybody signed off on — it is the tallest brick tower in
+    // the world, the plaque says so, and the skyline has to back it up.
+    let tower_h = height * if cathedral { 5.0 } else { 1.5 };
     // The zoning pass claims *large* buildings, and a church the full width
     // of a department-store lot grows a roof that swallows its own tower —
     // the pitched roof's height is tied to the nave's width by the 45°
@@ -125,16 +129,18 @@ pub fn spawn(
             .with_scale(Vec3::new(tower_side * 0.72, spire_h, tower_side * 0.72)),
     ));
 
-    // The cross: two slim bars, proud of the spire's tip.
+    // The cross: two slim bars, proud of the spire's tip — scaled up on
+    // the cathedral, where a parish cross would vanish at that altitude.
     let cross_base = tower_h + spire_h;
+    let c = if cathedral { 2.2 } else { 1.0 };
     for (at, size) in [
         (
-            Vec3::new(0.0, cross_base + 0.9, tower_z),
-            Vec3::new(0.12, 1.8, 0.12),
+            Vec3::new(0.0, cross_base + 0.9 * c, tower_z),
+            Vec3::new(0.12 * c, 1.8 * c, 0.12 * c),
         ),
         (
-            Vec3::new(0.0, cross_base + 1.15, tower_z),
-            Vec3::new(0.85, 0.12, 0.12),
+            Vec3::new(0.0, cross_base + 1.15 * c, tower_z),
+            Vec3::new(0.85 * c, 0.12 * c, 0.12 * c),
         ),
     ] {
         commands.spawn((

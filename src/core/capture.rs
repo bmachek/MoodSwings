@@ -113,6 +113,10 @@ pub struct CaptureRequest {
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
     pub drive: bool,
+    /// Builds this `CityStyle` instead of the persisted one, so a style can
+    /// be photographed without editing anybody's options file. Accepts the
+    /// enum name or the label ("--city landshuepf", "--city Landshüpf").
+    pub city: Option<crate::core::config::CityStyle>,
 }
 
 #[derive(Resource)]
@@ -193,6 +197,15 @@ pub fn parse_args() -> Option<CaptureRequest> {
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
+        city: value_of("--city").map(|name| {
+            crate::core::config::CityStyle::ALL
+                .into_iter()
+                .find(|style| {
+                    style.label().eq_ignore_ascii_case(&name)
+                        || format!("{style:?}").eq_ignore_ascii_case(&name)
+                })
+                .unwrap_or_else(|| panic!("--city {name}: no such style"))
+        }),
     })
 }
 
@@ -246,6 +259,9 @@ fn apply_capture_overrides(
     }
     config.world.start_wetness = request.wetness;
     config.world.start_cover = request.cover;
+    if let Some(city) = request.city {
+        config.city = city;
+    }
     if let Some(hour) = request.hour {
         config.world.start_hour = hour;
         // Freeze it, so the warmup frames do not drift the sky. Weather runs on

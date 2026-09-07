@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn the_canal_is_a_minor_street_and_its_edges_are_gone() {
         for seed in [0xA17E_5EED_u64, 2709413613, 7] {
-            let layout = citygen::generate(seed, 1000.0);
+            let layout = citygen::generate(seed, 1000.0, crate::core::config::CityStyle::Generisch);
             let Some(canal) = layout.canal else {
                 panic!("seed {seed:#x} dug no canal");
             };
@@ -199,7 +199,11 @@ mod tests {
     fn the_water_stops_at_every_bridge() {
         // Rebuild the segmentation the spawner uses and hold it against the
         // crossing streets: no water inside any crossing's carriageway.
-        let layout = citygen::generate(0xA17E_5EED, 1000.0);
+        let layout = citygen::generate(
+            0xA17E_5EED,
+            1000.0,
+            crate::core::config::CityStyle::Generisch,
+        );
         let canal = layout.canal.expect("this seed digs a canal");
         let crossings = if canal.along_z {
             &layout.z_streets
