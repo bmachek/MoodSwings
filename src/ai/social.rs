@@ -67,8 +67,10 @@ const GAWK_SECONDS: f32 = 2.4;
 const GAWK_CHANCE: f32 = 0.75;
 
 /// A car this close and this fast is, to a Wutbürger, a personal insult.
+/// The speed matches `CrowdConfig::scare_speed`: the traffic that worries
+/// everybody else is the traffic that outrages him.
 const RANT_RANGE: f32 = 9.0;
-const RANT_AT_SPEED: f32 = 5.0;
+const RANT_AT_SPEED: f32 = 6.0;
 /// Mood lost per second of glaring at it. Against a ragemonger recovery of
 /// 0.08 this wins easily, which is the point: traffic keeps the Wutbürger
 /// stocked with the anger the rest of the street then catches.
