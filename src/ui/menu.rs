@@ -28,6 +28,7 @@ enum MenuScreen {
     #[default]
     Root,
     SaveLoad,
+    Character,
     Settings,
     Controls,
 }
@@ -221,6 +222,7 @@ fn pause_menu_ui(
     mut status: ResMut<SaveLoadStatus>,
     caps: Res<Capabilities>,
     mut clock: ResMut<TimeOfDay>,
+    mut chosen: MessageWriter<crate::player::on_foot::CharacterChosen>,
     mut players: Query<&mut Transform, With<Player>>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
@@ -251,6 +253,7 @@ fn pause_menu_ui(
                 ui.heading(match *screen {
                     MenuScreen::Root => "Pausiert",
                     MenuScreen::SaveLoad => "Speichern & Laden",
+                    MenuScreen::Character => "Charakter",
                     MenuScreen::Settings => "Einstellungen",
                     MenuScreen::Controls => "Tastenbelegung",
                 });
@@ -275,6 +278,9 @@ fn pause_menu_ui(
                     &mut players,
                     &mut status,
                 ),
+                MenuScreen::Character => {
+                    character_screen(ui, &mut screen, &mut config, &keybindings, &mut chosen)
+                }
                 MenuScreen::Settings => {
                     settings_screen(ui, &mut screen, &mut config, &keybindings, &caps)
                 }
@@ -309,6 +315,12 @@ fn root_screen(
         *screen = MenuScreen::SaveLoad;
     }
     if ui
+        .add_sized(full_width, egui::Button::new("Charakter"))
+        .clicked()
+    {
+        *screen = MenuScreen::Character;
+    }
+    if ui
         .add_sized(full_width, egui::Button::new("Einstellungen"))
         .clicked()
     {
@@ -329,6 +341,43 @@ fn root_screen(
     {
         settings::save(config, keybindings);
         exit.write(AppExit::Success);
+    }
+}
+
+/// Who to be. One button per archetype, the current one marked; clicking
+/// re-dresses the player on the spot — the menu is a mirror — and the choice
+/// is persisted with the rest of the options on the way out.
+fn character_screen(
+    ui: &mut egui::Ui,
+    screen: &mut MenuScreen,
+    config: &mut GameConfig,
+    keybindings: &KeyBindings,
+    chosen: &mut MessageWriter<crate::player::on_foot::CharacterChosen>,
+) {
+    use crate::ai::archetype::Archetype;
+
+    let full_width = egui::Vec2::new(ui.available_width(), 30.0);
+    for archetype in Archetype::ALL {
+        let current = config.character == archetype;
+        let label = if current {
+            format!("● {}", archetype.label())
+        } else {
+            archetype.label().to_string()
+        };
+        if ui.add_sized(full_width, egui::Button::new(label)).clicked() && !current {
+            config.character = archetype;
+            chosen.write(crate::player::on_foot::CharacterChosen);
+        }
+    }
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(8.0);
+    if ui
+        .add_sized(full_width, egui::Button::new("Zurück"))
+        .clicked()
+    {
+        leave_settings_screen(screen, config, keybindings);
     }
 }
 

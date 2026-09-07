@@ -46,6 +46,10 @@ pub mod stream {
     /// the whole layout is drawn — a new civic kind must never reshuffle a
     /// single lot, height or palette that `BUILDINGS` already decided.
     pub const ZONING: u64 = 14;
+    /// Who a citizen is: the archetype draw and everything that hangs off it.
+    /// Not `PEDESTRIANS` (retuning the cast must not move where anybody
+    /// spawns) and not `MOOD` (it must not move anybody's disposition either).
+    pub const CROWD: u64 = 15;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

@@ -1,5 +1,6 @@
 //! Agents that inhabit the city: traffic, and the crowd on the pavement.
 
+pub mod archetype;
 pub mod figure;
 pub mod pedestrian;
 pub mod steering;

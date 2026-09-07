@@ -37,6 +37,7 @@ fn tuning_panel(
     mut config: ResMut<GameConfig>,
     mut weather: ResMut<Weather>,
     mut tempers: ResMut<Tempers>,
+    mut cast: ResMut<crate::ai::archetype::Cast>,
     city: Res<CityMood>,
     caps: Res<Capabilities>,
     state: Res<State<AppState>>,
@@ -96,6 +97,7 @@ fn tuning_panel(
 
             ui.separator();
             crowd_section(ui, &mut config, &crowd);
+            cast_section(ui, &mut commands, &mut cast, &crowd);
 
             ui.separator();
             mood_section(ui, &mut commands, &mut config, &mut tempers, &city, &crowd);
@@ -183,6 +185,32 @@ fn crowd_section(
     ui.add(egui::Slider::new(&mut c.scare_radius, 2.0..=40.0).text("scare m"));
     ui.add(egui::Slider::new(&mut c.separation_radius, 0.0..=3.0).text("elbow room m"));
     ui.add(egui::Slider::new(&mut c.separation_push, 0.0..=4.0).text("give way m/s"));
+}
+
+/// The cast's shares. Same caveat as the tempers: a citizen draws who they
+/// are once, at spawn, so edits apply to flummis spawned from now on and the
+/// re-roll button is how a change is actually seen.
+fn cast_section(
+    ui: &mut egui::Ui,
+    commands: &mut Commands,
+    cast: &mut crate::ai::archetype::Cast,
+    crowd: &Query<Entity, With<Pedestrian>>,
+) {
+    ui.collapsing("cast", |ui| {
+        for (archetype, share) in &mut cast.0 {
+            ui.add(egui::Slider::new(share, 0.0..=1.0).text(format!("{archetype:?}")));
+        }
+        if ui.button("re-roll the crowd").clicked() {
+            for pedestrian in crowd {
+                commands.entity(pedestrian).despawn();
+            }
+        }
+        ui.label(
+            egui::RichText::new("edits apply to flummis spawned from now on")
+                .small()
+                .weak(),
+        );
+    });
 }
 
 fn mood_section(
