@@ -40,6 +40,19 @@ const PALETTE: [(Color, f32, u32); 12] = [
     (Color::srgb(0.86, 0.44, 0.12), 0.45, 1), // orange
 ];
 
+/// Every finish a street car can be painted, in palette order.
+///
+/// Exposed so the spawner can build one material per entry at startup rather
+/// than one per car. [`street_paint`] only ever returns a row of this table, so
+/// the two and a half thousand parked cars in the city between them wear twelve
+/// finishes — and twelve materials is the difference between a street batching
+/// into a handful of draw calls and a street being one draw call per car.
+pub fn stock() -> impl Iterator<Item = (Color, f32)> {
+    PALETTE
+        .into_iter()
+        .map(|(color, metallic, _)| (color, metallic))
+}
+
 /// Picks a colour and finish for one car off the street.
 pub fn street_paint(rng: &mut ChaCha8Rng) -> (Color, f32) {
     let total: u32 = PALETTE.iter().map(|(_, _, weight)| weight).sum();

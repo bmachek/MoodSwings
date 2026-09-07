@@ -12,6 +12,7 @@
 //! the body was lofted from rather than typed in per archetype, so retuning a
 //! van's nose moves its grille with it.
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
 
@@ -317,11 +318,16 @@ const RESTRAINT: f32 = 0.15;
 const ROWS: [f32; 2] = [0.34, 0.68];
 
 /// Spawns what [`interior`] laid out.
+///
+/// `range` is how far the furniture is worth drawing — see
+/// [`spawn::cabin_range`](super::spawn::cabin_range). A seat behind tinted
+/// glass stops being a seat well before it stops being pixels.
 pub fn furnish(
     parent: &mut RelatedSpawnerCommands<ChildOf>,
     kit: &TrimKit,
     class: VehicleClass,
     spec: &VehicleSpec,
+    range: &VisibilityRange,
 ) {
     let inside = interior(class, spec);
     let Some((wheel, boxes)) = inside.split_last() else {
@@ -332,11 +338,13 @@ pub fn furnish(
             Mesh3d(kit.block.clone()),
             MeshMaterial3d(kit.upholstery.clone()),
             Transform::from_translation(fitment.at).with_scale(fitment.size),
+            range.clone(),
         ));
     }
     parent.spawn((
         Mesh3d(kit.wheel.clone()),
         MeshMaterial3d(kit.upholstery.clone()),
+        range.clone(),
         Transform::from_translation(wheel.at)
             // Laid back the way a wheel is, rather than standing upright like a
             // ship's helm. The torus is built in the XZ plane, so it starts flat
@@ -349,7 +357,8 @@ pub fn furnish(
 /// Bumpers, grille, mirrors and a tailpipe.
 ///
 /// `paint` is the car's own body colour, which the mirror shells and the boot
-/// plinth wear; everything else is shared trim.
+/// plinth wear; everything else is shared trim. `range` is how far any of it is
+/// worth drawing — see [`spawn::fittings_range`](super::spawn::fittings_range).
 pub fn fit(
     parent: &mut RelatedSpawnerCommands<ChildOf>,
     kit: &TrimKit,
@@ -357,6 +366,7 @@ pub fn fit(
     spec: &VehicleSpec,
     paint: &Handle<StandardMaterial>,
     at: Vec3,
+    range: &VisibilityRange,
 ) {
     let f = Fittings::of(class, spec);
 
@@ -365,6 +375,7 @@ pub fn fit(
             Mesh3d(kit.block.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_translation(at).with_scale(size),
+            range.clone(),
         ));
     };
 
@@ -406,6 +417,7 @@ pub fn fit(
     parent.spawn((
         Mesh3d(kit.pipe.clone()),
         MeshMaterial3d(kit.chrome.clone()),
+        range.clone(),
         Transform::from_translation(f.exhaust)
             .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
             .with_scale(Vec3::new(0.055, 0.16, 0.055)),
@@ -423,6 +435,7 @@ pub fn fit(
             Mesh3d(kit.plate.clone()),
             MeshMaterial3d(registration.clone()),
             Transform::from_xyz(0.0, f.plate_y, z).with_rotation(Quat::from_rotation_y(yaw)),
+            range.clone(),
         ));
     }
 }
