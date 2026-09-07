@@ -1,15 +1,18 @@
-//! The two metres in front of a building.
+//! What a building has hung on its face and put out in front of it.
 //!
 //! The facade is finished work — a shell with reveals, courses, a cornice and
 //! an awning over every other shopfront — and the kerb is furnished, and
 //! between the two there was nothing at all. Which is the strip a pedestrian
 //! spends the whole game looking at: a street reads as inhabited from what
-//! people have *left* on the pavement, not from what an architect drew.
+//! people have *left* on the pavement, not from what an architect drew. The
+//! wall above it has the same problem for the same reason — a facade with
+//! nothing bolted to it is a drawing of a facade.
 //!
 //! So this module is the dressing, and all of it hangs off one building's front
 //! face: the pipe down the corner, the sandwich board outside the shop, the
-//! geraniums on the sills, the bikes at the rack, and the tables the restaurant
-//! has put out. Nothing here is decided by the block or the district — a
+//! geraniums on the sills, the dish somebody screwed to the brickwork, the
+//! condenser humming under a window, the bikes at the rack, and the tables the
+//! restaurant has put out. Nothing here is decided by the block or the district — a
 //! building's frontage is a fact about that building, derived from its own
 //! footprint the way its roof is, so a chunk walked back into puts every chair
 //! back exactly where it was.
@@ -42,6 +45,8 @@ use rand_chacha::ChaCha8Rng;
 use super::buildings::{ChunkOf, SIDEWALK_HEIGHT};
 use super::citygen::{Building, BuildingKind, Rect};
 use super::mayhem::Breakaway;
+use std::f32::consts::FRAC_PI_2;
+
 use super::texture::{FacadeClass, byte, fbm, hash01, painted};
 
 /// How far the frontage's larger pieces are drawn: pipes, boards, troughs,
@@ -322,6 +327,9 @@ pub fn spawn(
     window_boxes(
         commands, kit, &face, building, class, &near, chunk, &mut rng,
     );
+    fittings(
+        commands, kit, &face, building, class, &far, &near, chunk, &mut rng,
+    );
     if class.has_shopfronts() {
         sandwich_board(commands, kit, &face, &far, chunk, &mut rng);
     }
@@ -374,6 +382,136 @@ fn downpipe(
         )),
         range.clone(),
     ));
+}
+
+/// The things screwed to the brickwork: dishes, condensers, extract ducts.
+///
+/// All of it goes on a *pier* — the strip of wall between two windows — rather
+/// than at a bay's middle, because a bay's middle is glass. The grid that says
+/// where the piers are is `FacadeClass::grid`, the same one the shell cuts its
+/// reveals from, so a dish cannot end up screwed to a window.
+///
+/// And all of it stands proud of the wall. The deepest thing on the facade is
+/// the shopfront reveal at `shell::REVEAL_SHOP`; everything here is bolted on
+/// top of a plane, so nothing has to know about that.
+#[allow(clippy::too_many_arguments)]
+fn fittings(
+    commands: &mut Commands,
+    kit: &FrontageKit,
+    face: &Face,
+    building: &Building,
+    class: FacadeClass,
+    far: &VisibilityRange,
+    near: &VisibilityRange,
+    chunk: IVec2,
+    rng: &mut ChaCha8Rng,
+) {
+    let (columns, rows) = class.grid();
+    // A house has two storeys and three bays; there is no pier on it worth
+    // screwing anything to, and nobody puts a satellite dish on a cottage's
+    // front elevation anyway. A tower is a curtain wall and has no pier at all.
+    if columns < 4.0 || rows < 3.0 {
+        return;
+    }
+    let storey = building.height / rows;
+    let bay = face.frontage / columns;
+    let pier = |column: u32| column as f32 * bay - face.frontage * 0.5;
+
+    // The dish. One per building at most, and not on most of them: a street
+    // where every flat has one is a street from a photograph of 1998, and a
+    // street with three on it is a street.
+    if rng.random_range(0.0..1.0) < 0.30 {
+        let column = rng.random_range(1..columns as u32);
+        // Upper storeys only — the ground floor is a shopfront and the first
+        // one is where the pole would be in the way of the awning.
+        let row = rng.random_range(2..rows as u32);
+        let at = face.at(pier(column), 0.10);
+        let y = SIDEWALK_HEIGHT + (row as f32 + 0.55) * storey;
+        let yaw = face.facing();
+
+        // The arm out of the wall.
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.pipe.clone()),
+            MeshMaterial3d(kit.steel.clone()),
+            Transform::from_xyz(at.x, y, at.y)
+                .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(FRAC_PI_2))
+                .with_scale(Vec3::new(0.022, 0.34, 0.022)),
+            far.clone(),
+        ));
+        // And the dish on the end of it, tipped up at the sky. A shallow dome
+        // rather than a paraboloid: at the distance a first-floor dish is ever
+        // seen from, the difference is which way it is pointing, and that it
+        // is pointing the same way as every other one in the street.
+        let bowl = face.at(pier(column), 0.36);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.lump.clone()),
+            MeshMaterial3d(kit.linen.clone()),
+            Transform::from_xyz(bowl.x, y + 0.06, bowl.y)
+                .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-0.55))
+                .with_scale(Vec3::new(0.30, 0.085, 0.30)),
+            far.clone(),
+        ));
+    }
+
+    // Condensers, under windows on the piers. These go in twos and threes on a
+    // building that has any, because whoever fitted the first one told the
+    // neighbours who did it.
+    if rng.random_range(0.0..1.0) < 0.22 {
+        let column = rng.random_range(1..columns as u32);
+        for row in 1..(rows as u32).min(5) {
+            if rng.random_range(0.0..1.0) > 0.55 {
+                continue;
+            }
+            let at = face.at(pier(column), 0.19);
+            let y = SIDEWALK_HEIGHT + (row as f32 + 0.22) * storey;
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(kit.cube.clone()),
+                MeshMaterial3d(kit.zinc.clone()),
+                Transform::from_xyz(at.x, y, at.y)
+                    .with_rotation(Quat::from_rotation_y(face.facing()))
+                    .with_scale(Vec3::new(0.62, 0.44, 0.34)),
+                near.clone(),
+            ));
+        }
+    }
+
+    // A kitchen extract, low on the wall beside the door. Only where there is a
+    // kitchen — this is the one fitting that says what the building is for.
+    if matches!(
+        building.kind,
+        BuildingKind::Restaurant | BuildingKind::Supermarket
+    ) {
+        let column = if rng.random_range(0.0..1.0) < 0.5 {
+            1
+        } else {
+            columns as u32 - 1
+        };
+        let at = face.at(pier(column), 0.13);
+        let y = SIDEWALK_HEIGHT + 2.35;
+        // The duct: a box on the wall with a stub of pipe elbowing out of it,
+        // which between them are the whole of what a passer-by ever sees of a
+        // ventilation system and the reason a back street smells of chips.
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.steel.clone()),
+            Transform::from_xyz(at.x, y, at.y)
+                .with_rotation(Quat::from_rotation_y(face.facing()))
+                .with_scale(Vec3::new(0.52, 0.52, 0.26)),
+            far.clone(),
+        ));
+        let mouth = face.at(pier(column), 0.34);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.pipe.clone()),
+            MeshMaterial3d(kit.zinc.clone()),
+            Transform::from_xyz(mouth.x, y + 0.30, mouth.y).with_scale(Vec3::new(0.13, 0.42, 0.13)),
+            near.clone(),
+        ));
+    }
 }
 
 /// Geraniums on the sills.

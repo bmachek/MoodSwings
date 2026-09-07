@@ -37,7 +37,7 @@ use rand_chacha::ChaCha8Rng;
 
 use super::buildings::ChunkOf;
 use super::roadgraph::RoadEdge;
-use super::texture::{byte, fbm, painted, smoothstep01};
+use super::texture::{byte, fbm, hash01, painted, smoothstep01};
 
 /// The material a decal is drawn with: an ordinary [`StandardMaterial`] plus
 /// the extension that does the projection.
@@ -81,6 +81,15 @@ const MANHOLE_SIZE: f32 = 0.72;
 const GULLY_SIZE: Vec2 = Vec2::new(0.50, 0.86);
 /// How far in from the kerb face the grating sits.
 const GULLY_INSET: f32 = 0.26;
+/// Marks on the *footway*, per hundred metres of kerb, per side.
+///
+/// Far fewer than the carriageway gets, and the reason is not restraint but
+/// arithmetic: these are blended quads that have to be sorted against every
+/// other one, and the road already lays thirteen per hundred metres. What a
+/// pavement needs is not density anyway — one drift of leaves against a wall
+/// says more than twenty stains evenly spread.
+const FOOTWAY: f32 = 4.0;
+
 /// How far back from a junction a car leaves its rubber, in metres.
 const SKID_LENGTH: f32 = 7.5;
 /// Half the gap between the two tracks of one car, in metres.
@@ -119,6 +128,12 @@ pub struct WearKit {
     oil: Handle<Decal>,
     crack: Handle<Decal>,
     skid: Handle<Decal>,
+    /// The footway's own four: chewing gum, a drift of leaves, a hopscotch
+    /// somebody chalked, and the damp under a downpipe.
+    gum: Handle<Decal>,
+    leaves: Handle<Decal>,
+    chalk: Handle<Decal>,
+    damp: Handle<Decal>,
 }
 
 /// Fades an image out at its own edge, so the projection has something
@@ -318,7 +333,131 @@ pub fn build_assets(images: &mut Assets<Image>, decals: &mut Assets<Decal>) -> W
         oil: decals.add(material(images, oil(), 0.45, 0.0)),
         crack: decals.add(material(images, crack(), 0.95, 0.0)),
         skid: decals.add(material(images, skid(), 0.58, 0.0)),
+        // Gum goes grey and flat within a week and stays for a decade.
+        gum: decals.add(material(images, gum(), 0.88, 0.0)),
+        leaves: decals.add(material(images, leaves(), 0.90, 0.0)),
+        // Chalk is the one thing here that is *brighter* than what it is on.
+        chalk: decals.add(material(images, chalk(), 0.97, 0.0)),
+        // Damp paving is the glossiest thing on a dry street, which is the
+        // whole reason it reads as damp.
+        damp: decals.add(material(images, damp(), 0.30, 0.0)),
     }
+}
+
+/// Chewing gum: a constellation of flattened grey discs.
+///
+/// Always a scatter and never one. Gum arrives one piece at a time over years
+/// and the pattern of it — dense where people queue, absent where they walk —
+/// is the only reason anybody would notice it at all.
+fn gum() -> Image {
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        // Eleven discs at hashed positions, each a few centimetres across on a
+        // patch a metre wide.
+        let mut mark = 0.0f32;
+        for i in 0..11u32 {
+            let cx = hash01(i, 1, 0x51ab);
+            let cy = hash01(i, 2, 0x7c03);
+            let r = 0.030 + hash01(i, 3, 0x2d19) * 0.022;
+            let d = Vec2::new(u - cx, v - cy).length();
+            mark = mark.max(smoothstep01((r - d) / 0.012));
+        }
+        // Trodden-in and *dark*. Fresh gum is white and a fortnight later it
+        // is the colour of the paving — which is exactly the trouble: painted
+        // at the value real gum ends up, it is a blended quad nobody can see
+        // and the pavement is paying for it anyway. So it is painted at the
+        // value of the ring of grime around a piece rather than the piece.
+        let value = 0.105 + fbm(u, v, 30, 3, 0x66) * 0.05;
+        let c = byte(value);
+        [c, c, byte(value * 1.04), byte(mark * 0.88 * margin(u, v))]
+    })
+}
+
+/// A drift of leaves, blown into a corner and left there.
+fn leaves() -> Image {
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        // Overlapping ovals at hashed angles. A leaf is not a shape worth
+        // drawing at this size; a *heap* of them is, and a heap is ovals.
+        let mut cover = 0.0f32;
+        let mut tint = 0.0f32;
+        for i in 0..26u32 {
+            let cx = hash01(i, 4, 0x1f7b);
+            let cy = hash01(i, 5, 0x9ee1);
+            let angle = hash01(i, 6, 0x3ab5) * std::f32::consts::TAU;
+            let (s, c) = angle.sin_cos();
+            let (dx, dy) = (u - cx, v - cy);
+            // Into the leaf's own frame, then squashed the long way.
+            let (lx, ly) = (dx * c + dy * s, (-dx * s + dy * c) * 2.4);
+            let d = Vec2::new(lx, ly).length();
+            let leaf = smoothstep01((0.055 - d) / 0.02);
+            if leaf > cover {
+                cover = leaf;
+                tint = hash01(i, 7, 0x4c2d);
+            }
+        }
+        // Autumn is a range, not a colour: ochre through to a dark brown, per
+        // leaf rather than per drift.
+        let value = 0.20 + tint * 0.24;
+        [
+            byte(value * 1.55),
+            byte(value * 1.05),
+            byte(value * 0.42),
+            byte(cover * 0.9 * margin(u, v)),
+        ]
+    })
+}
+
+/// A hopscotch, chalked on the paving.
+///
+/// Eight squares in the pattern everybody draws: singles, then a pair, then
+/// singles, then a pair. No numbers in them — a chalk numeral at this texel
+/// count is a smudge, and the grid alone is unmistakable to anybody who was
+/// ever eight.
+fn chalk() -> Image {
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        // Six rows up the image; the second and fifth are the pairs.
+        let rows = 6.0;
+        let row = (v * rows).floor();
+        let paired = row == 1.0 || row == 4.0;
+        let within_v = (v * rows).fract();
+
+        // A stroke is the near edge of a cell in either direction.
+        let line = |x: f32, at: f32, width: f32| smoothstep01((width - (x - at).abs()) / 0.008);
+        // The two long sides, and the middle bar on a paired row.
+        let (left, right) = (0.22f32, 0.78f32);
+        let mut ink = line(u, left, 0.012).max(line(u, right, 0.012));
+        if paired {
+            ink = ink.max(line(u, 0.5, 0.012));
+        }
+        // Clipped to the width of the grid, and the rungs across it.
+        ink *= smoothstep01((u - left + 0.03) / 0.02) * smoothstep01((right + 0.03 - u) / 0.02);
+        let rung = line(within_v, 0.0, 0.012).max(line(within_v, 1.0, 0.012))
+            * smoothstep01((u - left) / 0.02)
+            * smoothstep01((right - u) / 0.02);
+        ink = ink.max(rung);
+
+        // Chalk skips over paving the way it skips over slate, and it has been
+        // rained on since.
+        let worn = smoothstep01((fbm(u, v, 14, 3, 0x8d) - 0.30) / 0.25);
+        [255, 255, 250, byte(ink * worn * 0.78 * margin(u, v))]
+    })
+}
+
+/// The damp under a downpipe, and the algae in it.
+fn damp() -> Image {
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let body = spill(u, v, 0x2f, 0.34);
+        let core = spill(u, v, 0x2f, 0.62);
+        // Darker and *greener* than the paving. Damp on stone is not a grey
+        // stain, it is the beginnings of a garden — and the green is what
+        // carries it, because the darkness alone reads as a shadow.
+        let value = 0.075 + (1.0 - core) * 0.04;
+        [
+            byte(value * 0.70),
+            byte(value * 1.28),
+            byte(value * 0.62),
+            byte(body * 0.82),
+        ]
+    })
 }
 
 /// Yaw that lays a decal's local +Z along an XZ direction.
@@ -340,6 +479,11 @@ struct Mark<'a> {
     at: Vec2,
     size: Vec2,
     yaw: f32,
+    /// The surface this is lying on, before the decal's own float. Nought for
+    /// the carriageway and the kerb's height for the footway — a decal finds
+    /// the surface under it within [`REACH`], and a mark meant for a pavement
+    /// hung at road level is a mark thirty centimetres too low to find one.
+    on: f32,
 }
 
 fn lay(commands: &mut Commands, mark: Mark, chunk: IVec2, draw: f32) {
@@ -347,7 +491,7 @@ fn lay(commands: &mut Commands, mark: Mark, chunk: IVec2, draw: f32) {
         ChunkOf(chunk),
         ForwardDecal,
         MeshMaterial3d(mark.material.clone()),
-        Transform::from_xyz(mark.at.x, FLOAT, mark.at.y)
+        Transform::from_xyz(mark.at.x, mark.on + FLOAT, mark.at.y)
             .with_rotation(Quat::from_rotation_y(mark.yaw))
             .with_scale(Vec3::new(mark.size.x, 1.0, mark.size.y)),
         VisibilityRange {
@@ -389,6 +533,7 @@ pub fn spawn_edge(
                 at: from + *direction * down + side,
                 size: Vec2::splat(MANHOLE_SIZE),
                 yaw: yaw + rng.random_range(-0.4..0.4),
+                on: 0.0,
             },
             chunk,
             draw,
@@ -410,6 +555,7 @@ pub fn spawn_edge(
                         + across * (side * (edge.width * 0.5 - GULLY_INSET)),
                     size: GULLY_SIZE,
                     yaw,
+                    on: 0.0,
                 },
                 chunk,
                 draw,
@@ -436,6 +582,7 @@ pub fn spawn_edge(
                     at,
                     size: Vec2::new(rng.random_range(1.3..3.4), rng.random_range(1.1..2.6)),
                     yaw: yaw + rng.random_range(-0.1..0.1),
+                    on: 0.0,
                 },
                 chunk,
                 draw,
@@ -447,6 +594,7 @@ pub fn spawn_edge(
                     at,
                     size: Vec2::new(rng.random_range(0.7..1.5), rng.random_range(1.8..4.0)),
                     yaw: yaw + rng.random_range(-0.5..0.5),
+                    on: 0.0,
                 },
                 chunk,
                 draw,
@@ -458,10 +606,114 @@ pub fn spawn_edge(
                     at,
                     size: Vec2::splat(rng.random_range(0.5..1.3)),
                     yaw: turn,
+                    on: 0.0,
                 },
                 chunk,
                 draw,
             ),
+        }
+    }
+}
+
+/// Everything that happens to a pavement, which is not what happens to a road.
+///
+/// Its own pass rather than a branch inside [`spawn_edge`], because the two
+/// surfaces have nothing in common: a footway is thirty centimetres higher, so
+/// every mark has to be laid on the kerb rather than the carriageway, and
+/// nothing that marks a road marks a pavement. There are no tyres up here.
+#[expect(clippy::too_many_arguments, reason = "the other per-street spawners")]
+pub fn spawn_footway(
+    commands: &mut Commands,
+    kit: &WearKit,
+    rng: &mut ChaCha8Rng,
+    edge: &RoadEdge,
+    from: Vec2,
+    to: Vec2,
+    chunk: IVec2,
+    draw: f32,
+) {
+    let Ok(direction) = Dir2::new(to - from) else {
+        return;
+    };
+    let across = Vec2::new(-direction.y, direction.x);
+    let on = crate::world::buildings::SIDEWALK_HEIGHT;
+
+    let marks = spaced(edge.length * FOOTWAY, 100.0);
+    for _ in 0..marks {
+        for side in [-1.0f32, 1.0] {
+            // Somewhere on the footway: past the kerb face, short of the
+            // building line.
+            let out = edge.width * 0.5 + rng.random_range(0.35..2.9);
+            let at = from + *direction * rng.random_range(0.0..edge.length) + across * (out * side);
+            let turn = rng.random_range(0.0..std::f32::consts::TAU);
+
+            match rng.random_range(0.0..1.0) {
+                // Gum, and lots of it. It is the single most common mark on
+                // any pavement anywhere and the one nobody ever draws.
+                r if r < 0.26 => lay(
+                    commands,
+                    Mark {
+                        material: &kit.gum,
+                        at,
+                        size: Vec2::splat(rng.random_range(0.55..1.25)),
+                        yaw: turn,
+                        on,
+                    },
+                    chunk,
+                    draw,
+                ),
+                // Leaves, gathered against something rather than in the open.
+                r if r < 0.66 => {
+                    let corner = from
+                        + *direction * rng.random_range(0.0..edge.length)
+                        + across * ((edge.width * 0.5 + 2.75) * side);
+                    lay(
+                        commands,
+                        Mark {
+                            material: &kit.leaves,
+                            at: corner,
+                            size: Vec2::new(rng.random_range(1.1..2.4), rng.random_range(0.7..1.4)),
+                            yaw: turn,
+                            on,
+                        },
+                        chunk,
+                        draw,
+                    );
+                }
+                // Damp, which belongs at the foot of a wall where the pipe is.
+                r if r < 0.86 => {
+                    let foot = from
+                        + *direction * rng.random_range(0.0..edge.length)
+                        + across * ((edge.width * 0.5 + 2.9) * side);
+                    lay(
+                        commands,
+                        Mark {
+                            material: &kit.damp,
+                            at: foot,
+                            size: Vec2::splat(rng.random_range(0.7..1.5)),
+                            yaw: turn,
+                            on,
+                        },
+                        chunk,
+                        draw,
+                    );
+                }
+                // And, rarely, somebody's hopscotch. Laid along the pavement
+                // rather than at a random angle: it is the one mark up here
+                // that was drawn on purpose, by somebody standing on it.
+                _ => lay(
+                    commands,
+                    Mark {
+                        material: &kit.chalk,
+                        at,
+                        size: Vec2::new(0.85, 2.3),
+                        yaw: along(*direction) + rng.random_range(-0.15..0.15),
+                        on,
+                    },
+                    chunk,
+                    draw,
+                ),
+            }
         }
     }
 }
@@ -502,6 +754,7 @@ pub fn spawn_junction(
                         at: centre + offset + right * track,
                         size: Vec2::new(0.55, SKID_LENGTH),
                         yaw,
+                        on: 0.0,
                     },
                     chunk,
                     draw,
@@ -518,6 +771,7 @@ pub fn spawn_junction(
                     at: at + *direction * (width * 0.75) + lane * (width * 0.24),
                     size: Vec2::splat(rng.random_range(0.6..1.4)),
                     yaw: rng.random_range(0.0..std::f32::consts::TAU),
+                    on: 0.0,
                 },
                 chunk,
                 draw,

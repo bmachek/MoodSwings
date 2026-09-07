@@ -314,6 +314,16 @@ pub fn update_streaming(
                     chunk,
                     wear_range,
                 );
+                super::decals::spawn_footway(
+                    &mut commands,
+                    &street.wear,
+                    &mut wearing,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    wear_range,
+                );
                 super::litter::spawn_edge(
                     &mut commands,
                     &street.rubbish,
