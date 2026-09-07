@@ -490,6 +490,12 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
         if park {
             emitter(commands, center, 4.0, &bank.birdsong, gain::PARK_BIRDS);
         }
+        // An industrial block hums as a block: the drone belongs to the
+        // district, not to any one shed, so one emitter at the centre reads
+        // as "this whole street works for a living".
+        if block.district == District::Industrial {
+            emitter(commands, center, 3.0, &bank.industry, gain::INDUSTRY);
+        }
         for building in &block.buildings {
             if building.kind == super::citygen::BuildingKind::Restaurant {
                 emitter(
@@ -502,14 +508,24 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
             }
         }
         for vacant in &block.vacants {
-            if vacant.purpose == super::citygen::VacantUse::GasStation {
-                emitter(
+            match vacant.purpose {
+                super::citygen::VacantUse::GasStation => emitter(
                     commands,
                     vacant.rect.center(),
                     2.5,
                     &bank.forecourt,
                     gain::FORECOURT,
-                );
+                ),
+                // Ball height, roughly: the dribble should come off the
+                // tarmac, not hover over the fence.
+                super::citygen::VacantUse::Court => emitter(
+                    commands,
+                    vacant.rect.center(),
+                    1.2,
+                    &bank.court,
+                    gain::COURT,
+                ),
+                _ => {}
             }
         }
     }

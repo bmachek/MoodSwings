@@ -35,10 +35,12 @@ use crate::player::on_foot::Player;
 
 /// How many flummis may be speaking at once.
 const CHOIR: usize = 8;
-/// How far a voice carries.
-const EARSHOT: f32 = 24.0;
+/// How far a voice carries. Trimmed alongside the sfx `hush` rework: a voice
+/// is funny when its owner is on screen, and a street of half-heard opinions
+/// from around the corner was a large part of the wall-of-sound problem.
+const EARSHOT: f32 = 18.0;
 /// And how far away a flummi has to be before it is not worth considering.
-const RANGE: f32 = 34.0;
+const RANGE: f32 = 26.0;
 const GAIN: f32 = 0.7;
 
 /// Mood either side of which nobody has anything to say.
@@ -151,7 +153,7 @@ fn voice_for(bank: &SoundBank, utterance: Utterance, take: usize) -> Handle<Synt
     let take = take % VARIANTS;
     match utterance {
         Utterance::Whistle => bank.whistle[take].clone(),
-        Utterance::Giggle => bank.giggle.clone(),
+        Utterance::Giggle => bank.giggle[take].clone(),
         Utterance::Grumble => bank.grumble[take].clone(),
         Utterance::Curse => bank.curse[take].clone(),
         Utterance::Murmur => bank.murmur[take].clone(),

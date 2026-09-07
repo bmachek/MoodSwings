@@ -101,28 +101,42 @@ SOUNDS=(
     "spray|https://opengameart.org/sites/default/files/park_ambience_river.wav"
     "uproar|https://opengameart.org/sites/default/files/crowd_shouting_0.ogg"
     # The cheer, whistled by actual people (all CC0): elle-trudgett's
-    # innocent whistle, elijahgoodson's tune, Willygoat's calm one. Three
-    # takes because one whistle repeated is a doorbell — see `audio::bank`.
+    # innocent whistle, elijahgoodson's tune, Willygoat's calm one — then
+    # Reitanna's little melody and OwlStorm's wolf whistle when three takes
+    # turned out to still be a doorbell across a whole street. See
+    # `audio::bank::VARIANTS` for why five.
     "whistle-0|https://cdn.freesound.org/previews/146/146887_197046-hq.mp3"
     "whistle-1|https://cdn.freesound.org/previews/411/411578_7994683-hq.mp3"
     "whistle-2|https://cdn.freesound.org/previews/411/411062_7963328-hq.mp3"
+    "whistle-3|https://cdn.freesound.org/previews/242/242678_950925-hq.mp3"
+    "whistle-4|https://cdn.freesound.org/previews/320/320150_140737-hq.mp3"
     # An actual ACME swanee whistle sliding up (v0idation, CC0), for the arc
     # through the air; and a jaw-harp twang (magnuswaker, CC0) for a street
     # prop leaving its bolts.
     "wheee|https://cdn.freesound.org/previews/497/497092_942821-hq.mp3"
     "sproing|https://cdn.freesound.org/previews/540/540790_11537497-hq.mp3"
     # The voices, by actual people, all CC0 and all wordless — which was the
-    # line that let recordings in here at all. Reitanna's giggle and her
-    # three flavours of frustrated groan carry the grumbles; the curses are
-    # angry grunts from Rocotilos, lipalearning and ssierra1202; the gasp is
-    # kanyonwyvern's. Playback still pitches every take per speaker.
-    "giggle|https://cdn.freesound.org/previews/323/323702_950925-hq.mp3"
+    # line that let recordings in here at all. Reitanna carries the giggles
+    # (five takes from her enormous CC0 vocal library) and the grumbles (her
+    # groans, from crescendo to mnah); the curses are angry grunts from
+    # Rocotilos, lipalearning, ssierra1202, WakuWakuWakuWaku and punisherman;
+    # the gasp is kanyonwyvern's. Playback still pitches every take per
+    # speaker.
+    "giggle-0|https://cdn.freesound.org/previews/323/323702_950925-hq.mp3"
+    "giggle-1|https://cdn.freesound.org/previews/351/351170_950925-hq.mp3"
+    "giggle-2|https://cdn.freesound.org/previews/343/343991_950925-hq.mp3"
+    "giggle-3|https://cdn.freesound.org/previews/235/235165_950925-hq.mp3"
+    "giggle-4|https://cdn.freesound.org/previews/252/252218_950925-hq.mp3"
     "grumble-0|https://cdn.freesound.org/previews/351/351163_950925-hq.mp3"
     "grumble-1|https://cdn.freesound.org/previews/343/343929_950925-hq.mp3"
     "grumble-2|https://cdn.freesound.org/previews/351/351157_950925-hq.mp3"
+    "grumble-3|https://cdn.freesound.org/previews/343/343899_950925-hq.mp3"
+    "grumble-4|https://cdn.freesound.org/previews/242/242620_950925-hq.mp3"
     "curse-0|https://cdn.freesound.org/previews/341/341489_1400623-hq.mp3"
     "curse-1|https://cdn.freesound.org/previews/427/427972_4687265-hq.mp3"
     "curse-2|https://cdn.freesound.org/previews/391/391939_6450069-hq.mp3"
+    "curse-3|https://cdn.freesound.org/previews/422/422966_6366356-hq.mp3"
+    "curse-4|https://cdn.freesound.org/previews/370/370036_4608521-hq.mp3"
     "gasp|https://cdn.freesound.org/previews/740/740310_15125504-hq.mp3"
     # The last of the taunt rotation to be recorded: Reitanna's tongue
     # raspberry and one of Blubberfreak's many farts. The sorry is
@@ -141,13 +155,19 @@ SOUNDS=(
     # speed, which works on a recording just as well.
     "screech|https://cdn.freesound.org/previews/71/71739_995351-hq.mp3"
     # Small talk for the indifferent middle of the mood scale: dodrio's
-    # wordless dialogue mumbles, three takes.
+    # wordless dialogue mumbles — the whole five-take series.
     "murmur-0|https://cdn.freesound.org/previews/554/554017_1433422-hq.mp3"
     "murmur-1|https://cdn.freesound.org/previews/554/554018_1433422-hq.mp3"
     "murmur-2|https://cdn.freesound.org/previews/554/554020_1433422-hq.mp3"
-    # Zone ambience: mycompasstv's restaurant chatter, hung on restaurant
-    # frontages by the streaming emitters.
+    "murmur-3|https://cdn.freesound.org/previews/554/554019_1433422-hq.mp3"
+    "murmur-4|https://cdn.freesound.org/previews/554/554023_1433422-hq.mp3"
+    # Zone ambience: mycompasstv's restaurant chatter on the frontages,
+    # kyles's basketball dribbled on real tarmac for the street-sports cages,
+    # fimrod's warehouse drone over the industrial blocks — all hung on the
+    # streaming emitters.
     "chatter|https://cdn.freesound.org/previews/474/474740_3902754-hq.mp3"
+    "court|https://cdn.freesound.org/previews/453/453757_612689-hq.mp3"
+    "industry|https://cdn.freesound.org/previews/278/278987_5322055-hq.mp3"
     # The animals: kwahmah_02's single dog bark and skymary's short cat
     # meow, one take each, pitched per animal like the crowd's voices.
     "bark|https://cdn.freesound.org/previews/277/277058_4486188-hq.mp3"
