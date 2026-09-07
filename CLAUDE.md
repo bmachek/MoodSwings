@@ -46,8 +46,16 @@ rather than against a memory of it: shoot the same framings before and after.
 Pin `--hour` on any shot being compared — the clock and the weather run together,
 so an unpinned shot drifts its own sky between runs. `--city` builds a given
 `CityStyle` instead of the persisted one, which is the only way to shoot a
-postcard the player has not selected. `--fps-log` reports median, p95 and worst
-frame time. Full flag table is in README.md.
+postcard the player has not selected. Full flag table is in README.md.
+
+`--fps-log` reports median, p95 and worst frame time — over the *warmup* frames,
+and the default warmup is short enough that it is timing a half-built scene.
+Always pass `--frames 200` for a number worth quoting: the same street framing
+reads about 19ms over the default window and about 28ms once everything is
+resident and the crowd is up. Mixing the two windows has produced two false
+readings already — a "free" change and a "2ms regression" that were both noise —
+so compare like with like, and rerun two or three times, because the spread over
+a settled window is under half a millisecond and over the default one is not.
 
 The seed a capture builds is the *persisted* one from the player's options file,
 not the code default — so a position probed in a citygen unit test is a position
