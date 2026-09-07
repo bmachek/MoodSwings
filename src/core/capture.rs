@@ -77,6 +77,15 @@ pub struct CaptureRequest {
     /// Lines one of every archetype up down the street and shoots the row.
     /// The only way to compare bodywork without hunting the city for a pickup.
     pub showroom: bool,
+    /// Stands one of every archetype in a row, the cast's answer to
+    /// `--showroom`.
+    ///
+    /// The rare archetypes are the ones whose costume goes wrong, and they
+    /// are exactly the ones a street framing cannot be relied on to contain:
+    /// a wheelchair is four hundredths of the draw, so "shoot a street and
+    /// hope" is not a check. This puts the whole cast on one pavement,
+    /// standing still, in draw order.
+    pub lineup: bool,
     /// Soaks the ground, 0 to 1.
     pub wetness: f32,
     /// Puts this much cloud over the city, 0 to 1. Above about seven tenths it
@@ -167,6 +176,7 @@ pub fn parse_args() -> Option<CaptureRequest> {
         at_car: args.iter().any(|a| a == "--at-car"),
         geyser: args.iter().any(|a| a == "--geyser"),
         showroom: args.iter().any(|a| a == "--showroom"),
+        lineup: args.iter().any(|a| a == "--lineup"),
         wetness: value_of("--wet")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
@@ -209,7 +219,10 @@ impl Plugin for CapturePlugin {
             })
             .add_systems(PreStartup, apply_capture_overrides)
             .add_systems(PostStartup, retarget_camera_offscreen)
-            .add_systems(Update, (pose_at_car, stage_geyser, line_up_showroom))
+            .add_systems(
+                Update,
+                (pose_at_car, stage_geyser, line_up_showroom, line_up_cast),
+            )
             .add_systems(
                 FixedUpdate,
                 autodrive.before(crate::vehicle::controller::drive_vehicles),
@@ -612,6 +625,80 @@ fn line_up_showroom(
     for (mut transform, mut rig) in &mut cameras {
         rig.mode = CameraMode::Free;
         *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.4, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
+    }
+    *done = true;
+}
+
+/// Stands one of every archetype in a row and points the camera down it.
+///
+/// The cast's `--showroom`. Deliberately *not* the pedestrian spawner: these
+/// stand still, in a known order, so that two runs of this framing differ only
+/// by the change being judged. They are dressed by the same `figure::dress`
+/// the crowd uses, which is the whole point — a costume bug shows up here
+/// because this is the same costume.
+fn line_up_cast(
+    mut commands: Commands,
+    request: Res<CaptureRequest>,
+    mut done: Local<bool>,
+    figures: Option<Res<crate::ai::figure::FigureAssets>>,
+    faces: Option<Res<crate::mood::face::FaceAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    players: Query<&Transform, With<Player>>,
+    mut cameras: Query<(&mut Transform, &mut CameraRig), Without<Player>>,
+) {
+    use crate::ai::archetype::Archetype;
+
+    if *done || !request.lineup {
+        return;
+    }
+    let (Some(figures), Some(faces), Ok(anchor)) = (figures, faces, players.single()) else {
+        return;
+    };
+
+    // Their own stream, keyed off nothing: a lineup is a fixture, not part of
+    // the world, and drawing from a real stream would move the city.
+    let mut rng = crate::core::rng::stream_for(0, crate::core::rng::stream::CROWD);
+    let spacing = 1.6;
+    let right = *anchor.right();
+    let along = *anchor.forward();
+
+    for (i, archetype) in Archetype::ALL.iter().enumerate() {
+        let at = anchor.translation + along * 6.0 + right * ((i as f32 - 6.0) * spacing);
+        let worn = faces.wear(0.0);
+        let coat = materials.add(StandardMaterial {
+            // The fixed wardrobe where the archetype has one, and one neutral
+            // street coat where it does not — the street palette is the
+            // pedestrian spawner's, and reaching into it would be reaching
+            // across a module to make a fixture look prettier.
+            base_color: archetype.coat().unwrap_or(Color::srgb(0.42, 0.44, 0.48)),
+            perceptual_roughness: 0.85,
+            ..default()
+        });
+        let mut person = commands.spawn((
+            Name::new("Lineup"),
+            *archetype,
+            crate::mood::feeling::Mood::new(0.0),
+            crate::mood::face::FaceLevel(worn.level),
+            // Facing the camera, which stands where the player does.
+            Transform::from_translation(at)
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::PI) * anchor.rotation),
+            Visibility::default(),
+        ));
+        crate::ai::figure::dress(&mut person, &figures, coat, &worn, *archetype, &mut rng);
+    }
+
+    // Three-quarters rather than dead ahead, and above head height. Half
+    // this cast's costume is at ground level and edge-on — a board, a cane,
+    // a pair of wheels — and a frontal shot is the one angle from which
+    // none of it can be told apart.
+    let middle = anchor.translation + along * 6.0;
+    let eye = middle - along * 17.0 + right * 7.0 + Vec3::Y * 3.0;
+    for (mut transform, mut rig) in &mut cameras {
+        rig.mode = CameraMode::Free;
+        *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.6, Vec3::Y);
         let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
         rig.yaw = yaw;
         rig.pitch = pitch;

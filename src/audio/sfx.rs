@@ -273,6 +273,9 @@ impl Plugin for SfxPlugin {
                     play_animal_voices,
                 )
                     .in_set(GameSet::Simulation),
+                // After the lot of them, and after `mood::voice`, which
+                // spawns its one-shots in `Ai`.
+                cap_one_shots.in_set(GameSet::Ui),
             )
                 // The bank is loaded in `Startup`; nothing here can run
                 // before it lands.
@@ -282,6 +285,55 @@ impl Plugin for SfxPlugin {
 }
 
 // ------------------------------------------------------------- one-shots ----
+
+/// How many one-shots may be sounding at the same time.
+///
+/// The loops are all bounded now — three beds, four places, three engines,
+/// eight opinions — and one-shots were the last category with no ceiling on
+/// it at all. They are spawned from seven modules and twenty-odd call sites,
+/// and none of them can know what the other six are doing: a car landing in
+/// a crowd is a crash, a honk, four sproings, a dozen gasps and everybody's
+/// footsteps, all inside the same tenth of a second.
+///
+/// Capped here rather than at the call sites, because here is the one place
+/// every one-shot in the game is guaranteed to pass. The newest are the ones
+/// dropped, which for a pile-up is the right end: what is already sounding
+/// is what the player has already started hearing.
+const ONE_SHOT_CHOIR: usize = 10;
+
+/// Refuses a one-shot that would be the eleventh thing going off at once.
+///
+/// Bevy starts queued playback in `PostUpdate`, so within a frame the ones
+/// spawned this tick have no sink yet and the ones already sounding do —
+/// which is exactly the distinction this needs, and is why the system can
+/// run anywhere in `Update`.
+fn cap_one_shots(
+    mut commands: Commands,
+    sounding: Query<
+        &PlaybackSettings,
+        Or<(
+            With<bevy::audio::AudioSink>,
+            With<bevy::audio::SpatialAudioSink>,
+        )>,
+    >,
+    fresh: Query<(Entity, &PlaybackSettings), Added<AudioPlayer<SynthSound>>>,
+) {
+    use bevy::audio::PlaybackMode;
+
+    // `PlaybackMode` carries no `PartialEq`, hence the match.
+    let one_shot = |settings: &PlaybackSettings| matches!(settings.mode, PlaybackMode::Despawn);
+    let playing = sounding.iter().filter(|s| one_shot(s)).count();
+    let mut budget = ONE_SHOT_CHOIR.saturating_sub(playing);
+    for (entity, settings) in &fresh {
+        if !one_shot(settings) {
+            continue;
+        }
+        match budget {
+            0 => commands.entity(entity).despawn(),
+            _ => budget -= 1,
+        }
+    }
+}
 
 fn at(
     commands: &mut Commands,
@@ -569,10 +621,20 @@ fn manage_vehicle_voices(
     }
 }
 
+/// How many cars may be heard at once.
+///
+/// `hush` already makes an engine a local fact, but "local" is not "one":
+/// a junction can put six cars inside the band at the same moment, and six
+/// engines at their working level sum past full scale on their own. So the
+/// nearest few are the traffic and the rest are the ambience bed's problem
+/// — the same bargain `EMITTER_CHOIR` strikes for places and `voice::CHOIR`
+/// for opinions.
+const ENGINE_CHOIR: usize = 3;
+
 fn update_vehicle_voices(
     config: Res<GameConfig>,
     listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
-    vehicles: Query<(&VehicleState, &VehicleInput, &Transform)>,
+    vehicles: Query<(Entity, &VehicleState, &VehicleInput, &Transform)>,
     mut voices: Query<(&Voice, &mut SpatialAudioSink)>,
 ) {
     // Measured from the camera, because that is where the `SpatialListener`
@@ -582,11 +644,27 @@ fn update_vehicle_voices(
         .single()
         .map(|listener| listener.translation())
         .unwrap_or_default();
+
+    // Two passes, the same shape as `tend_emitters`: rank, then touch every
+    // sink once. Both of a car's voices ride on one decision, so an engine
+    // and its tyres never disagree about whether that car is being heard.
+    let mut near: Vec<(f32, Entity)> = vehicles
+        .iter()
+        .map(|(entity, _, _, at)| (at.translation.distance(ears), entity))
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.truncate(ENGINE_CHOIR);
+    let audible: HashSet<Entity> = near.into_iter().map(|(_, entity)| entity).collect();
+
     for (voice, mut sink) in &mut voices {
-        let Ok((state, input, at)) = vehicles.get(voice.owner) else {
+        let Ok((_, state, input, at)) = vehicles.get(voice.owner) else {
             continue;
         };
-        let heard = hush(at.translation.distance(ears));
+        let heard = if audible.contains(&voice.owner) {
+            hush(at.translation.distance(ears))
+        } else {
+            0.0
+        };
         let speed_kph = state.speed_kph();
 
         let level = match voice.kind {

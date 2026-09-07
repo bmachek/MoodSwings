@@ -144,7 +144,16 @@ fn free_cursor(mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
 /// Locks the cursor to the window and hides it whenever gameplay is actually
 /// running. Without this, mouse look could drag the pointer clean off the
 /// window — nothing catches it again until the player alt-tabs back.
+///
+/// Capture mode is exempt, for the same reason it is exempt from
+/// `apply_window_config`: a screenshot run is nobody's foreground window. It
+/// steals the pointer off whatever the developer was actually doing, holds it
+/// for the length of the warmup, and gives it back somewhere else — and the
+/// run is scripted, so there is no mouse look for it to be protecting.
 fn grab_cursor(mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+    if crate::core::capture::is_capture_mode() {
+        return;
+    }
     for mut cursor in &mut windows {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;

@@ -51,7 +51,15 @@ impl Plugin for AudioPlugin {
             return;
         }
 
-        app.add_plugins(sfx::SfxPlugin);
+        app.init_resource::<Limiter>()
+            .add_systems(
+                Update,
+                // In `Ui`, which is the one set that runs after everything
+                // that sets a level — and, unlike the gameplay sets, keeps
+                // running while the pause menu is open.
+                ride_the_gain.in_set(crate::core::schedule::GameSet::Ui),
+            )
+            .add_plugins(sfx::SfxPlugin);
     }
 }
 
@@ -98,4 +106,153 @@ pub fn close_once(volume: f32) -> PlaybackSettings {
 /// Effect volume after the mixer settings, for a sound with the given gain.
 pub fn effect_gain(config: &GameConfig, gain: f32) -> f32 {
     config.audio.master * config.audio.effects * gain
+}
+
+/// The summed level the master fader is allowed to let through.
+///
+/// Above one, because summing the sinks' own volumes is a pessimistic
+/// estimate of what actually comes out: the sources are uncorrelated, so
+/// their peaks land in different places, and every spatial sink is attenuated
+/// again by the mixer for its distance after this has read it. Set at the
+/// point where a junction full of traffic is held down and a single crash
+/// still lands at full force.
+const CEILING: f32 = 1.5;
+
+/// Master gain, kept moving by [`ride_the_gain`].
+///
+/// Both numbers are on the dev panel, because "is it still too much at once?"
+/// is a question about a moment on a particular street and cannot be answered
+/// by reading the gain tables.
+#[derive(Resource)]
+pub struct Limiter {
+    /// Summed level of everything audible, as of the last frame.
+    pub loud: f32,
+    /// And the master gain that is holding it down.
+    pub gain: f32,
+}
+
+impl Default for Limiter {
+    fn default() -> Self {
+        // Opens fully and is pulled down from there, so the first frame of a
+        // quiet street is not a fade-in.
+        Self {
+            loud: 0.0,
+            gain: 1.0,
+        }
+    }
+}
+
+/// The ceiling the panel reads back, so it can say how close the mix is.
+pub const fn ceiling() -> f32 {
+    CEILING
+}
+
+/// The gain that holds a summed level down to the ceiling.
+///
+/// Pure, because the whole argument about this is "what happens when eight
+/// things are loud at once", and that is an argument to have in a test rather
+/// than by standing on a street corner.
+pub fn duck(loud: f32, ceiling: f32) -> f32 {
+    if loud <= ceiling || loud <= 0.0 {
+        1.0
+    } else {
+        ceiling / loud
+    }
+}
+
+/// One frame of the fader moving towards where it should be.
+///
+/// Asymmetric on purpose, the way every compressor is: down fast enough to
+/// already be there when the crash lands, up slowly enough that a street of
+/// footsteps does not make the whole city breathe in and out.
+pub fn ride(current: f32, target: f32, dt: f32) -> f32 {
+    const ATTACK: f32 = 0.05;
+    const RELEASE: f32 = 0.9;
+    let tau = if target < current { ATTACK } else { RELEASE };
+    current + (target - current) * (1.0 - (-dt / tau).exp())
+}
+
+/// The limiter rodio does not have.
+///
+/// Rodio sums every audible source and hands the result to the device with
+/// nothing standing between them, so the moment the sum passes full scale it
+/// clips — and clipping is heard as crackle and grit, not as loudness. No
+/// amount of tuning the per-sound gains prevents it, because what overflows
+/// is not any one sound but *how many* of them a street happens to be doing
+/// at the same second, and that is a property of the city rather than of the
+/// bank. The choirs in `sfx` bound each category; this bounds the total.
+///
+/// Reads the sinks rather than being told by the systems that set them: they
+/// are the one place every loop, one-shot, bed and emitter is guaranteed to
+/// turn up, whoever spawned it and whether or not they remembered to book it
+/// in anywhere.
+fn ride_the_gain(
+    time: Res<Time>,
+    mut limiter: ResMut<Limiter>,
+    mut global: ResMut<GlobalVolume>,
+    plain: Query<&bevy::audio::AudioSink>,
+    spatial: Query<&bevy::audio::SpatialAudioSink>,
+) {
+    use bevy::audio::AudioSinkPlayback;
+
+    let mut loud = 0.0;
+    for sink in &plain {
+        if !sink.is_muted() {
+            loud += sink.volume().to_linear();
+        }
+    }
+    for sink in &spatial {
+        if !sink.is_muted() {
+            loud += sink.volume().to_linear();
+        }
+    }
+    limiter.loud = loud;
+    limiter.gain = ride(limiter.gain, duck(loud, CEILING), time.delta_secs());
+    global.volume = Volume::Linear(limiter.gain);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_quiet_street_is_not_turned_down_at_all() {
+        assert_eq!(duck(0.0, CEILING), 1.0);
+        assert_eq!(duck(CEILING, CEILING), 1.0);
+    }
+
+    #[test]
+    fn a_sum_over_the_ceiling_comes_back_to_the_ceiling() {
+        for loud in [1.6f32, 3.0, 12.0] {
+            let gain = duck(loud, CEILING);
+            assert!(
+                (loud * gain - CEILING).abs() < 1e-4,
+                "{loud} ducked to {}",
+                loud * gain
+            );
+        }
+    }
+
+    #[test]
+    fn the_fader_falls_faster_than_it_rises() {
+        // The whole point of an asymmetric envelope: a crash must be caught
+        // before it clips, and let go of slowly enough that nobody hears the
+        // letting go.
+        let dt = 1.0 / 60.0;
+        let down = 1.0 - ride(1.0, 0.4, dt);
+        let up = ride(0.4, 1.0, dt) - 0.4;
+        assert!(
+            down > up * 4.0,
+            "attack moved {down:.4} where release moved {up:.4}"
+        );
+    }
+
+    #[test]
+    fn the_fader_arrives_and_stays() {
+        let mut gain = 1.0;
+        for _ in 0..600 {
+            gain = ride(gain, 0.3, 1.0 / 60.0);
+        }
+        assert!((gain - 0.3).abs() < 1e-3, "settled at {gain}");
+    }
 }

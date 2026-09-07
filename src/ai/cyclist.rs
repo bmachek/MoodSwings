@@ -223,10 +223,7 @@ fn maintain_cyclists(
                     Rest::at(hub),
                     Mesh3d(kit.wheel.clone()),
                     MeshMaterial3d(kit.steel.clone()),
-                    // A torus lies flat; a wheel stands in the direction of
-                    // travel.
-                    Transform::from_translation(hub)
-                        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                    Transform::from_translation(hub).with_rotation(wheel_upright()),
                 ));
             }
             let spine = Vec3::new(0.0, -STAND_HEIGHT + 0.52, 0.0);
@@ -246,6 +243,18 @@ fn maintain_cyclists(
         });
         riding += 1;
     }
+}
+
+/// Stands a flat-lying torus up as a wheel that rolls the way the bike goes.
+///
+/// A torus is built lying in the XZ plane, so its axis is Y and it has to be
+/// turned onto the axle. The axle of a wheel that rolls along Z is X — which
+/// is a rotation about *Z*, not about X. About X the axle ends up pointing
+/// along the direction of travel instead, and the bike becomes a pair of
+/// discs held out sideways: a sledge, or at second glance a very wide
+/// wheelchair, which is what this looked like on the street for a while.
+fn wheel_upright() -> Quat {
+    Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)
 }
 
 /// A point riding the kerb side of the correct lane.
@@ -316,6 +325,23 @@ fn ride(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wheels_turn_on_an_axle_across_the_bike() {
+        // The failure this catches is not subtle and is completely invisible
+        // to every other check: the bike still rides its lane, still carries
+        // its rider, and looks like a sledge.
+        let axle = wheel_upright() * Vec3::Y;
+        assert!(
+            axle.x.abs() > 0.99,
+            "the axle should lie across the bike, and points {axle:?}"
+        );
+        // And the wheel's plane therefore contains the direction of travel.
+        assert!(
+            axle.z.abs() < 0.01,
+            "the axle points along the road: {axle:?}"
+        );
+    }
 
     #[test]
     fn a_bike_rides_inside_its_own_lane() {

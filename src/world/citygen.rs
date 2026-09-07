@@ -443,9 +443,20 @@ fn lay_out_buildings(
             });
             continue;
         }
-        // Setback keeps neighbours from sharing a face, so the massing
-        // still reads as separate buildings from street level.
-        let footprint = lot.inset(rng.random_range(0.6..2.2));
+        // The setback is applied only to the sides that face a street.
+        //
+        // It used to be applied on all four, which left every pair of
+        // neighbours one to four metres apart. At that width the two
+        // buildings read as one frontage from the pavement — and then
+        // daylight comes through the seam, because there is a slot there
+        // after all. Wo kein Spalt, da kein Lichthof: a block's inner lot
+        // lines are party walls now, and the only gaps left in a frontage
+        // are the ones a vacant lot actually opens.
+        //
+        // Still one draw, and still in this position in the stream: moving
+        // or dropping it would reshuffle every height and palette after it.
+        let setback = rng.random_range(0.6..2.2);
+        let footprint = street_setback(lot, &buildable, setback);
         if !footprint.is_valid() {
             continue;
         }
@@ -457,6 +468,50 @@ fn lay_out_buildings(
         });
     }
     (buildings, vacants)
+}
+
+/// One lot's footprint: set back from the block's outer edge, flush with its
+/// neighbours everywhere else.
+///
+/// The lots partition the buildable rectangle exactly, so a side that does not
+/// lie on that rectangle's boundary is shared with another lot. Insetting such
+/// a side opens a slot between two buildings that is too narrow to be a street
+/// and too wide to be a joint — see the caller.
+fn street_setback(lot: Rect, buildable: &Rect, setback: f32) -> Rect {
+    // A lot line is "on the boundary" within a millimetre: the subdivision is
+    // float arithmetic on the same endpoints, so the shared edges come back
+    // bit-identical, but the outer ones travel through `inset` first.
+    let on = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    Rect::new(
+        Vec2::new(
+            lot.min.x
+                + if on(lot.min.x, buildable.min.x) {
+                    setback
+                } else {
+                    0.0
+                },
+            lot.min.y
+                + if on(lot.min.y, buildable.min.y) {
+                    setback
+                } else {
+                    0.0
+                },
+        ),
+        Vec2::new(
+            lot.max.x
+                - if on(lot.max.x, buildable.max.x) {
+                    setback
+                } else {
+                    0.0
+                },
+            lot.max.y
+                - if on(lot.max.y, buildable.max.y) {
+                    setback
+                } else {
+                    0.0
+                },
+        ),
+    )
 }
 
 /// A deterministic roll in 0..1 for one footprint, salted per question.

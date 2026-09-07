@@ -30,9 +30,15 @@ exits:
 ```sh
 cargo run -- --screenshot shots/street.png --at-node 300 --eye 1.7 --hour 21.5
 cargo run -- --screenshot shots/city.png --at 0,620,900 --look 0,20,-200 --stream-radius 1800
+cargo run -- --screenshot shots/cast.png --lineup --hour 12
 tools/shoot.sh                 # the whole battery of framings into shots/
 tools/shoot.sh --only street,night --out shots/after
 ```
+
+`--lineup` stands one of every archetype in a row and points the camera down
+it — the cast's `--showroom`. The rare archetypes are the ones whose costume
+goes wrong and the ones a street framing cannot be relied on to contain, so
+"shoot a street and hope" is not a check on them.
 
 `tools/shoot.sh` exists so a rendering change is judged against the last render
 rather than against a memory of it: shoot the same framings before and after.
@@ -75,7 +81,7 @@ bevy_egui, saves are RON.
 | `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
-| `audio` | The recorded sound bank (`bank::REGISTER`), the load-time discipline (`files`), triggers, the WAV audition tool |
+| `audio` | The recorded sound bank (`bank::REGISTER`), the load-time discipline (`files`), triggers, the master limiter, the WAV audition tool |
 | `save` | RON quick save / load |
 
 ### What this game is
@@ -205,6 +211,11 @@ declaration order.
 - Feel constants belong in `core::config::GameConfig` so the dev panel can tune
   them at runtime, not as literals at the use site. The five temperaments are a
   `Tempers` resource for the same reason.
+- The project is GPL-3.0-or-later (`LICENSE`). `CREDITS.md` names everybody
+  whose CC0 recording is in the bank — the licence does not require it and we
+  do it anyway — and `CONTRIBUTING.md` carries the etiquette a patch is held
+  to. A new sound or material set means a line in `CREDITS.md` as well as in
+  `bank::REGISTER` and both fetch scripts.
 - Every sound is a CC0 recording, held to the bank's rules at load: one-shots
   start at exactly zero and everything peaks at its `REGISTER` peak (inside
   `0.3..=1.0`). Add new sounds to `audio::bank::REGISTER` and to both fetch

@@ -1,0 +1,80 @@
+# Credits
+
+Mood Swings is an original work. The city, the vehicles, the crowd, every
+texture and every face are generated at runtime from a seed — there is no
+third-party art in this repository and no trademark is used.
+
+The one thing the game does not make for itself is sound. Every sound in the
+bank is a **CC0 1.0** recording made by somebody else, fetched by
+`tools/fetch-materials.sh` (or `tools/fetch-materials.bat`) into
+`assets/sounds/`, which is gitignored. The optional scanned PBR material sets
+are CC0 too.
+
+CC0 asks for nothing — no attribution, no notice, no conditions. Everybody
+below is named anyway, because the whole cast of this city speaks with
+borrowed voices and it would be a poor joke to pretend otherwise.
+
+`tools/fetch-materials.sh` is the authoritative list: it carries the exact URL
+of every file, and the comments there say what each one is doing in the game.
+This page is the human-readable version of it.
+
+## Materials — [ambientCG](https://ambientcg.com), CC0 1.0
+
+Ten scanned PBR sets, at 2K JPEG: `Asphalt031`, `PavingStones138`,
+`Concrete034`, `Concrete046`, `Bricks097`, `Bricks104`, `Bricks075A`,
+`PaintedPlaster006`, `Gravel023`, `Grass005`.
+
+These are an *optional* upgrade. `world::texture` paints a procedural stand-in
+for anything missing, and a fresh clone that never runs the fetch script
+renders a complete city.
+
+## Sound — [OpenGameArt](https://opengameart.org), CC0 1.0
+
+- **qubodup** — the crash, and the car pack the engine loop and door slam come
+  out of.
+- **rubberduck** — two CC0 SFX hundreds: the footstep, the highway loop that
+  *is* the city's traffic bed, the forecourt machine hum, and the cough, spit
+  and burp in the taunt rotation.
+- The boing, the bicycle horn that every car in the city is fitted with, the
+  chunky explosion, the park birdsong and river, and the shouting crowd behind
+  the barricades.
+
+## Sound — [Freesound](https://freesound.org), CC0 1.0
+
+Fetched from the CDN preview (128 kbps MP3) rather than the original, because
+original downloads sit behind a login and the previews do not. The licence is
+the same either way, and the bank remixes everything to mono at its own rate
+on load.
+
+- **Reitanna** — the giggles, the grumbles, one of the whistles, and the
+  tongue raspberry that is half the game's verb. More of this city's voice
+  than anybody else's.
+- **elle-trudgett**, **elijahgoodson**, **Willygoat**, **OwlStorm** — the rest
+  of the whistles: the innocent one, the tune, the calm one, the wolf whistle.
+- **Rocotilos**, **lipalearning**, **ssierra1202**, **WakuWakuWakuWaku**,
+  **punisherman** — the curses, which are angry grunts.
+- **kanyonwyvern** — the gasp.
+- **dodrio** — the murmur series: wordless small talk for the indifferent
+  middle of the mood scale.
+- **theuncertainman** — the apology, the one recording in the bank with an
+  actual word in it.
+- **Blubberfreak** — the fart.
+- **mefrancis13**, **bbrocer** — the retch and the gag, which belong to one
+  particular gentleman and are kept out of the general rotation.
+- **v0idation** — the swanee whistle a launched flummi rides through the air.
+- **magnuswaker** — the jaw-harp twang of a street prop leaving its bolts.
+- **audible-edge** — real tyres squealing round a real corner.
+- **mycompasstv** — restaurant chatter, hung on the frontages.
+- **kyles** — a basketball dribbled on real tarmac, for the courts.
+- **fimrod** — the warehouse drone over the industrial blocks.
+- **kwahmah_02**, **skymary** — the dog's bark and the cat's meow, one take
+  each, pitched per animal the same way the crowd's voices are.
+
+## Software
+
+Built on [Bevy](https://bevyengine.org), with [Avian](https://github.com/Jondolf/avian)
+for physics, [leafwing-input-manager](https://github.com/Leafwing-Studios/leafwing-input-manager)
+for input, [bevy_egui](https://github.com/vladbat00/bevy_egui) for the developer
+panel, and [rodio](https://github.com/RustAudio/rodio) underneath the mixer.
+Their own licences travel with them; `cargo tree` and each crate's repository
+are the authority.

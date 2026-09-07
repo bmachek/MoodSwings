@@ -154,6 +154,29 @@ impl Posture {
     }
 }
 
+/// A figure that is sitting down, and therefore has no stride.
+///
+/// Deliberately not a [`Posture`]: a posture is something a figure is doing
+/// for a moment and is taken off again when it stops, and `mood::scuffle`
+/// and `mood::grudge` both do exactly that. Sitting is not a moment, it is
+/// who this citizen is — so it lives underneath, and a posture still wins
+/// for as long as one is on the body. A wheelchair user being shaken by the
+/// collar flails; when they are let go they are sitting down again.
+#[derive(Component)]
+pub struct Seated;
+
+/// Where a seated figure holds a limb.
+///
+/// The legs are swung forward off the hip, since there is no knee to bend;
+/// the arms hang, which puts the hands on the wheel rims because that is
+/// where `ARM_LENGTH` below `SHOULDER` happens to land.
+pub fn seated_angle(limb: Limb) -> f32 {
+    match limb {
+        Limb::LeftLeg | Limb::RightLeg => body::SEATED_LEG,
+        Limb::LeftArm | Limb::RightArm => 0.0,
+    }
+}
+
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
 /// The speed is written by whoever owns the figure — the pedestrian AI for a
@@ -189,7 +212,9 @@ pub struct FigureAssets {
     wood: Handle<StandardMaterial>,
     cane: Handle<Mesh>,
     wheel: Handle<Mesh>,
+    castor: Handle<Mesh>,
     seat: Handle<Mesh>,
+    seat_back: Handle<Mesh>,
 }
 
 /// Proportions, in metres, measured from the middle of the collider capsule.
@@ -231,6 +256,29 @@ mod body {
     pub const CANE_HALF: f32 = 0.39;
     pub const WHEEL_CENTRE: f32 = -0.575;
     pub const WHEEL_RADIUS: f32 = 0.27;
+    /// The rest of the chair. The seat sits directly under the hips rather
+    /// than a third of a metre below them, because a seat a body is not
+    /// touching is a footstool being carried around.
+    pub const SEAT_CENTRE: f32 = HIP - 0.07;
+    pub const SEAT_THICKNESS: f32 = 0.06;
+    pub const SEAT_HALF_WIDTH: f32 = 0.20;
+    /// A back to lean on, which is most of what tells a wheelchair apart
+    /// from a pair of wheels at this distance.
+    pub const BACK_CENTRE: f32 = 0.16;
+    pub const BACK_HEIGHT: f32 = 0.46;
+    pub const BACK_BEHIND: f32 = 0.19;
+    /// The little front castors, whose bottoms rest on the same ground the
+    /// big wheels do.
+    pub const CASTOR_RADIUS: f32 = 0.085;
+    pub const CASTOR_CENTRE: f32 = FEET + CASTOR_RADIUS;
+    /// Far enough forward that the sitter's feet come down behind them
+    /// rather than out past them — see the test.
+    pub const CASTOR_AHEAD: f32 = -0.64;
+    /// How far forward a seated figure's legs are swung, in radians off
+    /// vertical. One segment per leg and no knee, so this is the compromise
+    /// between a thigh (horizontal) and a shin (vertical); anything more
+    /// puts the feet out past the castors.
+    pub const SEATED_LEG: f32 = 0.92;
 }
 
 /// Half the collider capsule's height, which is what the figure has to fit in.
@@ -309,6 +357,18 @@ const _: () = {
     assert!(
         body::WHEEL_CENTRE - body::WHEEL_RADIUS >= -CAPSULE_HALF,
         "the wheels sink below the capsule"
+    );
+    assert!(
+        body::CASTOR_CENTRE - body::CASTOR_RADIUS >= -CAPSULE_HALF,
+        "the castors sink below the capsule"
+    );
+    assert!(
+        body::SEAT_CENTRE + body::SEAT_THICKNESS * 0.5 <= body::HIP,
+        "the seat is inside the sitter"
+    );
+    assert!(
+        body::BACK_CENTRE + body::BACK_HEIGHT * 0.5 <= body::HEAD_CENTRE - body::HEAD_RADIUS,
+        "the backrest reaches over the head"
     );
 };
 
@@ -401,7 +461,17 @@ pub fn build_assets(
         }),
         cane: meshes.add(Cylinder::new(0.018, body::CANE_HALF * 2.0)),
         wheel: meshes.add(Cylinder::new(body::WHEEL_RADIUS, 0.03)),
-        seat: meshes.add(Cuboid::new(0.4, 0.06, 0.4)),
+        castor: meshes.add(Cylinder::new(body::CASTOR_RADIUS, 0.025)),
+        seat: meshes.add(Cuboid::new(
+            body::SEAT_HALF_WIDTH * 2.0,
+            body::SEAT_THICKNESS,
+            0.40,
+        )),
+        seat_back: meshes.add(Cuboid::new(
+            body::SEAT_HALF_WIDTH * 2.0,
+            body::BACK_HEIGHT,
+            0.05,
+        )),
     }
 }
 
@@ -433,6 +503,14 @@ pub fn dress(
     let crest = assets.crest_colours[rng.random_range(0..assets.crest_colours.len())].clone();
 
     entity.insert(WalkCycle::default());
+    // Nobody in a wheelchair is taking a step. Without this the stride runs
+    // anyway — the walk cycle is paced by ground covered, and a chair covers
+    // ground — and a seated figure that keeps striding reads as somebody
+    // standing up, taking one step and sitting down again, about twice a
+    // second.
+    if archetype == Archetype::Wheelchair {
+        entity.insert(Seated);
+    }
     entity.with_children(|parent| {
         let torso = Vec3::new(0.0, body::TORSO_CENTRE, 0.0);
         parent.spawn((
@@ -543,12 +621,26 @@ pub fn dress(
                 ));
             }
             Archetype::Wheelchair => {
-                let seat = Vec3::new(0.0, -0.38, 0.0);
+                // A cylinder stands on Y, so every wheel here is laid onto an
+                // axle across the chair — a rotation about Z. About X the
+                // axle would point the way the chair travels and the wheels
+                // would be held out in front and behind like paddles.
+                let onto_the_axle = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+
+                let seat = Vec3::new(0.0, body::SEAT_CENTRE, 0.0);
                 parent.spawn((
                     Rest::at(seat),
                     Mesh3d(assets.seat.clone()),
                     MeshMaterial3d(assets.plastic.clone()),
                     Transform::from_translation(seat),
+                ));
+                // Behind, so +Z: the figure faces -Z, the way the shoes point.
+                let back = Vec3::new(0.0, body::BACK_CENTRE, body::BACK_BEHIND);
+                parent.spawn((
+                    Rest::at(back),
+                    Mesh3d(assets.seat_back.clone()),
+                    MeshMaterial3d(assets.plastic.clone()),
+                    Transform::from_translation(back),
                 ));
                 for side in [-1.0f32, 1.0] {
                     let hub = Vec3::new(side * 0.24, body::WHEEL_CENTRE, 0.0);
@@ -556,9 +648,14 @@ pub fn dress(
                         Rest::at(hub),
                         Mesh3d(assets.wheel.clone()),
                         MeshMaterial3d(assets.plastic.clone()),
-                        // A cylinder stands on Y; a wheel rolls on X.
-                        Transform::from_translation(hub)
-                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+                        Transform::from_translation(hub).with_rotation(onto_the_axle),
+                    ));
+                    let castor = Vec3::new(side * 0.17, body::CASTOR_CENTRE, body::CASTOR_AHEAD);
+                    parent.spawn((
+                        Rest::at(castor),
+                        Mesh3d(assets.castor.clone()),
+                        MeshMaterial3d(assets.leather.clone()),
+                        Transform::from_translation(castor).with_rotation(onto_the_axle),
                     ));
                 }
             }
@@ -648,13 +745,14 @@ pub fn animate(
         Option<&Bouncer>,
         Option<&Stature>,
         Option<&Posture>,
+        Option<&Seated>,
         &Children,
     )>,
     mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
 ) {
     let dt = time.delta_secs();
     let elapsed = time.elapsed_secs();
-    for (mut cycle, bouncer, stature, posture, children) in figures {
+    for (mut cycle, bouncer, stature, posture, seated, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
@@ -684,9 +782,12 @@ pub fn animate(
             transform.translation = rest.at * pose;
             transform.scale = rest.scale * pose;
             if let Some(limb) = limb {
-                let angle = match posture {
-                    Some(posture) => posture.limb_angle(*limb, elapsed),
-                    None => limb_angle(*limb, cycle.phase),
+                let angle = match (posture, seated) {
+                    // A posture is the loudest thing on the body and wins
+                    // over both of the others.
+                    (Some(posture), _) => posture.limb_angle(*limb, elapsed),
+                    (None, Some(_)) => seated_angle(*limb),
+                    (None, None) => limb_angle(*limb, cycle.phase),
                 };
                 transform.rotation = Quat::from_rotation_x(angle);
             }
@@ -759,6 +860,35 @@ mod tests {
                 .fold(0.0, f32::max)
         };
         assert!(peak(Limb::LeftArm) < peak(Limb::LeftLeg));
+    }
+
+    #[test]
+    fn a_seated_figure_holds_both_legs_still_and_forward() {
+        // The bug this pins: a wheelchair user striding. Both legs at the
+        // same angle is the whole difference between sitting and walking —
+        // the walk cycle's own test asserts the opposite, that the two legs
+        // are never together.
+        let left = seated_angle(Limb::LeftLeg);
+        let right = seated_angle(Limb::RightLeg);
+        assert_eq!(left, right, "one leg is taking a step");
+        assert!(left > 0.0, "the legs should be swung forward, not back");
+    }
+
+    #[test]
+    fn a_seated_figures_feet_stay_off_the_pavement() {
+        // Legs swung off the hip with no knee to bend: too far forward and
+        // the feet stick out past the castors, not far enough and they drag.
+        let angle = seated_angle(Limb::LeftLeg);
+        let foot_y = body::HIP - body::LEG_LENGTH * angle.cos();
+        let foot_z = -body::LEG_LENGTH * angle.sin();
+        assert!(
+            foot_y > body::FEET,
+            "the feet are dragging along the ground at {foot_y:.2}"
+        );
+        assert!(
+            foot_z > body::CASTOR_AHEAD,
+            "the feet reach out past the castors to {foot_z:.2}"
+        );
     }
 
     #[test]

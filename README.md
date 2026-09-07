@@ -153,7 +153,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 301 tests
+cargo test                                  # 402 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -188,8 +188,8 @@ without being auditable, and what it writes is the processed buffer the game
 actually plays.
 
 `tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
-dawn, overcast, facade, park, wear, bodywork, showroom, geyser, driving, map,
-the three faces and the street in both moods — so a rendering change can be
+dawn, overcast, facade, park, the court, wear, bodywork, showroom, the cast,
+geyser, driving, map, the three faces and the street in both moods — so a rendering change can be
 judged against the last one rather than against a memory of it. `--all-presets` shoots every
 tier into `shots/<preset>/`, and frame times are collected at the end, because
 a screenshot says a change looks right and says nothing about whether it can be
@@ -200,7 +200,8 @@ afforded.
 | `--at x,y,z` / `--look x,y,z` | Camera pose |
 | `--at-node N` | Stand at road junction N, looking down the street |
 | `--at-car` | Frame the nearest parked car, three-quarters on |
-| `--showroom` | Park one of every archetype in a row and shoot it |
+| `--showroom` | Park one of every vehicle class in a row and shoot it |
+| `--lineup` | Stand one of every archetype in a row and shoot it |
 | `--geyser` | Shear the nearest hydrant and frame the water (pair with `--frames`) |
 | `--wet F` | Soak the ground, 0 to 1 |
 | `--cover F` | Cloud over the city, 0 to 1; above about seven tenths it rains |
@@ -214,6 +215,12 @@ afforded.
 | `--quality Q` | Renderer tier: `low`, `medium`, `high`, `ultra`, `photo` |
 | `--mood F` | Hold every face in the city at this mood, −1 to 1 |
 | `--fps-log` | Log median, p95 and worst frame time alongside the shot |
+
+## Licence
+
+GPL-3.0-or-later; the full text is in `LICENSE`. Every sound and every scanned
+material the game downloads is CC0 1.0, and the people who recorded them are
+named in `CREDITS.md`. `CONTRIBUTING.md` is how to build, test and send a patch.
 
 ## Textures
 

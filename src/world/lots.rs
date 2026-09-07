@@ -376,45 +376,218 @@ fn spawn_gas_station(
     ));
 }
 
+/// A real basketball court's proportions, in metres, as one block of numbers.
+///
+/// A lot is whatever the subdivision left over, so nothing here is used at
+/// face value: [`court_fit`] shrinks the whole court until it fits the lot,
+/// and every measurement below is multiplied by that one factor. The court
+/// is therefore always *a court* — 28 by 15, the key half as wide again as
+/// the circle, the arc where an arc goes — just sometimes a small one.
+mod court {
+    pub const LENGTH: f32 = 28.0;
+    pub const WIDTH: f32 = 15.0;
+    /// Centre of the ring, measured in from the baseline.
+    pub const BASKET_INSET: f32 = 1.575;
+    /// The key: how far it reaches in from the baseline, and half how wide.
+    pub const LANE_LENGTH: f32 = 5.80;
+    pub const LANE_HALF: f32 = 2.45;
+    /// Centre circle, free-throw circle: the same radius on a real court.
+    pub const CIRCLE: f32 = 1.80;
+    /// The three-point arc, and how far from the centre line its two
+    /// straight sections run.
+    pub const THREE: f32 = 6.75;
+    pub const THREE_CORNER: f32 = 6.60;
+}
+
+// Checked at compile time rather than in a test, the same way the figure's
+// proportions are: these are all constants, so there is nothing to run.
+const _: () = {
+    assert!(
+        court::LANE_HALF < court::THREE_CORNER,
+        "the key is wider than the three-point line"
+    );
+    assert!(
+        court::LANE_LENGTH + court::CIRCLE < court::LENGTH * 0.5,
+        "the free-throw circle crosses the halfway line"
+    );
+    // The free-throw circle is centred on the free-throw line, so half of it
+    // stands inside the key and half outside.
+    assert!(
+        court::CIRCLE > court::LANE_HALF * 0.5,
+        "the free-throw circle fits inside the key it is drawn across"
+    );
+    assert!(
+        court::BASKET_INSET < court::LANE_LENGTH,
+        "the basket stands outside its own key"
+    );
+};
+
+/// The court that fits a lot: half its length, half its width, and the unit
+/// vector its length runs along.
+///
+/// One scale factor for both axes — a court stretched to the lot is not a
+/// court, it is a car park with a hoop — and the long axis of the court laid
+/// along the long axis of the lot.
+fn court_fit(inner: &Rect) -> (f32, f32, Vec2) {
+    let size = inner.size();
+    let (long, short, along) = if size.x >= size.y {
+        (size.x, size.y, Vec2::X)
+    } else {
+        (size.y, size.x, Vec2::Y)
+    };
+    let scale = (long / court::LENGTH).min(short / court::WIDTH);
+    (
+        court::LENGTH * 0.5 * scale,
+        court::WIDTH * 0.5 * scale,
+        along,
+    )
+}
+
+/// The scale one lot's court came out at, which every measurement in
+/// [`court`] is multiplied by.
+fn court_scale(half_length: f32) -> f32 {
+    half_length / (court::LENGTH * 0.5)
+}
+
+/// One court's paint pot: everything a painted line needs that is not its own
+/// position, so that the layout below can read as a layout.
+struct Brush<'a, 'w, 's> {
+    commands: &'a mut Commands<'w, 's>,
+    kit: &'a LotKit,
+    chunk: IVec2,
+    width: f32,
+}
+
+impl Brush<'_, '_, '_> {
+    /// A line of `length` through `p`, running along `dir`.
+    ///
+    /// The same yaw convention as `spawn_parking`: the mesh's +Z is turned
+    /// onto `dir`, so the length runs the way `dir` points. Getting this
+    /// pair the wrong way round is exactly what was wrong with the court —
+    /// every boundary line was drawn at right angles to the edge it marked,
+    /// with the length of the edge it did not.
+    fn stripe(&mut self, p: Vec2, dir: Vec2, length: f32) {
+        painted_line(
+            self.commands,
+            self.kit,
+            self.chunk,
+            p,
+            dir.x.atan2(dir.y),
+            self.width,
+            length,
+        );
+    }
+
+    /// An arc as short straight segments: `sweep` radians either side of
+    /// `facing`, at `radius` about `hub`. Sixteen segments to the half turn
+    /// is where the corners stop being visible from the pavement.
+    fn arc(&mut self, hub: Vec2, radius: f32, facing: f32, sweep: f32) {
+        let steps = ((sweep / std::f32::consts::PI) * 16.0).ceil().max(4.0) as usize;
+        let step = sweep * 2.0 / steps as f32;
+        let point = |angle: f32| hub + Vec2::new(angle.cos(), angle.sin()) * radius;
+        for i in 0..steps {
+            let from = point(facing - sweep + step * i as f32);
+            let to = point(facing - sweep + step * (i + 1) as f32);
+            let span = to - from;
+            let Ok(dir) = Dir2::new(span) else { continue };
+            // Overlapped by a line width, or every joint in the arc shows as
+            // a notch where the two segments are turned against each other.
+            self.stripe(from.midpoint(to), *dir, span.length() + self.width);
+        }
+    }
+
+    fn circle(&mut self, hub: Vec2, radius: f32) {
+        self.arc(hub, radius, 0.0, std::f32::consts::PI);
+    }
+}
+
 fn spawn_court(commands: &mut Commands, kit: &LotKit, rect: &Rect, chunk: IVec2) {
     let inner = rect.inset(1.2);
     if !inner.is_valid() {
         return;
     }
     let centre = inner.center();
-    let size = inner.size();
-
-    // The boundary, four painted lines.
-    for (at, yaw, length) in [
-        (Vec2::new(centre.x, inner.min.y), 0.0, size.x),
-        (Vec2::new(centre.x, inner.max.y), 0.0, size.x),
-        (
-            Vec2::new(inner.min.x, centre.y),
-            std::f32::consts::FRAC_PI_2,
-            size.y,
-        ),
-        (
-            Vec2::new(inner.max.x, centre.y),
-            std::f32::consts::FRAC_PI_2,
-            size.y,
-        ),
-    ] {
-        painted_line(commands, kit, chunk, at, yaw, 0.1, length);
+    let (half_length, half_width, along) = court_fit(&inner);
+    let scale = court_scale(half_length);
+    // Below about a third scale the whole layout is thinner than its own
+    // paint and reads as a smear. A bare yard is a better joke than a
+    // diagram of one.
+    if scale < 0.3 {
+        return;
     }
-    // Halfway line, across the short axis.
-    let along_x = size.x >= size.y;
-    if along_x {
-        painted_line(
+    let across = Vec2::new(-along.y, along.x);
+    // Real paint is five centimetres, which from standing height on a
+    // shrunken court is nothing at all — so it thins with the court, but
+    // never past what a decal can carry.
+    let width = (0.09 * scale).clamp(0.07, 0.12);
+
+    // Court coordinates: `u` along the length from the middle, `v` across.
+    let at = |u: f32, v: f32| centre + along * u + across * v;
+
+    {
+        let mut brush = Brush {
             commands,
             kit,
             chunk,
-            centre,
-            std::f32::consts::FRAC_PI_2,
-            0.1,
-            size.y,
-        );
-    } else {
-        painted_line(commands, kit, chunk, centre, 0.0, 0.1, size.x);
+            width,
+        };
+
+        // The boundary. Sidelines run the length of the court, baselines
+        // across it.
+        for side in [-1.0f32, 1.0] {
+            brush.stripe(at(0.0, side * half_width), along, half_length * 2.0);
+            brush.stripe(at(side * half_length, 0.0), across, half_width * 2.0);
+        }
+        // Halfway line and centre circle.
+        brush.stripe(centre, across, half_width * 2.0);
+        brush.circle(centre, court::CIRCLE * scale);
+
+        // Where the three-point arc reaches its widest allowed point, and so
+        // where its two straight sections have to start.
+        let reach =
+            (court::THREE * court::THREE - court::THREE_CORNER * court::THREE_CORNER).sqrt();
+
+        // The two ends. `end` is +1 for the half in the +`along` direction.
+        for end in [-1.0f32, 1.0] {
+            let baseline = end * half_length;
+
+            // The key, and the free-throw line closing it.
+            let lane_end = baseline - end * court::LANE_LENGTH * scale;
+            for side in [-1.0f32, 1.0] {
+                brush.stripe(
+                    at((baseline + lane_end) * 0.5, side * court::LANE_HALF * scale),
+                    along,
+                    court::LANE_LENGTH * scale,
+                );
+            }
+            brush.stripe(at(lane_end, 0.0), across, court::LANE_HALF * 2.0 * scale);
+            // The free-throw circle sits on that line, centred on it.
+            brush.circle(at(lane_end, 0.0), court::CIRCLE * scale);
+
+            // The three-point line: two straights parallel to the sidelines,
+            // then the arc that joins them round the basket.
+            let hub_u = baseline - end * court::BASKET_INSET * scale;
+            let straight_to = hub_u - end * reach * scale;
+            for side in [-1.0f32, 1.0] {
+                brush.stripe(
+                    at(
+                        (baseline + straight_to) * 0.5,
+                        side * court::THREE_CORNER * scale,
+                    ),
+                    along,
+                    (baseline - straight_to).abs(),
+                );
+            }
+            // Swept about the basket, facing in from the baseline, until the
+            // arc is as wide as the straights it has to meet.
+            let inward = -along * end;
+            brush.arc(
+                at(hub_u, 0.0),
+                court::THREE * scale,
+                inward.y.atan2(inward.x),
+                std::f32::consts::FRAC_PI_2 + (reach / court::THREE).asin(),
+            );
+        }
     }
 
     // The ball. A flummi that is only a flummi: a pure bounce body with no
@@ -435,16 +608,14 @@ fn spawn_court(commands: &mut Commands, kit: &LotKit, rect: &Rect, chunk: IVec2)
         Mass(0.6),
     ));
 
-    // A hoop at each end of the long axis, facing back down the court.
-    let (along, extent) = if along_x {
-        (Vec2::X, size.x)
-    } else {
-        (Vec2::Y, size.y)
-    };
+    // A hoop at each end, standing just off the baseline and reaching in far
+    // enough that the ring hangs over the middle of its own arc.
     for end in [-1.0f32, 1.0] {
-        let foot = centre + along * (end * (extent * 0.5 - 0.3));
+        const STAND: f32 = 0.5;
+        let foot = centre + along * (end * (half_length + STAND));
         let inward = -along * end;
         let yaw = inward.x.atan2(inward.y);
+        let ring_out = STAND + court::BASKET_INSET * scale;
         commands
             .spawn((
                 ChunkOf(chunk),
@@ -467,13 +638,14 @@ fn spawn_court(commands: &mut Commands, kit: &LotKit, rect: &Rect, chunk: IVec2)
                 post.spawn((
                     Mesh3d(kit.backboard.clone()),
                     MeshMaterial3d(kit.board_white.clone()),
-                    Transform::from_xyz(0.0, 1.25, 0.4),
+                    Transform::from_xyz(0.0, 1.25, ring_out - 0.28),
                 ));
-                // The ring, flat, in front of the board.
+                // The ring, flat, in front of the board and directly over
+                // the point its own three-point arc is drawn about.
                 post.spawn((
                     Mesh3d(kit.ring.clone()),
                     MeshMaterial3d(kit.ring_red.clone()),
-                    Transform::from_xyz(0.0, 1.0, 0.68),
+                    Transform::from_xyz(0.0, 1.0, ring_out),
                 ));
             });
     }
@@ -485,6 +657,55 @@ mod tests {
 
     fn lot(w: f32, d: f32) -> Rect {
         Rect::new(Vec2::ZERO, Vec2::new(w, d))
+    }
+
+    #[test]
+    fn a_court_keeps_a_real_courts_proportions_whatever_the_lot() {
+        // Stretching the court to the lot is the failure this guards: the
+        // markings only read as basketball if the key, the circles and the
+        // arc keep their sizes relative to one another and to the boundary.
+        for (w, d) in [(60.0, 40.0), (40.0, 60.0), (30.0, 28.0), (18.0, 40.0)] {
+            let inner = lot(w, d).inset(1.2);
+            let (half_length, half_width, along) = court_fit(&inner);
+            let ratio = half_length / half_width;
+            assert!(
+                (ratio - court::LENGTH / court::WIDTH).abs() < 1e-4,
+                "a {w}x{d} lot gave a court of ratio {ratio}"
+            );
+            // And it fits, on both axes, whichever way round it was laid.
+            let size = inner.size();
+            let (long, short) = if along == Vec2::X {
+                (size.x, size.y)
+            } else {
+                (size.y, size.x)
+            };
+            assert!(half_length * 2.0 <= long + 1e-3, "the court is too long");
+            assert!(half_width * 2.0 <= short + 1e-3, "the court is too wide");
+        }
+    }
+
+    #[test]
+    fn a_court_lies_along_the_long_side_of_its_lot() {
+        assert_eq!(court_fit(&lot(60.0, 40.0)).2, Vec2::X);
+        assert_eq!(court_fit(&lot(40.0, 60.0)).2, Vec2::Y);
+    }
+
+    #[test]
+    fn the_three_point_arc_meets_its_own_straight_sections() {
+        // The straights run at THREE_CORNER from the centre line and the arc
+        // is struck at THREE from the basket. If the two do not meet, the
+        // line has a step in it — which is the tell that the numbers were
+        // eyeballed rather than measured.
+        let reach =
+            (court::THREE * court::THREE - court::THREE_CORNER * court::THREE_CORNER).sqrt();
+        let sweep = std::f32::consts::FRAC_PI_2 + (reach / court::THREE).asin();
+        // The arc's own endpoint, measured out from the basket.
+        let across = (sweep.sin() * court::THREE).abs();
+        assert!(
+            (across - court::THREE_CORNER).abs() < 1e-3,
+            "the arc ends {across} out where the straight runs at {}",
+            court::THREE_CORNER
+        );
     }
 
     #[test]

@@ -44,6 +44,8 @@ fn tuning_panel(
     cameras: Query<(&Transform, &CameraRig)>,
     crowd: Query<Entity, With<Pedestrian>>,
     actions: Query<&ActionState<Action>>,
+    // Absent in capture mode, where the whole mixer sits the run out.
+    limiter: Option<Res<crate::audio::Limiter>>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
 
@@ -91,6 +93,18 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.audio.master, 0.0..=1.0).text("master"));
             ui.add(egui::Slider::new(&mut config.audio.effects, 0.0..=1.5).text("effects"));
             ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
+            // What the limiter is actually having to do. Rodio clips rather
+            // than compresses, so the number that matters is not how loud any
+            // one sound is but how many are loud at once — and that is only
+            // visible from inside a moment on a street.
+            if let Some(limiter) = &limiter {
+                ui.label(format!(
+                    "sum:    {:.2} / {:.2}   limiter {:.0}%",
+                    limiter.loud,
+                    crate::audio::ceiling(),
+                    limiter.gain * 100.0
+                ));
+            }
 
             ui.separator();
             bounce_section(ui, &mut config);
