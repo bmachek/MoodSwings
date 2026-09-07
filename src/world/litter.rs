@@ -327,10 +327,18 @@ fn stir(
     time: Res<Time>,
     mut litter: Query<(&Transform, &mut Litter)>,
     walkers: Query<&Transform, (Without<Litter>, With<crate::bounce::controller::Bouncer>)>,
+    // `ActiveVehicle` and not `Vehicle`, and this is not an optimisation, it is
+    // the difference between a system and a hang: there are two and a half
+    // thousand parked cars in the city and about eighteen hundred pieces of
+    // litter, and pairing every one with every other is four and a half million
+    // distance tests a frame for the sake of a crisp packet in a chunk nobody
+    // is standing in. `vehicle::spawn::activate_nearby_vehicles` already keeps
+    // this marker on exactly the cars within a hundred and forty metres, which
+    // is exactly the set that can reach anything.
     vehicles: Query<
         &Transform,
         (
-            With<crate::vehicle::spawn::Vehicle>,
+            With<crate::vehicle::spawn::ActiveVehicle>,
             Without<Litter>,
             Without<crate::bounce::controller::Bouncer>,
         ),

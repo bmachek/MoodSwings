@@ -408,7 +408,9 @@ fn startle(
             Without<Pigeon>,
         ),
     >,
-    vehicles: Query<&Transform, (With<crate::vehicle::spawn::Vehicle>, Without<Pigeon>)>,
+    // The cars near enough to matter, not all two and a half thousand parked
+    // ones — see the note on the same filter in `world::litter`.
+    vehicles: Query<&Transform, (With<crate::vehicle::spawn::ActiveVehicle>, Without<Pigeon>)>,
 ) {
     // Gathered once. Forty birds against a street's worth of people is a few
     // thousand distance tests a frame otherwise, and there is no reason for a

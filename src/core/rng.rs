@@ -91,6 +91,10 @@ pub mod stream {
     /// worksite cannot move a bin, a tree or a piece of rubbish on any of the
     /// streets that are not.
     pub const WORKSITE: u64 = 25;
+    /// What is strung across the narrow streets: pennants and washing. Its own
+    /// stream so that hanging a line over a lane cannot move anything standing
+    /// under it.
+    pub const BUNTING: u64 = 26;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

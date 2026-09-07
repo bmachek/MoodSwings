@@ -159,6 +159,24 @@ pub struct BuildingKits<'w> {
     tempers: Option<Res<'w, crate::mood::feeling::Tempers>>,
 }
 
+/// The street-side kits, bundled for the same reason [`BuildingKits`] is.
+///
+/// Bevy caps a system at sixteen parameters, and this one went over the moment
+/// the bunting arrived — which is exactly the failure the note on
+/// `BuildingKits` predicted, one street's worth of new furniture later. The
+/// honest cut is the same one: everything that exists only to be handed to a
+/// `spawn_edge` goes in one bag.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct StreetKits<'w> {
+    paint: Res<'w, MarkingAssets>,
+    props: Res<'w, PropAssets>,
+    foliage: Res<'w, crate::world::vegetation::FoliageKit>,
+    wear: Res<'w, crate::world::decals::WearKit>,
+    rubbish: Res<'w, crate::world::litter::LitterKit>,
+    works: Res<'w, crate::world::worksite::WorksiteKit>,
+    lines: Res<'w, crate::world::bunting::BuntingKit>,
+}
+
 pub fn update_streaming(
     mut commands: Commands,
     time: Res<Time>,
@@ -166,12 +184,7 @@ pub fn update_streaming(
     city: Res<City>,
     index: Res<ChunkIndex>,
     kits: BuildingKits,
-    paint: Res<MarkingAssets>,
-    props: Res<PropAssets>,
-    foliage: Res<crate::world::vegetation::FoliageKit>,
-    wear: Res<crate::world::decals::WearKit>,
-    rubbish: Res<crate::world::litter::LitterKit>,
-    works: Res<crate::world::worksite::WorksiteKit>,
+    street: StreetKits,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -217,6 +230,7 @@ pub fn update_streaming(
     let wear_range = config.graphics.lod_distance(crate::world::decals::RANGE);
     let litter_range = config.graphics.lod_distance(crate::world::litter::RANGE);
     let works_range = config.graphics.lod_distance(crate::world::worksite::RANGE);
+    let bunting_range = config.graphics.lod_distance(crate::world::bunting::RANGE);
     for chunk in arriving {
         // One stream per chunk and per subsystem, so a chunk's furniture is
         // identical every time it is walked back into rather than reshuffling,
@@ -238,7 +252,7 @@ pub fn update_streaming(
                 spawn_block(&mut commands, &ctx, block, chunk);
                 super::vegetation::spawn_park(
                     &mut commands,
-                    &foliage,
+                    &street.foliage,
                     &mut planting,
                     block,
                     chunk,
@@ -262,14 +276,27 @@ pub fn update_streaming(
                 crate::core::rng::stream::WORKSITE,
                 (chunk.x, chunk.y),
             );
+            let mut stringing = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::BUNTING,
+                (chunk.x, chunk.y),
+            );
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
-                spawn_edge(&mut commands, &paint, edge, from, to, chunk);
-                super::props::spawn_edge(&mut commands, &props, &mut rng, edge, from, to, chunk);
+                spawn_edge(&mut commands, &street.paint, edge, from, to, chunk);
+                super::props::spawn_edge(
+                    &mut commands,
+                    &street.props,
+                    &mut rng,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                );
                 super::vegetation::spawn_edge(
                     &mut commands,
-                    &foliage,
+                    &street.foliage,
                     &mut planting,
                     edge,
                     from,
@@ -279,7 +306,7 @@ pub fn update_streaming(
                 );
                 super::decals::spawn_edge(
                     &mut commands,
-                    &wear,
+                    &street.wear,
                     &mut wearing,
                     edge,
                     from,
@@ -289,7 +316,7 @@ pub fn update_streaming(
                 );
                 super::litter::spawn_edge(
                     &mut commands,
-                    &rubbish,
+                    &street.rubbish,
                     &mut dropping,
                     edge,
                     from,
@@ -299,13 +326,23 @@ pub fn update_streaming(
                 );
                 super::worksite::spawn_edge(
                     &mut commands,
-                    &works,
+                    &street.works,
                     &mut digging,
                     edge,
                     from,
                     to,
                     chunk,
                     works_range,
+                );
+                super::bunting::spawn_edge(
+                    &mut commands,
+                    &street.lines,
+                    &mut stringing,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    bunting_range,
                 );
             }
         }
@@ -327,7 +364,7 @@ pub fn update_streaming(
                     .any(|&edge| city.graph.edge(edge).arterial);
                 super::props::spawn_junction(
                     &mut commands,
-                    &props,
+                    &street.props,
                     node.pos,
                     &arms,
                     arterial,
@@ -335,7 +372,7 @@ pub fn update_streaming(
                 );
                 super::decals::spawn_junction(
                     &mut commands,
-                    &wear,
+                    &street.wear,
                     &mut wearing,
                     node.pos,
                     &arms,

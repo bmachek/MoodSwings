@@ -1,6 +1,7 @@
 //! The world: procedural city, physics, streaming, and the day/night cycle.
 
 pub mod buildings;
+pub mod bunting;
 pub mod church;
 pub mod citygen;
 pub mod decals;
@@ -64,6 +65,7 @@ impl Plugin for WorldPlugin {
             stadium::StadiumPlugin,
             litter::LitterPlugin,
             worksite::WorksitePlugin,
+            bunting::BuntingPlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
@@ -118,6 +120,7 @@ fn generate_city(
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(bunting::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(worksite::build_assets(
         &mut meshes,
         &mut materials,
