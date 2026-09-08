@@ -96,7 +96,10 @@ pub const EXTRA: [(u8, [u8; 7]); 12] = [
     (0xC4, [0b01010, 0b00000, 0b01110, 0b10001, 0b11111, 0b10001, 0b10001]), // Ä
     (0xD6, [0b01010, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110]), // Ö
     (0xDC, [0b01010, 0b00000, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]), // Ü
-    (0xDF, [0b01110, 0b10001, 0b10001, 0b10110, 0b10001, 0b10001, 0b10110]), // ß
+    // The eszett's top-left corner is open and neither bowl closes onto the
+    // stem. Both bowls closed — which is what this was — is a B, and every
+    // second sign in the town read STRABE.
+    (0xDF, [0b01100, 0b10010, 0b10010, 0b10100, 0b10010, 0b10010, 0b10100]), // ß
     (b'.', [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100]),
     (b',', [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b11000]),
     (b'!', [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100]),
@@ -482,6 +485,124 @@ pub fn roof() -> Image {
 
 pub fn roof_normal() -> Image {
     normal_map(GROUND_SIZE, 0.018, roof_height)
+}
+
+/// Biberschwanz: the plain clay tile a Bavarian old town is roofed with.
+///
+/// The name is the shape — a beaver's tail, a rectangle with a rounded end —
+/// and the shape is the whole of why a Landshut roof reads as one from across
+/// the river. It is laid in double lap, every course offset half a tile from
+/// the one below, so what the eye sees is rows of scallops rather than a grid.
+///
+/// ## Which way up
+///
+/// `u` runs *up the slope*, so the courses stack along it, and `v` runs along
+/// the ridge. That is the opposite of how one would write it on paper, and it
+/// is deliberate: a roof leaf is a scaled cube, and a cube's top face maps `u`
+/// to its local X, which for a leaf is the direction of the fall. Written the
+/// natural way round, the courses lapped sideways and the roof read as
+/// clapboard — visible in `shots/m18-tiles.png` before this was fixed.
+///
+/// Height, not colour, is what carries it: the tint lives on the material, so
+/// a new roof and a mossy one share this one image.
+/// Where a point on a roof falls: which tile, and where inside it.
+///
+/// Split out because the albedo and the relief both need it and neither can be
+/// derived from the other — a tile that is a shade darker than its neighbour is
+/// not a tile that sits lower.
+struct Tile {
+    /// Which tile of the pattern, for hashing something per-tile.
+    index: f32,
+    course: f32,
+    /// Across the tile and up the course, both 0..1.
+    across: f32,
+    up: f32,
+}
+
+/// Courses up the slope and tiles along the ridge, per repeat of the image.
+/// The material tiles it further; this is only the pattern.
+const COURSES: f32 = 9.0;
+const TILES: f32 = 6.0;
+/// How much of a course's height the rounded tail takes up.
+const TAIL: f32 = 0.36;
+
+fn tile_at(u: f32, v: f32) -> Tile {
+    let course = (u * COURSES).floor();
+    // Every other course is set half a tile over — the bond that stops the
+    // joints lining up into gutters running down the roof.
+    let stagger = if (course as i32).rem_euclid(2) == 0 {
+        0.0
+    } else {
+        0.5
+    };
+    Tile {
+        index: (v * TILES + stagger).floor(),
+        course,
+        across: (v * TILES + stagger).fract(),
+        // Up the course: 0 at the tail, 1 where it goes under the course above.
+        up: (u * COURSES).fract(),
+    }
+}
+
+fn tile_height(u: f32, v: f32) -> f32 {
+    let tile = tile_at(u, v);
+    // A groove down each joint, and the lap line where this tile goes under
+    // the next course.
+    let joint = 1.0 - (((tile.across - 0.5) * 2.0).abs()).powi(8);
+    let lap = ((1.0 - tile.up) / 0.14).clamp(0.0, 1.0);
+    let face = (0.60 + joint * 0.20 + lap * 0.20).clamp(0.0, 1.0);
+
+    // The rounded end. Measured from the middle of the tile, which is where it
+    // hangs lowest; the corners of the tail sit a third of a course higher.
+    let off = ((tile.across - 0.5) * 2.0).abs().min(1.0);
+    let edge = TAIL * (1.0 - (1.0 - off * off).max(0.0).sqrt());
+    if tile.up < edge {
+        // Below the tail. This is *not* a hole — it is the tile of the course
+        // below, seen through the gap between two round ends, sitting in their
+        // shadow. Filling it with darkness put a black arrowhead between every
+        // pair of tiles, which is the one thing a tiled roof does not have.
+        let under = ((edge - tile.up) / TAIL).clamp(0.0, 1.0);
+        return (face - 0.34 * (1.0 - under).powi(2) - 0.08).clamp(0.0, 1.0);
+    }
+    face
+}
+
+/// Clay tiles, for the pitched roofs.
+pub fn tiles() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let tile = tile_at(u, v);
+        // One value per *tile*, not per texel. This is what a clay roof
+        // actually looks like from the far pavement: the courses are a
+        // texture, but what the eye reads is that every tile came out of the
+        // kiln a slightly different colour. Shading alone gave a flat sheet as
+        // soon as the courses mipped away.
+        let fired = fbm(
+            (tile.index + 0.5) / TILES,
+            (tile.course + 0.5) / COURSES,
+            7,
+            2,
+            0x7B1E,
+        ) - 0.5;
+
+        // Held under one, because a value that clips is a value with no
+        // pattern left in it — the first pass at this ran to 1.24 and the top
+        // quarter of every roof came out flat white.
+        let value = (0.44 + tile_height(u, v) * 0.54 + fired * 0.26).clamp(0.06, 1.0);
+        // Warmer where the tile is proud and cooler in the shadow of the lap,
+        // which is what fired clay does and what keeps a tinted grey from
+        // reading as plastic. The cooler tiles are also the paler ones.
+        let warm = 1.0 + fired * 0.10;
+        [
+            byte(value * 1.05 * warm),
+            byte(value * 0.96),
+            byte(value * 0.90 / warm),
+            255,
+        ]
+    })
+}
+
+pub fn tiles_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.038, tile_height)
 }
 
 // --------------------------------------------------------------- facades ----
@@ -1099,5 +1220,45 @@ mod tests {
         }
         // Lowercase folds to the capitals the font actually has.
         assert_eq!(encode("boing"), encode("BOING"));
+    }
+
+    /// A tiled roof is rows of scallops, not a flat sheet with holes in it.
+    #[test]
+    fn clay_tiles_are_laid_in_courses() {
+        let mut darkest = 1.0f32;
+        let mut lightest = 0.0f32;
+        for y in 0..128 {
+            for x in 0..128 {
+                let h = tile_height(x as f32 / 128.0, y as f32 / 128.0);
+                assert!((0.0..=1.0).contains(&h));
+                darkest = darkest.min(h);
+                lightest = lightest.max(h);
+            }
+        }
+        // There is relief, and none of it is a hole. The failure this pins is
+        // the first version, whose shadow under a tail was a flat 0.18 wedge:
+        // that reads as a black arrowhead between every pair of tiles.
+        assert!(lightest - darkest > 0.25, "the roof is flat");
+        assert!(darkest > 0.25, "there are holes in the roof: {darkest:.3}");
+
+        // Nothing clips. A texel pinned at white or black is a texel with
+        // no pattern left in it, and a roof of them is a flat sheet however
+        // good the height field underneath is.
+        for y in 0..64 {
+            for x in 0..64 {
+                let value = 0.44 + tile_height(x as f32 / 64.0, y as f32 / 64.0) * 0.54;
+                assert!(value < 1.0, "the roof burns out: {value:.3}");
+            }
+        }
+
+        // The courses stack up the slope, which is `u` — not across it. Two
+        // points a course apart in `u` at the same `v` are at different points
+        // of the pattern, because the bond offsets every other course.
+        let one = tile_height(0.5 / 9.0, 0.5 / 6.0);
+        let two = tile_height(1.5 / 9.0, 0.5 / 6.0);
+        assert!(
+            (one - two).abs() > 0.05,
+            "the courses do not run up the slope: {one:.3} vs {two:.3}"
+        );
     }
 }

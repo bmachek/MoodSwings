@@ -613,7 +613,7 @@ fn lay_out_buildings(
 
     // The style's one big lever: the same draws, a different skyline.
     let (min_h, max_h) = district.height_range();
-    let (min_h, max_h) = (min_h * style.height_scale(), max_h * style.height_scale());
+    let (min_h, max_h) = style.heights((min_h, max_h));
     let min_h = min_h.max(4.0);
     let max_h = max_h.max(min_h + 1.0);
     let vacancy = district.vacancy();
@@ -1002,7 +1002,13 @@ fn zone_civics(seed: u64, blocks: &mut [Block], style: CityStyle) {
 }
 
 /// Number of material variants per district.
-pub const PALETTE_SIZE: u8 = 4;
+///
+/// Six rather than four since the Landshut pass: an old town's whole look is
+/// that no two houses in a row are the same colour, and with four tones a
+/// terrace of eight repeats itself twice however the draws fall. The cost is
+/// two more shared materials per district — every building still draws from
+/// the same table, so this is a handful of materials, not a handful per house.
+pub const PALETTE_SIZE: u8 = 6;
 
 /// Recursively halves a block into lots, always splitting the longer side so
 /// lots stay roughly square rather than degenerating into slivers.

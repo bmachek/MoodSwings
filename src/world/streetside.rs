@@ -345,6 +345,94 @@ fn district_at(at: Vec2, half_extent: f32, arterial: bool) -> District {
     }
 }
 
+/// A rectangle with a direction: a building's plot, or a road's corridor.
+///
+/// Both are the same shape and neither is axis-aligned, which is the whole
+/// reason this exists. A generated city could ask "is this lot inside that
+/// block?" because its blocks were rectangles on the map; a real town has
+/// streets meeting at every angle there is, and a plot that faces one of them
+/// squarely sits at some arbitrary angle to the next.
+#[derive(Clone, Copy)]
+struct Oblong {
+    centre: Vec2,
+    /// Unit vector along the local X — the frontage of a plot, the run of a
+    /// road.
+    axis: Vec2,
+    /// Half the extent along that axis and across it.
+    half: Vec2,
+}
+
+impl Oblong {
+    fn across(&self) -> Vec2 {
+        Vec2::new(-self.axis.y, self.axis.x)
+    }
+
+    /// How far this reaches along `n`, from its own middle.
+    fn reach(&self, n: Vec2) -> f32 {
+        self.half.x * self.axis.dot(n).abs() + self.half.y * self.across().dot(n).abs()
+    }
+
+    /// Do the two overlap by more than `margin` in every direction?
+    ///
+    /// The separating-axis test: two convex shapes miss each other if there is
+    /// one direction they do not overlap in, and for two rectangles the only
+    /// directions worth trying are their four sides. `margin` is what lets a
+    /// building stand with its front wall exactly on the edge of the pavement,
+    /// which is where a building goes, without that counting as standing in the
+    /// road.
+    fn clashes_with(&self, other: &Oblong, margin: f32) -> bool {
+        let between = other.centre - self.centre;
+        ![self.axis, self.across(), other.axis, other.across()]
+            .into_iter()
+            .any(|n| between.dot(n).abs() + margin >= self.reach(n) + other.reach(n))
+    }
+}
+
+/// How deep into the tarmac a corner has to reach before it is in the road.
+///
+/// Not zero, and it cannot be: a plot is placed with its front wall exactly on
+/// the corridor's edge, so at nought every single building in the town would
+/// reject itself against the street it faces. A hand's width of slack passes
+/// that and still catches the failure this is here for — the corner of a
+/// house standing out in a *second* street that happens to run past the back
+/// of it, which nothing checked at all before, because the only clash test
+/// there was compared buildings against other buildings.
+const IN_THE_ROAD: f32 = 0.20;
+
+/// Every road, filed by cell, so a candidate plot only tests the handful of
+/// streets that could possibly be under it.
+///
+/// Without this the check is every plot against every road: six thousand times
+/// two thousand for Landshut, which is thirteen million tests to place a town.
+fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<Oblong>> {
+    let mut filed: HashMap<(i32, i32), Vec<Oblong>> = HashMap::default();
+    for edge in layout.graph.edges() {
+        let a = layout.graph.node(edge.a).pos;
+        let b = layout.graph.node(edge.b).pos;
+        let Ok(direction) = Dir2::new(b - a) else {
+            continue;
+        };
+        // The corridor is the carriageway and the pavement either side of it:
+        // the ground a building may not stand on.
+        let road = Oblong {
+            centre: a.midpoint(b),
+            axis: *direction,
+            half: Vec2::new(edge.length * 0.5, edge.width * 0.5 + SIDEWALK_WIDTH),
+        };
+        // Filed into every cell its bounding box touches, which for a long
+        // street is a lot of cells and for a stub is one.
+        let extent = Vec2::new(road.reach(Vec2::X), road.reach(Vec2::Y));
+        let low = ((road.centre - extent) / CELL).floor().as_ivec2();
+        let high = ((road.centre + extent) / CELL).floor().as_ivec2();
+        for x in low.x..=high.x {
+            for z in low.y..=high.y {
+                filed.entry((x, z)).or_default().push(road);
+            }
+        }
+    }
+    filed
+}
+
 /// Everything a real town gets built along its streets.
 ///
 /// Returns one [`Block`] per building — unpaved, because the pavement is laid
@@ -357,6 +445,7 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> Vec<Block> {
     // Middles of everything placed so far, bucketed by cell. A candidate only
     // looks at its own cell and the eight around it.
     let mut taken: HashMap<(i32, i32), Vec<(Vec2, f32)>> = HashMap::default();
+    let roads = corridors(layout);
     let scale = style.lot_scale();
 
     for edge in layout.graph.edges() {
@@ -429,14 +518,33 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> Vec<Block> {
                 if clash {
                     continue;
                 }
+                // And is it standing in a road? Not the one it faces — that one
+                // it is placed against on purpose — but any *other* street that
+                // happens to run behind or beside it. An OSM town is full of
+                // them: a lane ending a few metres off a main road, two streets
+                // meeting at thirty degrees, a footway threading a block. The
+                // frontage of a plot squares up to its own street and therefore
+                // sits at some arbitrary angle to every other one, which is why
+                // this is a rotated-rectangle test and not a box overlap.
+                let plot = Oblong {
+                    centre,
+                    axis: *direction,
+                    half: Vec2::new(frontage, depth) * 0.5,
+                };
+                let paved = (-1..=1).any(|dx| {
+                    (-1..=1).any(|dz| {
+                        roads.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
+                            near.iter().any(|road| plot.clashes_with(road, IN_THE_ROAD))
+                        })
+                    })
+                });
+                if paved {
+                    continue;
+                }
                 taken.entry(cell).or_default().push((centre, radius));
 
                 let district = district_at(centre, layout.half_extent, edge.arterial);
-                let (low, high) = district.height_range();
-                let (low, high) = (
-                    (low * style.height_scale()).max(4.0),
-                    (high * style.height_scale()).max(5.0),
-                );
+                let (low, high) = style.heights(district.height_range());
                 let height = rng.random_range(low..high);
                 // The footprint is read in the site's own frame — frontage
                 // across, depth back — because `Building::facing` is set. It is
@@ -585,5 +693,93 @@ mod tests {
         let apart = (radius + radius) * CLEARANCE;
         assert!(apart < 14.0, "a terrace would be rejected as a clash");
         assert!(apart > 9.0, "two buildings could stand on the same ground");
+    }
+
+    /// Two rectangles at an angle to one another are told apart correctly.
+    #[test]
+    fn an_oblong_knows_what_it_is_standing_in() {
+        let road = Oblong {
+            centre: Vec2::ZERO,
+            axis: Vec2::X,
+            half: Vec2::new(50.0, 6.0),
+        };
+        // Squarely alongside, its front wall exactly on the kerb: this is where
+        // every building in the town is put, and it must not read as a clash.
+        let beside = Oblong {
+            centre: Vec2::new(0.0, 6.0 + 7.0),
+            axis: Vec2::X,
+            half: Vec2::new(9.0, 7.0),
+        };
+        assert!(!beside.clashes_with(&road, IN_THE_ROAD));
+
+        // Turned forty-five degrees on the same spot, so a corner swings into
+        // the carriageway. This is the failure: a plot squared up to one street
+        // and slanted across another.
+        let slanted = Oblong {
+            axis: Vec2::new(1.0, 1.0).normalize(),
+            ..beside
+        };
+        assert!(
+            slanted.clashes_with(&road, IN_THE_ROAD),
+            "a corner in the road was not noticed"
+        );
+
+        // Well clear is well clear, whatever the angle.
+        let away = Oblong {
+            centre: Vec2::new(0.0, 40.0),
+            ..slanted
+        };
+        assert!(!away.clashes_with(&road, IN_THE_ROAD));
+    }
+
+    /// Nothing is built on the tarmac of a street it does not face.
+    #[test]
+    fn no_house_stands_in_a_crossing_street() {
+        // A T: a long road east to west, and a lane running south off the
+        // middle of it. The lane's own buildings are placed square to the lane
+        // and reach back towards the main road, and before the corridor test
+        // the ones near the top of the lane stood in it.
+        let mut graph = crate::world::roadgraph::RoadGraph::default();
+        let west = graph.add_node(Vec2::new(-200.0, 0.0), (0, 0));
+        let middle = graph.add_node(Vec2::new(0.0, 0.0), (0, 1));
+        let east = graph.add_node(Vec2::new(200.0, 0.0), (0, 2));
+        let south = graph.add_node(Vec2::new(0.0, 200.0), (0, 3));
+        graph.connect(west, middle, 14.0, true);
+        graph.connect(middle, east, 14.0, true);
+        graph.connect(middle, south, 7.5, false);
+
+        let layout = CityLayout {
+            seed: 1,
+            half_extent: 400.0,
+            x_streets: Vec::new(),
+            z_streets: Vec::new(),
+            blocks: Vec::new(),
+            graph,
+            canal: None,
+        };
+        let blocks = lots(&layout, 1, CityStyle::Landshuepf);
+        assert!(!blocks.is_empty(), "nothing was built at all");
+
+        let roads = corridors(&layout);
+        for block in &blocks {
+            let building = &block.buildings[0];
+            let yaw = building.facing.expect("a lot faces its street");
+            let plot = Oblong {
+                centre: building.footprint.center(),
+                // `facing` turns +Z outwards, so local +X — the frontage — is
+                // the way the street runs.
+                axis: Vec2::new(yaw.cos(), -yaw.sin()),
+                half: building.footprint.size() * 0.5,
+            };
+            for near in roads.values() {
+                for road in near {
+                    assert!(
+                        !plot.clashes_with(road, IN_THE_ROAD),
+                        "a house at {} is standing in the road",
+                        plot.centre
+                    );
+                }
+            }
+        }
     }
 }

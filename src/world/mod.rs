@@ -28,6 +28,7 @@ pub mod stadium;
 pub mod statues;
 pub mod streaming;
 pub mod streetlights;
+pub mod streetname;
 pub mod streetside;
 pub mod texture;
 pub mod timeofday;
@@ -112,14 +113,18 @@ fn generate_city(
     // from the seed. A named town that will not load falls back to the
     // generator with a warning rather than to an empty world — the same
     // discipline a missing sound gets.
-    let mut layout = config
+    let layout = config
         .city
         .atlas()
         .and_then(atlas::load)
         .map(|town| atlas::layout(&town, config.world_seed, config.world.half_extent))
         .unwrap_or_else(|| {
-            citygen::generate(config.world_seed, config.world.half_extent, config.city)
+            (
+                citygen::generate(config.world_seed, config.world.half_extent, config.city),
+                atlas::Signposts::default(),
+            )
         });
+    let (mut layout, signs) = layout;
     // A town read off a map arrives as a road network and nothing else. What
     // fills it is not blocks — a real block is not a rectangle — but frontages
     // marched down each side of each street; see `world::streetside`.
@@ -136,6 +141,14 @@ fn generate_city(
         layout.graph.edge_count(),
     );
 
+    commands.insert_resource(streetname::build_assets(
+        &signs.names,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
+    commands.insert_resource(signs);
+
     river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
 
     let city = City(layout);
@@ -145,7 +158,11 @@ fn generate_city(
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(bunting::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(plume::build_assets(&mut meshes, &mut materials));
-    commands.insert_resource(gable::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(gable::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(streetside::build_assets(&mut meshes));
     commands.insert_resource(worksite::build_assets(
         &mut meshes,

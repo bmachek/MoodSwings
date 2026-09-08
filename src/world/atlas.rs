@@ -102,11 +102,25 @@ pub fn load(name: &str) -> Option<Atlas> {
     }
 }
 
+/// The names of a town's streets, and which edge wears which.
+///
+/// Kept beside the layout rather than inside `RoadEdge`, because a name is a
+/// fact about a *street* and an edge is one segment of one: a curved road is a
+/// dozen edges and one name. The generator has no names at all and gets an
+/// empty one of these.
+#[derive(Resource, Default)]
+pub struct Signposts {
+    /// Distinct names, in the order the plates are painted in.
+    pub names: Vec<String>,
+    /// Which name each `EdgeId` wears, if it wears one.
+    pub per_edge: Vec<Option<usize>>,
+}
+
 /// Builds a layout out of a town.
 ///
 /// The blocks come out empty and that is not an oversight — see
 /// `frontage_lots`, which is what fills a real city instead.
-pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> CityLayout {
+pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signposts) {
     let mut graph = RoadGraph::default();
     // Junction welding: two ways that share an OSM node project to the same
     // metre, so quantising to a decimetre and looking up is enough to turn five
@@ -114,8 +128,19 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> CityLayout {
     let mut welded: HashMap<(i32, i32), super::roadgraph::NodeId> = HashMap::default();
     let key = |at: Vec2| ((at.x / WELD).round() as i32, (at.y / WELD).round() as i32);
 
+    let mut signs = Signposts::default();
+    // Distinct names, so a hundred and sixty-three plates are painted for a
+    // town with two thousand streets in it.
+    let mut named: HashMap<&str, usize> = HashMap::default();
+
     let mut clipped = 0usize;
     for street in &atlas.streets {
+        let name = (!street.name.is_empty()).then(|| {
+            *named.entry(street.name.as_str()).or_insert_with(|| {
+                signs.names.push(street.name.clone());
+                signs.names.len() - 1
+            })
+        });
         let mut previous: Option<(Vec2, super::roadgraph::NodeId)> = None;
         for &(x, z) in &street.points {
             let at = Vec2::new(x, z);
@@ -146,34 +171,40 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> CityLayout {
                 && before.distance(at) >= SHORTEST
             {
                 graph.connect(from, node, street.width, street.arterial);
+                signs.per_edge.push(name);
             }
             previous = Some((at, node));
         }
     }
 
     info!(
-        "{}: {} streets, {} junctions, {} roads ({clipped} runs clipped at the edge) \
+        "{}: {} streets under {} names, {} junctions, {} roads \
+         ({clipped} runs clipped at the edge) \
          — map data (c) OpenStreetMap contributors, ODbL 1.0",
         atlas.name,
         atlas.streets.len(),
+        signs.names.len(),
         graph.node_count(),
         graph.edge_count(),
     );
 
-    CityLayout {
-        seed,
-        half_extent,
-        // A real town has no street lists: those are the generator's two axes
-        // of its own grid, and nothing outside it reads them.
-        x_streets: Vec::new(),
-        z_streets: Vec::new(),
-        blocks: Vec::new(),
-        graph,
-        // The Isar is a river and this is a canal dug through a grid. Landshut
-        // deserves better than the wrong water in the wrong place, so until
-        // there is a real one there is none.
-        canal: None,
-    }
+    (
+        CityLayout {
+            seed,
+            half_extent,
+            // A real town has no street lists: those are the generator's two axes
+            // of its own grid, and nothing outside it reads them.
+            x_streets: Vec::new(),
+            z_streets: Vec::new(),
+            blocks: Vec::new(),
+            graph,
+            // The Isar is a river and this is a canal dug through a grid. Landshut
+            // deserves better than the wrong water in the wrong place, so until
+            // there is a real one there is none.
+            canal: None,
+        },
+        signs,
+    )
 }
 
 #[cfg(test)]
@@ -207,7 +238,7 @@ mod tests {
             street(&[(0.0, -50.0), (0.0, 0.0), (0.0, 50.0)]),
             street(&[(-50.0, 0.0), (0.0, 0.0), (50.0, 0.0)]),
         ]);
-        let layout = layout(&atlas, 1, 1000.0);
+        let (layout, _) = layout(&atlas, 1, 1000.0);
         assert_eq!(layout.graph.node_count(), 5, "the middle was not shared");
         assert_eq!(layout.graph.edge_count(), 4);
 
@@ -230,7 +261,7 @@ mod tests {
             (2_000.0, 0.0),
             (2_100.0, 0.0),
         ])]);
-        let layout = layout(&atlas, 1, 1000.0);
+        let (layout, _) = layout(&atlas, 1, 1000.0);
         // The three points inside stay and are joined; the two outside are
         // dropped, and no edge reaches out to them.
         assert_eq!(layout.graph.node_count(), 3);
@@ -256,7 +287,7 @@ mod tests {
             (400.0, 0.0),
             (500.0, 0.0),
         ])]);
-        let layout = layout(&atlas, 1, 1000.0);
+        let (layout, _) = layout(&atlas, 1, 1000.0);
         assert_eq!(layout.graph.edge_count(), 2, "the gap was bridged");
         for edge in layout.graph.edges() {
             assert!(edge.length < 200.0, "an edge crossed the whole town");
@@ -267,7 +298,7 @@ mod tests {
     #[test]
     fn a_kerb_wobble_is_not_a_street() {
         let atlas = town(vec![street(&[(0.0, 0.0), (0.05, 0.0), (60.0, 0.0)])]);
-        let layout = layout(&atlas, 1, 1000.0);
+        let (layout, _) = layout(&atlas, 1, 1000.0);
         // The wobble welds into the first node, so there are two nodes and one
         // road rather than three and two.
         assert_eq!(layout.graph.node_count(), 2);
@@ -278,7 +309,7 @@ mod tests {
     #[test]
     fn an_atlas_city_has_no_street_lists() {
         let atlas = town(vec![street(&[(0.0, 0.0), (40.0, 0.0)])]);
-        let layout = layout(&atlas, 7, 1000.0);
+        let (layout, _) = layout(&atlas, 7, 1000.0);
         assert!(layout.x_streets.is_empty() && layout.z_streets.is_empty());
         assert!(layout.canal.is_none());
         assert_eq!(layout.seed, 7);

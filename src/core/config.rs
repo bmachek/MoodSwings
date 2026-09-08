@@ -56,15 +56,19 @@ pub struct GameConfig {
 
 /// Which city the generator builds.
 ///
-/// The roadmap's postcard list, as parody: the same grid, the same seed
-/// machinery, a different skyline and wardrobe per style. This is
-/// deliberately a *style* and not a map — the world is built of axis-aligned
-/// rectangles from the kerbs up, and a street plan that matches the real
-/// Landshut needs curved blocks the whole pipeline cannot hold yet. What a
-/// style *can* honestly deliver is what a postcard delivers: the heights, how
-/// narrow the plots are and therefore how the roofline breaks up, whether
-/// those roofs are flat or step into the sky, the colours, the number of
-/// spires, and the name.
+/// The roadmap's postcard list, as parody: the same seed machinery, a
+/// different skyline and wardrobe per style. What a style delivers is what a
+/// postcard delivers — the heights and the ceiling over them, how narrow the
+/// plots are and therefore how the roofline breaks up, whether those roofs are
+/// flat or pitched and stepped, whether the walls are faced or rendered, the
+/// colours, the number of spires, and the name.
+///
+/// It was written down here that a style is "a postcard, not a map", on the
+/// grounds that a real street plan needed curved blocks the pipeline could not
+/// hold. Half of that turned out to be wrong and `world::atlas` is the half:
+/// a style may now also name a baked OpenStreetMap extract, and Landshüpf does.
+/// The blocks are still the part that could not be done — see `atlas` and
+/// `streetside::lots` for what stands in for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CityStyle {
     /// The city as it always was: nowhere in particular.
@@ -122,6 +126,65 @@ impl CityStyle {
             Self::Minga => 0.7,
             Self::Paree => 0.75,
         }
+    }
+
+    /// The tallest anything in this town is allowed to be, in metres.
+    ///
+    /// `height_scale` alone could not do this. It is a multiplier on a range,
+    /// so a town scaled down far enough to keep its *tallest* building honest
+    /// has nothing but bungalows at the other end — and Landshut needs both
+    /// ends: four-storey houses on the side streets and six-storey ones on
+    /// Maximilianstraße, with nothing above either. A cap is the second half
+    /// of that, and it is also what keeps every house inside the facade
+    /// classes a gable is allowed on, which is why the roofline came out
+    /// pitched instead of half tarred flat roofs.
+    ///
+    /// `None` is a skyline with no ceiling, which is what a made-up city has.
+    pub fn height_cap(self) -> Option<f32> {
+        match self {
+            // Six storeys and an attic. The tallest thing in the real old town
+            // is St. Martin's steeple, and a church is not built out of this.
+            Self::Landshuepf => Some(23.0),
+            Self::Minga => Some(30.0),
+            _ => None,
+        }
+    }
+
+    /// A district's height range, as this town builds it.
+    ///
+    /// One place rather than two: the generator and the atlas both draw a
+    /// building height and both were applying `height_scale` themselves, which
+    /// is exactly how a cap gets added to one of them and forgotten in the
+    /// other.
+    pub fn heights(self, range: (f32, f32)) -> (f32, f32) {
+        let ceiling = self.height_cap().unwrap_or(f32::INFINITY);
+        // The floor is held a storey below the ceiling, not at it. A district
+        // whose *bottom* already breaks the cap — a downtown in a town that has
+        // none — would otherwise be squeezed flat, or get its range back by
+        // pushing the top straight back through the ceiling that capped it.
+        let low = (range.0 * self.height_scale()).clamp(4.0, (ceiling - 3.0).max(4.0));
+        // At least a storey of range left, or every house on the street is
+        // exactly as tall as its neighbour and the roofline goes dead flat.
+        let high = (range.1 * self.height_scale()).min(ceiling).max(low + 3.0);
+        (low, high)
+    }
+
+    /// Whether this town's walls are rendered rather than faced.
+    ///
+    /// The city was built out of a library of scanned walls picked per
+    /// district — brick here, old brick there, concrete on the edge — and for
+    /// a made-up city that is exactly right. It is wrong for the towns on this
+    /// list, and wrong in a way that survives any amount of recolouring: a
+    /// Landshut Bürgerhaus is lime render over rubble, laid on flat and
+    /// painted, and no tint on a brick photograph will read as that. What
+    /// makes those streets look like themselves is that the wall has *no*
+    /// grain and the colour is doing all of the work.
+    ///
+    /// The scanned plaster set is optional like every other one; a clone that
+    /// has not run the fetch gets the painted facade with nothing over it,
+    /// which is if anything closer still.
+    pub fn rendered(self) -> bool {
+        matches!(self, Self::Landshuepf | Self::Minga | Self::Paree)
     }
 
     /// How many churches the zoning pass claims, and whether the last of
@@ -201,7 +264,12 @@ impl CityStyle {
     /// stepped gable on a New York block is not a postcard, it is a mistake.
     pub fn gables(self) -> f32 {
         match self {
-            Self::Landshuepf => 0.80,
+            // Raised from four fifths once the height cap stopped handing
+            // out flat-roofed office blocks: at 0.80 the one house in five
+            // without a gable read as a gap in the row rather than as
+            // variety, because a flat roof in an old town is a bomb site or a
+            // seventies infill and there were too many of them for either.
+            Self::Landshuepf => 0.94,
             Self::Minga => 0.22,
             _ => 0.0,
         }
@@ -766,5 +834,32 @@ mod tests {
         let fresh = GameConfig::default().bounce;
         assert_eq!(parsed.bounce.player_hop_scale, fresh.player_hop_scale);
         assert_eq!(parsed.bounce.npc_spring_max, fresh.npc_spring_max);
+    }
+
+    /// A capped town has no towers and still has a roofline.
+    #[test]
+    fn a_capped_town_keeps_a_range_of_heights() {
+        for style in CityStyle::ALL {
+            for range in [(6.5, 15.0), (16.0, 46.0), (38.0, 135.0)] {
+                let (low, high) = style.heights(range);
+                assert!(low >= 4.0, "{style:?} builds sheds: {low}");
+                assert!(
+                    high >= low + 3.0,
+                    "{style:?} flattened {range:?} to {low}..{high}"
+                );
+                if let Some(cap) = style.height_cap() {
+                    assert!(
+                        high <= cap,
+                        "{style:?} broke its own ceiling: {range:?} -> {low}..{high} cap {cap}"
+                    );
+                }
+            }
+        }
+        // And the specific thing this was added for: Landshut's middle
+        // district comes out inside the classes a gable is allowed on, so an
+        // old town is roofed and not tarred.
+        let (low, high) = CityStyle::Landshuepf.heights((16.0, 46.0));
+        assert!(high <= 26.0, "a Landshut house grew past Lowrise: {high}");
+        assert!(low >= 12.0, "Maximilianstrasse is not bungalows: {low}");
     }
 }

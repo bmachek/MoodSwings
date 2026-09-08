@@ -87,7 +87,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), real street networks baked from OpenStreetMap (`atlas`) and the frontages that fill them (`streetside`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -167,6 +167,24 @@ CREDITS.md before touching it.
 Anything a style decides belongs on `CityStyle`, not as a `match` at the use
 site; the layout must stay a pure function of `(seed, style)` or the chunks
 stop respawning the same city.
+
+### A postcard can also be a real town
+
+`CityStyle` is a tuning of the generator — heights, a ceiling over them
+(`height_cap`), plot width, gables, palette, whether the walls are rendered
+(`rendered`) or faced with a scanned grain, how many spires. Anything a style
+decides belongs on `CityStyle` rather than as a `match` at the use site, and
+`heights` in particular exists because the generator and the atlas both draw
+building heights and had each been applying `height_scale` on their own.
+
+A style may also name a baked OSM extract (`atlas()`), and Landshüpf does: the
+road graph is the real Landshut, the blocks are empty, and `streetside::lots`
+marches plots along every street instead. A plot there is placed square to *its*
+street and therefore at some arbitrary angle to every other one, which is why
+`streetside::Oblong` tests candidates against the road corridors with a
+separating-axis test rather than a box overlap. Street names ride beside the
+layout in `atlas::Signposts` — a name is a fact about a street and an edge is
+one segment of one.
 
 ### The traps
 

@@ -180,6 +180,8 @@ pub struct StreetKits<'w> {
     gables: Res<'w, crate::world::gable::GableKit>,
     kerbs: Res<'w, crate::world::streetside::StreetsideKit>,
     ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
+    plates: Res<'w, crate::world::streetname::StreetNameKit>,
+    signs: Res<'w, crate::world::atlas::Signposts>,
 }
 
 pub fn update_streaming(
@@ -239,6 +241,10 @@ pub fn update_streaming(
     let works_range = config.graphics.lod_distance(crate::world::worksite::RANGE);
     let bunting_range = config.graphics.lod_distance(crate::world::bunting::RANGE);
     let plume_range = crate::world::plume::draw_range(config.graphics.lod_scale);
+    let name_range = config
+        .graphics
+        .lod_distance(crate::world::streetname::RANGE)
+        .min(400.0);
     let kerb_range = config
         .graphics
         .lod_distance(crate::world::streetside::RANGE)
@@ -395,6 +401,26 @@ pub fn update_streaming(
                         chunk,
                         kerb_range,
                     );
+                }
+                // The name on the corner, once per arm of a real junction —
+                // which is where a plate actually goes, and is also what keeps
+                // a curved street from wearing its own name a dozen times.
+                if let Some(&Some(name)) = street.signs.per_edge.get(id.0 as usize) {
+                    for (node, other) in [(edge.a, edge.b), (edge.b, edge.a)] {
+                        if city.graph.node(node).edges.len() < 3 {
+                            continue;
+                        }
+                        super::streetname::spawn(
+                            &mut commands,
+                            &street.plates,
+                            name,
+                            city.graph.node(node).pos,
+                            city.graph.node(other).pos,
+                            edge.width,
+                            chunk,
+                            name_range,
+                        );
+                    }
                 }
                 super::bunting::spawn_edge(
                     &mut commands,

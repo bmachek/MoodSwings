@@ -108,24 +108,32 @@ fn palette(district: District) -> [Color; PALETTE_SIZE as usize] {
             Color::srgb(0.33, 0.40, 0.51),
             Color::srgb(0.53, 0.58, 0.63),
             Color::srgb(0.28, 0.35, 0.45),
+            Color::srgb(0.38, 0.44, 0.50),
+            Color::srgb(0.46, 0.50, 0.56),
         ],
         District::Midtown => [
             Color::srgb(0.61, 0.58, 0.53),
             Color::srgb(0.50, 0.48, 0.46),
             Color::srgb(0.69, 0.65, 0.58),
             Color::srgb(0.44, 0.43, 0.43),
+            Color::srgb(0.57, 0.54, 0.52),
+            Color::srgb(0.64, 0.61, 0.55),
         ],
         District::Residential => [
             Color::srgb(0.71, 0.58, 0.48),
             Color::srgb(0.77, 0.69, 0.56),
             Color::srgb(0.60, 0.47, 0.39),
             Color::srgb(0.66, 0.61, 0.52),
+            Color::srgb(0.74, 0.66, 0.60),
+            Color::srgb(0.68, 0.63, 0.45),
         ],
         District::Industrial => [
             Color::srgb(0.48, 0.46, 0.42),
             Color::srgb(0.56, 0.45, 0.36),
             Color::srgb(0.39, 0.40, 0.41),
             Color::srgb(0.51, 0.49, 0.44),
+            Color::srgb(0.45, 0.43, 0.39),
+            Color::srgb(0.53, 0.50, 0.47),
         ],
         District::Park => [Color::srgb(0.30, 0.44, 0.26); PALETTE_SIZE as usize],
     }
@@ -137,41 +145,68 @@ fn palette(district: District) -> [Color; PALETTE_SIZE as usize] {
 /// steel and brownstone, and nobody has opinions about industrial estates.
 fn style_palette(style: CityStyle, district: District) -> Option<[Color; PALETTE_SIZE as usize]> {
     match (style, district) {
-        (CityStyle::Landshuepf, District::Residential | District::Midtown) => Some([
-            Color::srgb(0.74, 0.80, 0.62),
-            Color::srgb(0.87, 0.68, 0.64),
-            Color::srgb(0.87, 0.76, 0.52),
-            Color::srgb(0.90, 0.87, 0.78),
-        ]),
-        (CityStyle::Landshuepf, District::Downtown) => Some([
-            Color::srgb(0.85, 0.78, 0.62),
-            Color::srgb(0.80, 0.66, 0.52),
-            Color::srgb(0.88, 0.83, 0.72),
-            Color::srgb(0.76, 0.70, 0.58),
-        ]),
+        // The Altstadt, off the houses that actually stand on it. Landshut's
+        // one famous street is a hundred lime-rendered Bürgerhäuser and the
+        // point of it is that *no two neighbours match* — ochre beside sage
+        // beside dusty rose beside cream — so a four-tone palette was never
+        // going to get there whatever the four tones were. This is what the
+        // sixth and fifth slots were added for.
+        //
+        // Lime render, not paint: every one of these is a pigment stirred into
+        // whitewash, which is why they are all pale, all slightly chalky, and
+        // none of them saturated. A strong colour here reads as a seaside town
+        // and not a Bavarian one.
+        //
+        // Landshut has no downtown — the old town *is* the middle — so all
+        // three districts wear the same six.
+        (CityStyle::Landshuepf, District::Residential | District::Midtown | District::Downtown) => {
+            Some([
+                // Ochre, which is the one everybody remembers.
+                Color::srgb(0.87, 0.73, 0.45),
+                // Terracotta thinned into the lime until it is nearly salmon.
+                Color::srgb(0.85, 0.62, 0.51),
+                // Cream, the colour of the render with nothing in it.
+                Color::srgb(0.93, 0.89, 0.78),
+                // Sage: green earth, and there is more of it there than anybody
+                // expects.
+                Color::srgb(0.73, 0.78, 0.63),
+                // Dusty rose.
+                Color::srgb(0.84, 0.69, 0.70),
+                // And the pale blue-grey that turns up once a block.
+                Color::srgb(0.71, 0.77, 0.81),
+            ])
+        }
         (CityStyle::NewDork, District::Downtown) => Some([
             Color::srgb(0.34, 0.38, 0.44),
             Color::srgb(0.28, 0.28, 0.32),
             Color::srgb(0.46, 0.36, 0.30),
             Color::srgb(0.24, 0.30, 0.40),
+            Color::srgb(0.40, 0.42, 0.46),
+            Color::srgb(0.30, 0.34, 0.38),
         ]),
         (CityStyle::NewDork, District::Residential | District::Midtown) => Some([
             Color::srgb(0.52, 0.34, 0.26),
             Color::srgb(0.44, 0.30, 0.26),
             Color::srgb(0.60, 0.44, 0.34),
             Color::srgb(0.38, 0.32, 0.30),
+            Color::srgb(0.48, 0.38, 0.32),
+            Color::srgb(0.56, 0.38, 0.28),
         ]),
         (CityStyle::Londoof, District::Residential | District::Midtown) => Some([
             Color::srgb(0.56, 0.34, 0.27),
             Color::srgb(0.63, 0.55, 0.48),
             Color::srgb(0.74, 0.70, 0.62),
             Color::srgb(0.42, 0.30, 0.26),
+            Color::srgb(0.60, 0.38, 0.30),
+            Color::srgb(0.68, 0.62, 0.56),
         ]),
         (CityStyle::Minga, District::Residential | District::Midtown) => Some([
             Color::srgb(0.88, 0.80, 0.60),
             Color::srgb(0.83, 0.71, 0.48),
             Color::srgb(0.91, 0.87, 0.74),
             Color::srgb(0.77, 0.66, 0.47),
+            Color::srgb(0.85, 0.75, 0.55),
+            Color::srgb(0.80, 0.78, 0.66),
         ]),
         (CityStyle::Paree, District::Downtown | District::Midtown | District::Residential) => {
             Some([
@@ -179,6 +214,8 @@ fn style_palette(style: CityStyle, district: District) -> Option<[Color; PALETTE
                 Color::srgb(0.82, 0.78, 0.68),
                 Color::srgb(0.89, 0.85, 0.76),
                 Color::srgb(0.55, 0.57, 0.60),
+                Color::srgb(0.84, 0.80, 0.71),
+                Color::srgb(0.78, 0.75, 0.68),
             ])
         }
         _ => None,
@@ -195,12 +232,16 @@ fn quarter_palette(quarter: Quarter) -> [Color; PALETTE_SIZE as usize] {
             Color::srgb(0.80, 0.62, 0.38),
             Color::srgb(0.84, 0.74, 0.58),
             Color::srgb(0.62, 0.33, 0.26),
+            Color::srgb(0.78, 0.56, 0.32),
+            Color::srgb(0.70, 0.52, 0.40),
         ],
         Quarter::Fernost => [
             Color::srgb(0.60, 0.20, 0.16),
             Color::srgb(0.78, 0.62, 0.28),
             Color::srgb(0.36, 0.52, 0.42),
             Color::srgb(0.48, 0.46, 0.44),
+            Color::srgb(0.70, 0.28, 0.22),
+            Color::srgb(0.28, 0.34, 0.40),
         ],
     }
 }
@@ -376,7 +417,8 @@ pub fn build_assets(
             // The grain is the district's, but how it is dressed — scale, and
             // whether it is turned — belongs to the palette slot, so a street
             // of one district is not a street of one photograph.
-            let grain = super::facade::FacadeGrain::for_district(library, grain_district, slot);
+            let grain =
+                super::facade::FacadeGrain::for_district(library, style, grain_district, slot);
             for (&class, (base, emissive, surface, normal)) in FacadeClass::ALL.iter().zip(&facades)
             {
                 building.push(facades_out.add(super::facade::FacadeMaterial {

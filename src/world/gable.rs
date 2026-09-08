@@ -29,11 +29,13 @@
 //! chimney on it and nothing else.
 
 use bevy::camera::visibility::VisibilityRange;
+use bevy::math::Affine2;
 use bevy::prelude::*;
 use rand::RngExt;
 use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng};
 
 use super::buildings::ChunkOf;
+use super::texture;
 
 /// How far the screen itself is drawn. As far as the building it caps: a
 /// roofline is a silhouette, and a silhouette is the last thing to stop
@@ -84,21 +86,58 @@ pub struct GableKit {
     cube: Handle<Mesh>,
     /// The screen wears the building's own wall material, which this module
     /// does not own — so what is kept here is only what a roof is made of.
-    tile: Handle<StandardMaterial>,
+    ///
+    /// Three roofs rather than one, because a real old town has not been
+    /// re-tiled all at once: a house done last summer sits between one that
+    /// was done in the seventies and one nobody has touched since the moss
+    /// took it. Picked from the building's own seed, so a roof keeps its age
+    /// across a chunk respawn.
+    tile: [Handle<StandardMaterial>; 3],
     cap: Handle<StandardMaterial>,
 }
+
+/// How many times the tile image repeats over one leaf of a roof: up the
+/// slope first, then along the ridge.
+///
+/// Not the same both ways, because a leaf is not square. A Landshut house is
+/// eight to fourteen metres wide and about as deep, so the fall is around four
+/// metres and the ridge runs twice that — and a Biberschwanz is a hand's width
+/// whichever way you measure it. These two numbers are what put roughly a
+/// hand's width in both directions.
+///
+/// Fixed rather than per-house: every leaf shares one cube mesh, so a
+/// per-building tiling would mean a material per building.
+const LAP: Vec2 = Vec2::new(3.0, 5.5);
 
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
 ) -> GableKit {
+    let clay = images.add(texture::tiles());
+    let relief = images.add(texture::tiles_normal());
+    // New, weathered, and one the moss has had. All three are the same fired
+    // clay underneath — what changes with age is that it goes browner, greyer
+    // and less even, not that it goes a different colour.
+    // Fired clay is a good deal more orange than memory says — the first pass
+    // at these was a third darker and every roof in the town read as slate.
+    let ages = [
+        Color::srgb(0.78, 0.36, 0.22),
+        Color::srgb(0.63, 0.33, 0.23),
+        Color::srgb(0.50, 0.34, 0.26),
+    ];
     GableKit {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        tile: materials.add(StandardMaterial {
-            // Old clay, not the grey felt the flat roofs are covered in.
-            base_color: Color::srgb(0.44, 0.24, 0.17),
-            perceptual_roughness: 0.93,
-            ..default()
+        tile: ages.map(|age| {
+            materials.add(StandardMaterial {
+                // Old clay, not the grey felt the flat roofs are covered in.
+                base_color: age,
+                base_color_texture: Some(clay.clone()),
+                normal_map_texture: Some(relief.clone()),
+                uv_transform: Affine2::from_scale(LAP),
+                perceptual_roughness: 0.93,
+                ..default()
+            })
         }),
         cap: materials.add(StandardMaterial {
             // The stone coping along the top of every step, which is what
@@ -211,6 +250,9 @@ pub fn spawn(
     // the screen. Almost nobody ever sees this — the screen is taller than the
     // ridge, which is the entire purpose of a screen — so it is two meshes and
     // no further argument.
+    // When this roof was last done. From the building's own seed like
+    // everything else about it.
+    let age = rng.random_range(0..kit.tile.len());
     let slope = (ridge / (frontage * 0.5)).atan();
     let leaf = (frontage * 0.5) / slope.cos();
     for side in [-1.0f32, 1.0] {
@@ -220,9 +262,15 @@ pub fn spawn(
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(kit.cube.clone()),
-            MeshMaterial3d(kit.tile.clone()),
+            MeshMaterial3d(kit.tile[age].clone()),
+            // Negated, and this is the whole difference between a roof and a
+            // gutter. `rotation_z` by a positive angle lifts the local +X end,
+            // and the leaf on the +X side of the ridge has its *outer* edge
+            // there — so `side * slope` raises both outer edges and drops the
+            // middle, and every house in the town wears a trough. The eaves go
+            // down and the ridge goes up.
             Transform::from_xyz(at.x, eaves + ridge * 0.5, at.y)
-                .with_rotation(turn * Quat::from_rotation_z(side * slope))
+                .with_rotation(turn * Quat::from_rotation_z(-side * slope))
                 .with_scale(Vec3::new(leaf, 0.14, throat * 1.04)),
             range.clone(),
         ));
@@ -293,6 +341,29 @@ mod tests {
             assert!(
                 (0.55..0.95).contains(&roof),
                 "a {roof:.2} radian roof is a spire or a shed"
+            );
+        }
+    }
+
+    /// The eaves are below the ridge.
+    #[test]
+    fn a_roof_sheds_outwards_rather_than_inwards() {
+        // The failure this pins is a roof rotated the right amount about the
+        // right axis in the wrong direction: two leaves that meet in a valley
+        // at the middle and rise to their outer edges, which is a gutter the
+        // length of the house and reads, from the air, as a town of troughs.
+        let slope = 0.7f32;
+        let leaf = 6.0f32;
+        for side in [-1.0f32, 1.0] {
+            let turn = Quat::from_rotation_z(-side * slope);
+            // The leaf runs along its own X; its outer end is the one on the
+            // same side of the ridge as the leaf itself.
+            let outer = turn * Vec3::new(side * leaf * 0.5, 0.0, 0.0);
+            let inner = turn * Vec3::new(-side * leaf * 0.5, 0.0, 0.0);
+            assert!(
+                outer.y < inner.y,
+                "the {side} leaf rises {:.2} from ridge to eaves",
+                outer.y - inner.y
             );
         }
     }
