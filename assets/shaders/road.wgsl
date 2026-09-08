@@ -103,7 +103,7 @@ const PATCH: f32 = 0.30;
 // Metres across one repeat of the crack field, and how much of that field is
 // actually cracked.
 const CRACK_TILE: f32 = 4.2;
-const CRACK_LINE: f32 = 0.982;
+const CRACK_LINE: f32 = 0.985;
 // Metres across the field that decides *where* the road is cracked at all.
 const CRACK_AREA: f32 = 26.0;
 
@@ -143,7 +143,15 @@ fn age(input: PbrInput) -> PbrInput {
     // dropped rather than as a crack. A road cracks in patches, where the ground
     // under *that bit* moved, and everywhere else is intact.
     let cracked = smoothstep(0.46, 0.62, fbm(here / CRACK_AREA));
-    let crack = smoothstep(CRACK_LINE, 1.0, ridge) * cracked;
+    // And broken *along* its length by a third field at the scale of a stride.
+    // A ridge of constant width and constant darkness is a line, and a line
+    // lying on a road is not a crack — it is a cable somebody dropped, which is
+    // exactly what the first version of this looked like. A real crack opens and
+    // closes and disappears for a hand's width at a time. Pushed hard past its
+    // own ends, or the modulation is a gentle ripple in the darkness of a line
+    // that is still, unmistakably, a line.
+    let along = clamp((fbm(here / 2.4) - 0.5) * 3.2 + 0.55, 0.0, 1.0);
+    let crack = smoothstep(CRACK_LINE, 1.0, ridge) * cracked * along;
 
     pbr_input.material.base_color = vec4(
         pbr_input.material.base_color.rgb * value * (1.0 - crack * 0.45),
