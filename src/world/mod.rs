@@ -24,6 +24,7 @@ pub mod roadgraph;
 pub mod rooftop;
 pub mod shell;
 pub mod signage;
+pub mod sky;
 pub mod stadium;
 pub mod statues;
 pub mod streaming;
@@ -75,6 +76,9 @@ impl Plugin for WorldPlugin {
             plume::PlumePlugin,
             frontage::FrontagePlugin,
         ))
+        // A second call rather than a longer tuple: `Plugins` is implemented up
+        // to a fixed arity and the tuple above is at it.
+        .add_plugins(sky::SkyPlugin)
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
         // bounces off concrete because *it* is elastic, and asking concrete to

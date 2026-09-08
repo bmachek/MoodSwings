@@ -7,10 +7,9 @@
 //! The clock is not the only input any more. Cloud cover comes from `weather`,
 //! and what it does here is most of what makes an overcast day read as one: the
 //! direct beam drops away, the skylight that replaces it climbs, the warmth goes
-//! out of the sun, and the haze thickens. Not the sky *itself* — Bevy's
-//! atmosphere is a scattering model with no clouds in it, so the dome overhead
-//! stays blue however hard it is raining. Everything the light does is right;
-//! the thing you would photograph it against is not.
+//! out of the sun, and the haze thickens. What the sky *itself* does is not here
+//! — Bevy's atmosphere is a scattering model and has no clouds in it, so the
+//! deck is `world::sky`'s, hung on the same cover value this module reads.
 
 use std::f32::consts::PI;
 
@@ -306,8 +305,8 @@ fn apply_sky(
     // every long street into smog.
     //
     // Cloud and rain pull that band in. Visibility really does close down in
-    // weather, and it is also the cheapest honest way to say "overcast" in a
-    // renderer whose sky has no clouds in it.
+    // weather, and it is what puts the far edge of the city under the same
+    // overcast `world::sky` is drawing overhead.
     let far = config.world.stream_radius;
     let closing = 1.0 - 0.34 * cover - 0.22 * weather.rain;
     let haze = fog_color(hours, cover);

@@ -7,10 +7,12 @@
 //! road that goes uniformly glossy reads as varnish.
 //!
 //! The mask is computed in world space rather than in the mesh's UV, for the
-//! same reason the facade's grain is: the road is a single quad forty
-//! kilometres across with its UVs multiplied by about six thousand, so anything
-//! sampled in UV space repeats every six metres. Puddles on a six-metre grid
-//! are a pattern.
+//! same reason the facade's grain is: the road's UVs repeat every six metres,
+//! so a mask sampled in them gives puddles on a six-metre grid, which is a
+//! pattern rather than weather. (The ground used to be one quad forty
+//! kilometres across with its UVs scaled by six thousand, which was worse than
+//! a pattern — see `world::CELL_REPEATS` for what that did to the mip
+//! selection.)
 //!
 //! This is also where wetness stops being a material mutation. `WetSurfaces`
 //! still recomputes the pavement's colour and roughness each time the weather

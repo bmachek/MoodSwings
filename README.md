@@ -1016,11 +1016,13 @@ in the world.
   hum their own music, but the buildings under the paint are the same six
   wall sets the rest of the city wears.
 
-- The sky itself has no clouds in it. Bevy's atmosphere is a scattering model, so
-  cover is expressed entirely through the light — dimmer, flatter, cooler,
-  hazier, no hard shadows — and the dome overhead stays blue however hard it is
-  raining. Everything the weather does is right; the thing you would photograph
-  it against is not.
+- The cloud is one flat deck, not a volume. Bevy's atmosphere is a scattering
+  model with nothing in it, so `world::sky` hangs a dome on the camera and
+  intersects the view ray with a single horizontal layer of noise — which is
+  enough for cover to read as cover and for a cloud to have a lit side and a
+  shaded one, and not enough to fly through. Near the horizon the layer
+  compresses past what any sampling can resolve, so it is faded out into the
+  haze before it gets there.
 
 - Cloud shadows do not move across the city. Cover dims the sun everywhere at
   once, which is exactly right for a solid overcast and wrong for broken cloud on
