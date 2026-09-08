@@ -134,11 +134,110 @@ impl Material for SkyMaterial {
 #[derive(Component)]
 struct SkyDome;
 
+// ------------------------------------------------------- the same field ----
+
+/// Metres across one repeat of the cloud field. Must match `SCALE` in
+/// `sky.wgsl`; see [`shade`] for why the two are the same field rather than
+/// two fields that look alike.
+const SCALE: f32 = 2600.0;
+
+/// How much of the direct beam a solid cloud takes.
+///
+/// Nearly all of it. What is left under a cumulus at noon is skylight, and the
+/// skylight is the environment map's job — it is not dimmed here, which is why
+/// the shadow of a cloud is blue rather than black.
+const CLOUD_SHADE: f32 = 0.86;
+
+/// `world::texture::hash`, and `hash2` in `sky.wgsl`. Three copies of eight
+/// lines, and they have to be *bit-identical*: see the note in the shader.
+fn hash2(x: i32, y: i32) -> f32 {
+    let mut h =
+        (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA77) ^ 0xC2B2_AE3D;
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2545_F491);
+    h ^= h >> 13;
+    h as f32 / u32::MAX as f32
+}
+
+fn value_noise(p: Vec2) -> f32 {
+    let i = p.floor();
+    let f = p - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let (x, y) = (i.x as i32, i.y as i32);
+    let a = hash2(x, y);
+    let b = hash2(x + 1, y);
+    let c = hash2(x, y + 1);
+    let d = hash2(x + 1, y + 1);
+    a.lerp(b, u.x).lerp(c.lerp(d, u.x), u.y)
+}
+
+fn fbm(p: Vec2) -> f32 {
+    let mut sum = 0.0;
+    let mut amplitude = 0.5;
+    let mut total = 0.0;
+    let mut at = p;
+    for _ in 0..5 {
+        sum += value_noise(at) * amplitude;
+        total += amplitude;
+        at = at * 2.17 + Vec2::new(19.3, -7.1);
+        amplitude *= 0.52;
+    }
+    sum / total
+}
+
+/// How much of the sun reaches a point on the ground, 0 to 1.
+///
+/// The one thing the sky knew and the ground did not. A deck of cloud that
+/// throws no shadow is a painting on a dome, and the giveaway is not the sky —
+/// it is that a street stays evenly lit while a cumulus visibly crosses the sun.
+///
+/// This is the *same field* the shader draws, evaluated where the sun's ray
+/// leaves the deck above `at`, which is why the hash had to become integer
+/// arithmetic: two fields that merely looked alike would put the shadow
+/// somewhere other than under the cloud, and that is worse than no shadow.
+///
+/// One sample, not a shadow map. The whole visible city is a kilometre across
+/// and a cloud is two, so within a framing the shading is very nearly uniform;
+/// what this buys is not a moving edge on the ground but the thing that
+/// actually reads — the light coming and going as the sky moves over.
+pub fn shade(at: Vec2, sun: Vec3, drift: Vec2, coverage: f32) -> f32 {
+    // A sun on the horizon casts its shadow from a cloud a very long way away,
+    // and past the point where this deck is a plausible model of the sky. It is
+    // also the hour at which nothing is lit by the beam anyway.
+    if sun.y < 0.12 {
+        return 1.0;
+    }
+    let along = DECK / sun.y;
+    let here = (at + Vec2::new(sun.x, sun.z) * along + drift) / SCALE;
+
+    // The same threshold the shader uses to decide where cloud is.
+    let line = 0.615f32.lerp(0.185, coverage.clamp(0.0, 1.0));
+    let mass = ((fbm(here) - line) / 0.155).clamp(0.0, 1.0);
+    let mass = mass * mass * (3.0 - 2.0 * mass);
+    1.0 - mass * CLOUD_SHADE
+}
+
+/// How much of the sun is getting through, where the player is standing.
+///
+/// A resource rather than a direct write to the light, because the sun belongs
+/// to `world::timeofday` — it is the module that knows what an hour means — and
+/// two systems writing one `DirectionalLight` is how a day/night cycle starts
+/// disagreeing with itself.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct CloudShade(pub f32);
+
+impl Default for CloudShade {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 pub struct SkyPlugin;
 
 impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
+            .init_resource::<CloudShade>()
             .add_systems(Startup, spawn_dome)
             .add_systems(Update, drive_the_sky);
     }
@@ -233,6 +332,7 @@ fn drive_the_sky(
     time: Res<Time>,
     clock: Res<TimeOfDay>,
     weather: Res<Weather>,
+    mut shading: ResMut<CloudShade>,
     cameras: Query<&GlobalTransform, With<CameraRig>>,
     mut dome: Query<(&mut Transform, &MeshMaterial3d<SkyMaterial>), With<SkyDome>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
@@ -251,6 +351,12 @@ fn drive_the_sky(
 
     let (lit, shade) = tint(clock.hours, weather.cover);
     let sun = sun_direction(clock.hours);
+    shading.0 = self::shade(
+        Vec2::new(eye.x, eye.z),
+        Vec3::from(sun),
+        *drift,
+        weather.cover,
+    );
 
     for (mut transform, handle) in &mut dome {
         transform.translation = eye;
@@ -272,6 +378,80 @@ fn drive_the_sky(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cloud has to shade the ground *under itself*, and the only way to be
+    /// sure of that is for the two evaluations of the field to be the same
+    /// arithmetic. This pins the half that can be tested without a GPU: the
+    /// field is deterministic, bounded, and continuous — a hash that had gone
+    /// back to `sin` would still pass the first two and fail the third, because
+    /// a last-bit difference in the input would land in a different cell.
+    #[test]
+    fn the_cloud_field_is_the_same_field_twice_and_is_smooth_between_samples() {
+        let sun = Vec3::new(0.3, 0.8, 0.2).normalize();
+        let at = |x: f32| shade(Vec2::new(x, 40.0), sun, Vec2::new(12.0, -3.0), 0.6);
+
+        for x in [-4000.0f32, -12.5, 0.0, 337.0, 9000.0] {
+            let once = at(x);
+            assert_eq!(once, at(x), "the field is not deterministic at {x}");
+            assert!((0.0..=1.0).contains(&once), "{once} at {x}");
+        }
+
+        // A metre apart is a four-thousandth of a cloud, so two samples that
+        // close must agree to well within the shading they can produce.
+        let mut worst = 0.0f32;
+        for step in 0..400 {
+            let x = step as f32 * 7.0;
+            worst = worst.max((at(x) - at(x + 1.0)).abs());
+        }
+        assert!(worst < 0.02, "the field jumps by {worst} over a metre");
+    }
+
+    /// The sun is not dimmed by cloud that is not there, and is by cloud that
+    /// is. Both directions matter: a shadow under a clear sky is the exact
+    /// failure a mismatched field would produce.
+    #[test]
+    fn cover_is_what_decides_whether_the_sun_is_behind_something() {
+        let sun = Vec3::new(0.25, 0.85, 0.46).normalize();
+        let sample = |cover: f32| {
+            let mut dimmest = 1.0f32;
+            let mut lit = 0;
+            for step in 0..300 {
+                let at = Vec2::new(step as f32 * 130.0, step as f32 * -70.0);
+                let shade = shade(at, sun, Vec2::ZERO, cover);
+                dimmest = dimmest.min(shade);
+                if shade > 0.999 {
+                    lit += 1;
+                }
+            }
+            (dimmest, lit)
+        };
+
+        let (_, clear_lit) = sample(0.0);
+        let (heavy_dimmest, heavy_lit) = sample(1.0);
+        // What separates the two skies is *how much* of the ground is in full
+        // sun, not how dark the darkest patch gets: a clear sky in this field
+        // still has the odd thick cloud in it, and under one of those the beam
+        // is as gone as it is under an overcast.
+        assert!(
+            clear_lit > 150,
+            "a clear sky shadowed {}/300",
+            300 - clear_lit
+        );
+        assert!(
+            heavy_lit < 30,
+            "an overcast left {heavy_lit}/300 in full sun"
+        );
+        assert!(heavy_dimmest > 0.05, "an overcast put the sun out entirely");
+    }
+
+    /// A sun on the horizon would take its shadow from cloud kilometres away,
+    /// where a flat deck stops being a plausible sky at all — and it is the
+    /// hour at which there is no beam left to dim.
+    #[test]
+    fn a_low_sun_is_left_alone() {
+        let low = Vec3::new(0.99, 0.05, 0.0).normalize();
+        assert_eq!(shade(Vec2::new(100.0, 20.0), low, Vec2::ZERO, 1.0), 1.0);
+    }
 
     /// The lit side of a cloud is brighter than its own shadow at every hour
     /// there is any sun at all. If that ever inverts the deck reads as a

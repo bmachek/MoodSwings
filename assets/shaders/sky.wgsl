@@ -67,23 +67,40 @@ const SUN_STEP: f32 = 620.0;
 // Where the cloud gives up and becomes haze, as a sine of the ray's elevation.
 const HORIZON: f32 = 0.115;
 
-// Value noise on a wrapping lattice. The same shape as `road.wgsl`'s, and
-// deliberately a second copy: a shared import would have to be a loaded asset
-// with its own ordering hazard, for eleven lines that have not changed since
-// they were written.
-fn hash2(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2(127.1, 311.7));
-    return fract(sin(h) * 43758.5453);
+// An integer hash, and the integers are the point.
+//
+// This was `fract(sin(dot(p, k)) * 43758.5453)`, which is the noise everybody
+// writes and which cannot be reproduced off the GPU: `sin` at a large argument
+// differs in its last bits between one implementation and another, and a hash
+// amplifies a last-bit difference into a completely different number. That
+// stopped mattering the moment the ground had to know where the clouds were —
+// `world::sky::shade` evaluates this same field on the CPU to work out whether
+// the sun is behind one, and a field that only agrees with itself on one of the
+// two machines would dim the sun under a clear patch of sky.
+//
+// Integer arithmetic is exact everywhere. This is `world::texture::hash`, which
+// the rest of the game's noise has always used, with the lattice cell taken as
+// a signed integer and reinterpreted — the deck runs tens of kilometres either
+// side of the origin, so the coordinates are very much signed.
+fn hash2(cell: vec2<i32>) -> f32 {
+    var h = bitcast<u32>(cell.x) * 0x9E3779B1u
+        ^ bitcast<u32>(cell.y) * 0x85EBCA77u
+        ^ 0xC2B2AE3Du;
+    h ^= h >> 15u;
+    h = h * 0x2545F491u;
+    h ^= h >> 13u;
+    return f32(h) / 4294967295.0;
 }
 
 fn value_noise(p: vec2<f32>) -> f32 {
     let i = floor(p);
-    let f = fract(p);
+    let f = p - i;
     let u = f * f * (3.0 - 2.0 * f);
-    let a = hash2(i);
-    let b = hash2(i + vec2(1.0, 0.0));
-    let c = hash2(i + vec2(0.0, 1.0));
-    let d = hash2(i + vec2(1.0, 1.0));
+    let cell = vec2<i32>(i);
+    let a = hash2(cell);
+    let b = hash2(cell + vec2<i32>(1, 0));
+    let c = hash2(cell + vec2<i32>(0, 1));
+    let d = hash2(cell + vec2<i32>(1, 1));
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 

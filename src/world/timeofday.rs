@@ -238,6 +238,7 @@ fn advance_clock(time: Res<Time>, config: Res<GameConfig>, mut clock: ResMut<Tim
 fn apply_sky(
     clock: Res<TimeOfDay>,
     weather: Res<Weather>,
+    shading: Res<super::sky::CloudShade>,
     config: Res<GameConfig>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
@@ -258,7 +259,12 @@ fn apply_sky(
     // underneath. The short ramp is so the last of the direct light fades over
     // a few game-minutes instead of switching off.
     let beam = (sun_elevation(hours) / 0.03).clamp(0.0, 1.0);
-    let sunlight = SUN_LUX * day * beam * sunlight_through(cover);
+    // And whatever is between this street and the sun right now. `cover` is
+    // the *average* sky; this is the cloud that happens to be in the way, and
+    // it is the difference between weather that is a setting and weather that
+    // is happening. Only the beam is dimmed: what is left under a cumulus is
+    // skylight, which is why a cloud's shadow is blue and not black.
+    let sunlight = SUN_LUX * day * beam * sunlight_through(cover) * shading.0;
 
     // The flat ambient term has three jobs and they belong to different hours.
     //

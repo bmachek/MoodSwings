@@ -1024,10 +1024,14 @@ in the world.
   compresses past what any sampling can resolve, so it is faded out into the
   haze before it gets there.
 
-- Cloud shadows do not move across the city. Cover dims the sun everywhere at
-  once, which is exactly right for a solid overcast and wrong for broken cloud on
-  a windy day. A real one needs the pattern projected into the light, not a
-  multiplier on it.
+- A cloud's shadow covers the whole city or none of it. `world::sky::shade`
+  samples the deck where the sun's ray crosses it above the *player*, so the sun
+  goes in and out as the sky moves over — which is most of what broken cloud
+  does to a day — but the edge of the shadow never crosses the ground, because
+  it is one number for the whole frame rather than a pattern projected into the
+  light. Landshut is a kilometre across and a cloud is two, so the two are not
+  far apart; a tall building's own shadow is still the only moving edge there
+  is.
 
 - God rays are still soft. The air lights up towards a low sun and goes dark
   away from it, which is the physics working; a *shaft* additionally needs a
