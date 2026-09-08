@@ -145,6 +145,18 @@ pub struct Ribbons {
     junction: Handle<Mesh>,
     /// One material per [`super::atlas::Surface`], indexed by its own `index`.
     paving: [Handle<super::road::RoadMaterial>; 4],
+    /// The walking surface of the pavement, per edge, and what it is paved
+    /// with.
+    ///
+    /// A separate quad rather than the top of the kerb slab, and the reason is
+    /// the same one `world::buildings::spawn_block` gives: a slab is a unit
+    /// cube scaled to three metres by sixty, and a unit cube's faces carry UVs
+    /// from zero to one however they are stretched. Any tiling that suits the
+    /// kerb's face — a quarter of a metre tall and thirty long — smears the top
+    /// of it across a hundred and fifty metres per repeat, which is what made
+    /// every pavement in Landshut a featureless pale sheet.
+    footways: Vec<Handle<Mesh>>,
+    slabs: Handle<StandardMaterial>,
 }
 
 impl Ribbons {
@@ -158,11 +170,14 @@ impl Ribbons {
 /// asphalt at the same size.
 const TILE: f32 = super::ASPHALT_TILE;
 
-/// A flat quad `width` by `length`, lying in XZ, with UVs that tile the asphalt
-/// at its true size.
-fn ribbon(width: f32, length: f32) -> Mesh {
+/// Metres of pavement one repeat of the slabs covers.
+const FOOTWAY_TILE: f32 = 1.45;
+
+/// A flat quad `width` by `length`, lying in XZ, with UVs that tile a paving
+/// of size `tile` at its true size.
+fn ribbon(width: f32, length: f32, tile: f32) -> Mesh {
     let (hw, hl) = (width * 0.5, length * 0.5);
-    let (u, v) = (width / TILE, length / TILE);
+    let (u, v) = (width / tile, length / tile);
     Mesh::new(
         bevy::render::mesh::PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::default(),
@@ -194,7 +209,19 @@ pub fn build_ribbons(
     layout: &CityLayout,
     meshes: &mut Assets<Mesh>,
     paving: [Handle<super::road::RoadMaterial>; 4],
+    slabs: Handle<StandardMaterial>,
 ) -> Ribbons {
+    let footways = layout
+        .graph
+        .edges()
+        .map(|edge| {
+            meshes.add(super::buildings::with_tangents(ribbon(
+                SIDEWALK_WIDTH,
+                edge.length,
+                FOOTWAY_TILE,
+            )))
+        })
+        .collect();
     let roads = layout
         .graph
         .edges()
@@ -213,13 +240,16 @@ pub fn build_ribbons(
             meshes.add(super::buildings::with_tangents(ribbon(
                 edge.width + SIDEWALK_WIDTH * 2.0,
                 edge.length + edge.width,
+                TILE,
             )))
         })
         .collect();
     Ribbons {
         roads,
-        junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0))),
+        junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0, TILE))),
         paving,
+        footways,
+        slabs,
     }
 }
 
@@ -301,6 +331,8 @@ pub fn spawn_edge(
     // middle of the street.
     let along = middle + *direction * ((trim.0 - trim.1) * 0.5);
 
+    // The kerb block, which is what the concrete tiling was cut for: a band a
+    // quarter of a metre tall seen from the carriageway.
     for side in [-1.0f32, 1.0] {
         let at = along + normal * (side * (edge.width * 0.5 + SIDEWALK_WIDTH * 0.5));
         commands.spawn((
@@ -312,6 +344,29 @@ pub fn spawn_edge(
                 .with_scale(Vec3::new(SIDEWALK_WIDTH, SIDEWALK_HEIGHT, paved)),
             visibility.clone(),
         ));
+    }
+
+    // And the slabs laid on top of it, on a quad that carries its own size in
+    // its UVs. Scaled along the street only, by however much the two ends were
+    // given back to whatever crosses them — a few percent of the length, so the
+    // slabs stretch by a few percent, which is a great deal less than the
+    // hundredfold the block's own faces were stretching by.
+    if let Some(mesh) = ribbons.footways.get(id.0 as usize) {
+        let squeeze = (paved / edge.length.max(0.01)).clamp(0.05, 1.0);
+        for side in [-1.0f32, 1.0] {
+            let at = along + normal * (side * (edge.width * 0.5 + SIDEWALK_WIDTH * 0.5));
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(ribbons.slabs.clone()),
+                // A few millimetres proud of the block, which settles the depth
+                // test without being visible from standing height.
+                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + 0.004, at.y)
+                    .with_rotation(Quat::from_rotation_y(yaw))
+                    .with_scale(Vec3::new(1.0, 1.0, squeeze)),
+                visibility.clone(),
+            ));
+        }
     }
 
     // The kerb the player steps up onto, as two boxes that stop *short* of the
@@ -717,7 +772,7 @@ mod tests {
         // A quad wound the wrong way is culled, so the road is not dark or
         // striped or in the wrong place — it is simply not there, and what is
         // underneath it looks like the answer.
-        let mesh = ribbon(8.0, 40.0);
+        let mesh = ribbon(8.0, 40.0, TILE);
         let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
             Some(bevy::render::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
             _ => panic!("a ribbon has no positions"),

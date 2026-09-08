@@ -318,6 +318,7 @@ fn setup_ground(
     library: Res<material::MaterialLibrary>,
     city: Res<City>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut roads: ResMut<Assets<road::RoadMaterial>>,
     mut grounds: ResMut<Assets<ground::GroundMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -343,7 +344,34 @@ fn setup_ground(
         // four materials for the whole town rather than one per street.
         let paving = atlas::Surface::ALL
             .map(|surface| roads.add(carriageway(surface, &library, images.as_mut())));
-        commands.insert_resource(streetside::build_ribbons(&city, meshes.as_mut(), paving));
+        // The pavement's own slabs, at a tiling of one: the footway meshes
+        // carry their true size in their UVs, so the material must not scale
+        // them a second time. Not wet-registered — the streetside pavements are
+        // spawned per chunk from a shared handle, and `WetSurfaces` wants a
+        // material it can recolour, which this shares with nothing else that
+        // would want it left alone.
+        let mut slabs = StandardMaterial {
+            perceptual_roughness: 0.95,
+            ..default()
+        };
+        match library.get(material::set::PAVEMENT) {
+            Some(scanned) => {
+                scanned.apply(&mut slabs);
+                slabs.base_color = Color::srgb(0.62, 0.61, 0.60);
+            }
+            None => {
+                slabs.base_color = Color::srgb(0.52, 0.52, 0.53);
+                slabs.base_color_texture = Some(images.add(texture::paving()));
+                slabs.normal_map_texture = Some(images.add(texture::paving_normal()));
+            }
+        }
+        let slabs = materials.add(slabs);
+        commands.insert_resource(streetside::build_ribbons(
+            &city,
+            meshes.as_mut(),
+            paving,
+            slabs,
+        ));
         commands.spawn((
             Name::new("Ground"),
             Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE))),
