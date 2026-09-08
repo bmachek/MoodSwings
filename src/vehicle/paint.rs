@@ -54,17 +54,31 @@ pub fn stock() -> impl Iterator<Item = (Color, f32)> {
 }
 
 /// Picks a colour and finish for one car off the street.
-pub fn street_paint(rng: &mut ChaCha8Rng) -> (Color, f32) {
+/// The four conditions a car in this city can be in.
+///
+/// Quantised, and it has to be: `spawn` keeps one material per finish and
+/// hands it to every car wearing it, so a continuous age would mean a fresh
+/// material per car and several thousand draw calls where there were a dozen.
+/// Four is enough to break up a street and few enough to stock.
+pub const AGES: [f32; 4] = [0.0, 0.3, 0.62, 1.0];
+
+pub fn street_paint(rng: &mut ChaCha8Rng) -> (Color, f32, f32) {
+    // Skewed towards the tired end: most of a street has been parked outside
+    // for years and a few are nearly new, which is what squaring a uniform draw
+    // gives.
+    let draw: f32 = rng.random_range(0.0..1.0);
+    let age = AGES[((draw * draw * AGES.len() as f32) as usize).min(AGES.len() - 1)];
+
     let total: u32 = PALETTE.iter().map(|(_, _, weight)| weight).sum();
     let mut ticket = rng.random_range(0..total);
     for (color, metallic, weight) in PALETTE {
         if ticket < weight {
-            return (color, metallic);
+            return (color, metallic, age);
         }
         ticket -= weight;
     }
     let (color, metallic, _) = PALETTE[0];
-    (color, metallic)
+    (color, metallic, age)
 }
 
 /// What a body panel's paint is.
@@ -79,15 +93,28 @@ pub struct Finish {
     pub clearcoat: f32,
 }
 
-pub fn finish(body_color: Color, body_metallic: f32) -> Finish {
+/// How much of its lacquer the most weathered car in the city has lost.
+///
+/// Not a scratch and not damage — a rubber car cannot be hurt, and that is
+/// deliberate. This is the *finish*: a car parked outside for fifteen years has
+/// a clearcoat that has gone chalky, and one three weeks old has not. A street
+/// where every car is equally new is a showroom, and a showroom is the one
+/// thing a lived-in city is not.
+const OLDEST: f32 = 0.62;
+
+pub fn finish(body_color: Color, body_metallic: f32, age: f32) -> Finish {
+    let age = age.clamp(0.0, 1.0);
     Finish {
         base_color: body_color,
-        clearcoat: 1.0,
+        // The lacquer is what goes first. It does not peel, it *scatters* —
+        // which is a clearcoat that is still there and no longer smooth, and
+        // reads as a car that has stopped reflecting the sky cleanly.
+        clearcoat: 1.0 - OLDEST * age,
         metallic: body_metallic,
         // Metallic paint is rougher underneath than solid paint and reads
         // duller for it, which is why the roughness moves with the flake
-        // rather than staying put.
-        perceptual_roughness: (0.30 + body_metallic * 0.22).clamp(0.0, 1.0),
+        // rather than staying put. Age moves it the same way.
+        perceptual_roughness: (0.30 + body_metallic * 0.22 + age * 0.26).clamp(0.0, 1.0),
     }
 }
 
@@ -277,7 +304,7 @@ mod tests {
             (Color::srgb(0.07, 0.07, 0.08), 0.30),
             (Color::srgb(0.62, 0.64, 0.67), 0.75),
         ] {
-            let new = finish(colour, metallic);
+            let new = finish(colour, metallic, 0.0);
             assert_eq!(new.clearcoat, 1.0, "a new car is already dull");
             assert_eq!(new.metallic, metallic);
             assert_eq!(LinearRgba::from(new.base_color), LinearRgba::from(colour));
@@ -331,7 +358,7 @@ mod tests {
         let mut rng = stream_for(9, stream::VEHICLE_SPAWNS);
         let mut plain = 0;
         for _ in 0..600 {
-            let (color, _) = street_paint(&mut rng);
+            let (color, _, _) = street_paint(&mut rng);
             // Measured in sRGB, not linear: the linear curve stretches the
             // gap between a silver's channels far more than it stretches a
             // black's, so one threshold cannot cover both.
@@ -356,7 +383,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         let mut rng = stream_for(3, stream::VEHICLE_SPAWNS);
         for _ in 0..4000 {
-            let (color, _) = street_paint(&mut rng);
+            let (color, _, _) = street_paint(&mut rng);
             seen.insert(format!("{:?}", color.to_srgba()));
         }
         assert_eq!(seen.len(), PALETTE.len(), "some colour never comes up");

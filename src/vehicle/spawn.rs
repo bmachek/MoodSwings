@@ -133,7 +133,7 @@ pub struct VehicleAssets {
     /// thousand `StandardMaterial`s that were bit-for-bit copies of twelve, and
     /// a material handle is what Bevy batches by, so a street of identical
     /// white hatchbacks was a draw call each.
-    stock: Vec<(LinearRgba, f32, Handle<StandardMaterial>)>,
+    stock: Vec<(LinearRgba, f32, f32, Handle<StandardMaterial>)>,
     trim: super::trim::TrimKit,
 }
 
@@ -152,14 +152,21 @@ impl VehicleAssets {
     /// tints a car by hand — the capture harness does — still shares a material
     /// when it happens to land on a stock colour, and still gets its own when
     /// it does not.
-    fn stock_paint(&self, color: Color, metallic: f32) -> Option<&Handle<StandardMaterial>> {
+    fn stock_paint(
+        &self,
+        color: Color,
+        metallic: f32,
+        age: f32,
+    ) -> Option<&Handle<StandardMaterial>> {
         let wanted = LinearRgba::from(color);
         self.stock
             .iter()
-            .find(|(color, stock_metallic, _)| {
-                same_colour(*color, wanted) && (stock_metallic - metallic).abs() < 1e-4
+            .find(|(color, stock_metallic, stock_age, _)| {
+                same_colour(*color, wanted)
+                    && (stock_metallic - metallic).abs() < 1e-4
+                    && (stock_age - age).abs() < 1e-4
             })
-            .map(|(_, _, handle)| handle)
+            .map(|(_, _, _, handle)| handle)
     }
 }
 
@@ -208,7 +215,7 @@ pub fn build_assets(
     // could pick the same colour and two handles for one paint would put the
     // batching back where it was.
     let flake = images.add(super::paint::flake());
-    let mut stock: Vec<(LinearRgba, f32, Handle<StandardMaterial>)> = Vec::new();
+    let mut stock: Vec<(LinearRgba, f32, f32, Handle<StandardMaterial>)> = Vec::new();
     for (color, metallic) in super::paint::stock().chain(
         VehicleClass::ALL
             .into_iter()
@@ -216,17 +223,21 @@ pub fn build_assets(
             .map(|spec| (spec.body_color, spec.body_metallic)),
     ) {
         let linear = LinearRgba::from(color);
-        if stock
-            .iter()
-            .any(|(had, had_metallic, _)| same_colour(*had, linear) && *had_metallic == metallic)
-        {
-            continue;
+        // Once per condition. Four times the materials and the same number of
+        // *batches* per finish, which is what actually costs anything.
+        for age in super::paint::AGES {
+            if stock.iter().any(|(had, had_metallic, had_age, _)| {
+                same_colour(*had, linear) && *had_metallic == metallic && *had_age == age
+            }) {
+                continue;
+            }
+            stock.push((
+                linear,
+                metallic,
+                age,
+                materials.add(bodywork(color, metallic, age, &flake)),
+            ));
         }
-        stock.push((
-            linear,
-            metallic,
-            materials.add(bodywork(color, metallic, &flake)),
-        ));
     }
 
     VehicleAssets {
@@ -276,11 +287,11 @@ pub fn build_assets(
 ///
 /// Pulled out of the spawner so the same recipe serves both the stock finishes
 /// built at startup and the one-off a hand-tinted car still needs.
-fn bodywork(color: Color, metallic: f32, flake: &Handle<Image>) -> StandardMaterial {
+fn bodywork(color: Color, metallic: f32, age: f32, flake: &Handle<Image>) -> StandardMaterial {
     // Car paint is a coloured base under a clear lacquer, and modelling it that
     // way rather than as "shiny metal" is what makes the highlight sit *on* the
     // panel instead of tinting itself the colour of the car.
-    let finish = super::paint::finish(color, metallic);
+    let finish = super::paint::finish(color, metallic, age);
     StandardMaterial {
         base_color: finish.base_color,
         perceptual_roughness: finish.perceptual_roughness,
@@ -334,9 +345,14 @@ pub fn spawn_vehicle(
     let size = spec.half_extents * 2.0;
     // Off the shelf where the colour is one this city stocks, which it almost
     // always is; a fresh material only for a car somebody tinted by hand.
-    let paint = match assets.stock_paint(spec.body_color, spec.body_metallic) {
+    let paint = match assets.stock_paint(spec.body_color, spec.body_metallic, spec.body_age) {
         Some(handle) => handle.clone(),
-        None => materials.add(bodywork(spec.body_color, spec.body_metallic, &assets.flake)),
+        None => materials.add(bodywork(
+            spec.body_color,
+            spec.body_metallic,
+            spec.body_age,
+            &assets.flake,
+        )),
     };
     let fittings = fittings_range();
 
@@ -608,7 +624,7 @@ pub fn spawn_parked_vehicles(
         };
         let class = VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
         let mut spec = class.spec();
-        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+        (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
         // Off the kerb by the car's own width, which the fixed metre and a half
         // above was not.
         //
@@ -650,7 +666,7 @@ pub fn spawn_parked_vehicles(
         };
 
         let mut spec = VehicleClass::Sedan.spec();
-        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+        (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
         let heading = heading_towards(*direction);
         // On the carriageway, a little down the street from the junction.
         let normal = Vec2::new(-direction.y, direction.x);
@@ -680,7 +696,8 @@ pub fn spawn_parked_vehicles(
                 let class =
                     VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
                 let mut spec = class.spec();
-                (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+                (spec.body_color, spec.body_metallic, spec.body_age) =
+                    super::paint::street_paint(&mut rng);
                 // Lots sit on the kerb slab, a step above the carriageway.
                 let transform = Transform::from_xyz(
                     at.x,
@@ -775,17 +792,17 @@ mod tests {
         let assets = stocked();
         let mut rng = crate::core::rng::stream_for(7, stream::VEHICLE_SPAWNS);
         for _ in 0..2000 {
-            let (color, metallic) = super::super::paint::street_paint(&mut rng);
+            let (color, metallic, age) = super::super::paint::street_paint(&mut rng);
             assert!(
-                assets.stock_paint(color, metallic).is_some(),
-                "{color:?} at {metallic} would need a material of its own"
+                assets.stock_paint(color, metallic, age).is_some(),
+                "{color:?} at {metallic}, aged {age}, would need a material of its own"
             );
         }
         for class in VehicleClass::ALL {
             let spec = class.spec();
             assert!(
                 assets
-                    .stock_paint(spec.body_color, spec.body_metallic)
+                    .stock_paint(spec.body_color, spec.body_metallic, spec.body_age)
                     .is_some(),
                 "{}'s own livery is not stocked",
                 spec.display_name
@@ -798,11 +815,13 @@ mod tests {
         // Two handles for one paint is two batches for one colour, which is
         // the bug this whole mechanism exists to avoid.
         let assets = stocked();
-        for (i, (color, metallic, _)) in assets.stock.iter().enumerate() {
-            for (other, other_metallic, _) in &assets.stock[i + 1..] {
+        for (i, (color, metallic, age, _)) in assets.stock.iter().enumerate() {
+            for (other, other_metallic, other_age, _) in &assets.stock[i + 1..] {
                 assert!(
-                    !(same_colour(*color, *other) && metallic == other_metallic),
-                    "{color:?} at {metallic} is stocked twice"
+                    !(same_colour(*color, *other)
+                        && metallic == other_metallic
+                        && age == other_age),
+                    "{color:?} at {metallic}, aged {age}, is stocked twice"
                 );
             }
         }
@@ -816,7 +835,7 @@ mod tests {
         let assets = stocked();
         assert!(
             assets
-                .stock_paint(Color::srgb(0.01, 0.99, 0.42), 0.5)
+                .stock_paint(Color::srgb(0.01, 0.99, 0.42), 0.5, 0.0)
                 .is_none()
         );
     }

@@ -118,6 +118,9 @@ pub struct VehicleSpec {
     /// colour, 1 a full metallic. Distinct from the clearcoat, which every car
     /// has: this is what is *under* the lacquer.
     pub body_metallic: f32,
+    /// How long this one has been parked outside, 0 to 1. Not damage — a
+    /// rubber car cannot be damaged — but the finish: see `paint::finish`.
+    pub body_age: f32,
 }
 
 impl VehicleSpec {
@@ -178,6 +181,7 @@ impl VehicleSpec {
             roll_couple: 0.30,
             body_color: Color::srgb(0.72, 0.24, 0.22),
             body_metallic: 0.35,
+            body_age: 0.0,
         }
     }
 
@@ -215,6 +219,7 @@ impl VehicleSpec {
             roll_couple: 0.38,
             body_color: Color::srgb(0.62, 0.18, 0.16),
             body_metallic: 0.35,
+            body_age: 0.0,
         }
     }
 
@@ -248,6 +253,7 @@ impl VehicleSpec {
             roll_couple: 0.22,
             body_color: Color::srgb(0.90, 0.72, 0.16),
             body_metallic: 0.35,
+            body_age: 0.0,
         }
     }
 
@@ -285,6 +291,7 @@ impl VehicleSpec {
             roll_couple: 0.42,
             body_color: Color::srgb(0.32, 0.46, 0.38),
             body_metallic: 0.20,
+            body_age: 0.0,
         }
     }
 
@@ -318,6 +325,7 @@ impl VehicleSpec {
             roll_couple: 0.45,
             body_color: Color::srgb(0.35, 0.42, 0.52),
             body_metallic: 0.35,
+            body_age: 0.0,
         }
     }
 }

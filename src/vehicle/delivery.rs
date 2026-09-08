@@ -193,7 +193,7 @@ fn scatter(
         // it is the only body in the fleet with a back you could get a parcel
         // out of.
         let mut spec = VehicleClass::Truck.spec();
-        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+        (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
         let half = spec.half_extents;
         let transform = Transform::from_xyz(at.x, super::spawn::resting_height(&spec), at.y)
             .with_rotation(Quat::from_rotation_y(heading));
