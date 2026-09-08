@@ -271,6 +271,12 @@ const WALL_AT: f32 = 0.74;
 // runs at each side, as fractions of a cell.
 const SILL_DROP: f32 = 0.055;
 const SILL_OVER: f32 = 0.022;
+// The mouldings, in fractions of the whole face rather than of a cell: the
+// eaves band under the roof, the plinth the building stands on, and the string
+// course that runs across at every floor.
+const CORNICE: f32 = 0.962;
+const PLINTH: f32 = 0.030;
+const COURSE: f32 = 0.045;
 // Steps in the march, face-on and edge-on. Face-on there is nothing to find and
 // one step would do; edge-on the ray crosses several centimetres of wall per
 // step and a coarse march stairsteps the reveal.
@@ -309,6 +315,24 @@ fn facade_height(uv: vec2<f32>) -> f32 {
         && within.x < pane.y + SILL_OVER
     {
         return 1.0;
+    }
+
+    // The mouldings. These cost nothing — the march is already walking a height
+    // field, and a building's horizontal courses are three comparisons on the
+    // coordinate it is already holding — and they are most of what separates a
+    // building from a box with windows on it. What makes them read is that the
+    // *wall* is the recessed surface: a cornice cannot stand out past the mesh,
+    // so instead everything else stands back from it.
+    if uv.y > CORNICE {
+        return 1.0;
+    }
+    if uv.y < PLINTH {
+        return 0.96;
+    }
+    // One at every floor line, which is where a real render has its bead and
+    // where the painted facade already draws one.
+    if within.y < COURSE {
+        return 0.90;
     }
     return WALL_AT;
 }
