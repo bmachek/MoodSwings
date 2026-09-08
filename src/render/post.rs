@@ -320,10 +320,13 @@ fn grade(hours: f32, cover: f32) -> ColorGrading {
         // hole in the frame.
         shadows: ColorGradingSection {
             lift: 0.006 * night,
-            // Steeper at the bottom than in the middle. What a sunlit frame is
-            // short of is not midtone separation, it is a black to measure the
-            // rest against.
-            contrast: 1.0 + 1.35 * SUN_CONTRAST * sun - 0.10 * flat,
+            // *Gentler* at the bottom than in the middle, and that is the
+            // opposite of the first attempt. Bevy applies contrast per channel
+            // about a pivot, so steepening it pushes a colour's channels apart —
+            // and a shadow lit by a blue sky already has its channels a long way
+            // apart. At the same steepening as the midtones it took a shaded
+            // street from cool to navy.
+            contrast: 1.0 + 0.45 * SUN_CONTRAST * sun - 0.10 * flat,
             ..default()
         },
         midtones: ColorGradingSection {

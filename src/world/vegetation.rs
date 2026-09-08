@@ -28,6 +28,7 @@
 
 use bevy::camera::visibility::{ViewVisibility, VisibilityRange};
 use bevy::light::NotShadowCaster;
+use bevy::math::Affine2;
 use bevy::prelude::*;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
@@ -254,15 +255,71 @@ pub struct FoliageKit {
     hedge: (Handle<Mesh>, Handle<StandardMaterial>),
 }
 
+/// Metres of canopy one repeat of the leaf texture covers.
+///
+/// Small. A crown's UVs come off the sphere it was built from, so this is a
+/// count of repeats around a blob rather than a size in metres, and what it has
+/// to land on is a clump about a metre across on a crown four or five metres
+/// wide. Fewer and the holes are craters; more and the cut goes below the size a
+/// pixel can resolve and the silhouette turns back into a fizzing grey ball.
+const LEAF_TILE: f32 = 4.5;
+
+/// How a crown is lit and cut out. Shared by every species; only the tint
+/// differs, which is the whole reason the leaf texture is nearly white.
+fn leaves(
+    tint: Color,
+    color: &Handle<Image>,
+    normal: &Handle<Image>,
+    tile: f32,
+) -> StandardMaterial {
+    StandardMaterial {
+        base_color: tint,
+        base_color_texture: Some(color.clone()),
+        normal_map_texture: Some(normal.clone()),
+        uv_transform: Affine2::from_scale(Vec2::splat(tile)),
+        // The cut. Masked rather than blended, because blended foliage has to be
+        // sorted against itself and a street of trees is the worst case there
+        // is; and because a leaf's edge is genuinely a hard edge, not a fade.
+        alpha_mode: AlphaMode::Mask(0.5),
+        // With holes in it, a crown is seen from the inside as much as the
+        // outside: through its own gaps, and from under it. Culling the back
+        // faces would leave those views looking into an empty shell.
+        double_sided: true,
+        cull_mode: None,
+        // A leaf is a tenth of a millimetre of green sandwiched between two
+        // waxy surfaces, and most of what makes a tree read as alive is that
+        // sunlight comes *through* it. Without this, the shaded half of a crown
+        // is as black as the shaded half of a boulder, which is what every tree
+        // in this city looked like.
+        //
+        // Note what this quietly does to the pipeline: transmission has nowhere
+        // to live in the g-buffer, so Bevy reports any material asking for it as
+        // forward-shaded whatever the default renderer method says. Every tree
+        // in the city therefore leaves the deferred path. That is the right
+        // trade — a crown is a few hundred triangles and there are not many
+        // lights on a tree — but it is not obvious from here.
+        diffuse_transmission: 0.80,
+        thickness: 0.35,
+        // Not matte. A leaf has a cuticle on it and a canopy in low sun has a
+        // sheen across the top that is most of what says "waxy" rather than
+        // "felt".
+        perceptual_roughness: 0.72,
+        ..default()
+    }
+}
+
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
 ) -> FoliageKit {
     let bark = materials.add(StandardMaterial {
         base_color: Color::srgb(0.27, 0.24, 0.21),
         perceptual_roughness: 0.94,
         ..default()
     });
+    let leaf_color = images.add(super::texture::foliage());
+    let leaf_normal = images.add(super::texture::foliage_normal());
 
     let mut trunk = Vec::with_capacity(Species::ALL.len());
     let mut crown = Vec::with_capacity(Species::ALL.len());
@@ -284,12 +341,13 @@ pub fn build_assets(
         ));
 
         crown.push((
-            meshes.add(crown_mesh(species)),
-            materials.add(StandardMaterial {
-                base_color: species.foliage(),
-                perceptual_roughness: 0.98,
-                ..default()
-            }),
+            meshes.add(super::buildings::with_tangents(crown_mesh(species))),
+            materials.add(leaves(
+                species.foliage(),
+                &leaf_color,
+                &leaf_normal,
+                LEAF_TILE,
+            )),
             clear,
         ));
     }
@@ -298,39 +356,87 @@ pub fn build_assets(
         trunk,
         crown,
         hedge: (
-            meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.20, 0.31, 0.15),
-                perceptual_roughness: 1.0,
-                ..default()
-            }),
+            meshes.add(super::buildings::with_tangents(
+                Cuboid::new(1.0, 1.0, 1.0).mesh().build(),
+            )),
+            // A hedge is clipped, so its edge is the one bit of greenery in the
+            // city that really is a straight line — but its face is still leaves
+            // and still lets the low sun through. Tiled tighter than a crown,
+            // because a box's UVs are one repeat per face however big it is and
+            // a hedge is several metres long.
+            materials.add(leaves(
+                Color::srgb(0.20, 0.31, 0.15),
+                &leaf_color,
+                &leaf_normal,
+                LEAF_TILE * 2.0,
+            )),
         ),
     }
 }
+
+/// How far a blob's surface is pushed in and out, as a fraction of its radius.
+///
+/// The leaf texture cuts holes in a crown and that fixed the *inside* of it; the
+/// outline stayed a circular arc, because underneath the holes the geometry
+/// really was a sphere. A tree is read at fifty metres almost entirely by its
+/// outline, so the sphere has to stop being one — and a sixth of the radius,
+/// pushed around by noise, is about the lumpiness of a real crown against the
+/// sky. Much more and a plane tree turns into a cauliflower.
+const CROWN_LUMP: f32 = 0.17;
 
 /// Merges a species' blobs into one mesh.
 ///
 /// Low subdivision on purpose. A crown is read as a silhouette against the sky
 /// and as a shadow on the pavement; smoothing it costs triangles on every tree
-/// in the city and buys a rounder edge nobody looks at.
+/// in the city and buys a rounder edge nobody looks at — and now that the
+/// silhouette is deliberately lumpy, a rounder edge is not even wanted.
 fn crown_mesh(species: Species) -> Mesh {
-    let mut blobs = species.crown().iter();
-    let (first, radius) = blobs.next().expect("every species has a crown");
-    let mut mesh = ball(*radius).translated_by(*first);
+    let mut blobs = species.crown().iter().enumerate();
+    let (_, (first, radius)) = blobs.next().expect("every species has a crown");
+    let mut mesh = ball(*radius, 0).translated_by(*first);
 
-    for (centre, radius) in blobs {
-        if let Err(error) = mesh.merge(&ball(*radius).translated_by(*centre)) {
+    for (index, (centre, radius)) in blobs {
+        if let Err(error) = mesh.merge(&ball(*radius, index as u32).translated_by(*centre)) {
             warn!("a {species:?} lost part of its crown: {error}");
         }
     }
     mesh
 }
 
-fn ball(radius: f32) -> Mesh {
-    Sphere::new(radius)
+/// A crown blob: a sphere with the roundness knocked off it.
+///
+/// The lumps come from three sine waves crossed on the surface direction rather
+/// than from an RNG. Two reasons, both about not having to think about it again:
+/// it is the same tree every time the chunk respawns without joining the
+/// determinism scheme, and it is continuous over the sphere, so the seam an
+/// icosphere's UVs have does not become a seam in the shape as well.
+fn ball(radius: f32, variant: u32) -> Mesh {
+    let mut mesh = Sphere::new(radius)
         .mesh()
-        .ico(1)
-        .unwrap_or_else(|_| Sphere::new(radius).mesh().uv(7, 5))
+        .ico(2)
+        .unwrap_or_else(|_| Sphere::new(radius).mesh().uv(11, 8));
+
+    let turn = variant as f32 * 1.7;
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for position in positions.iter_mut() {
+            let unit = Vec3::from(*position) / radius.max(1e-4);
+            let broad = (unit.x * 3.1 + turn).sin()
+                * (unit.y * 2.7 - turn).sin()
+                * (unit.z * 3.5 + turn).sin();
+            let fine = (unit.x * 7.3 - turn).sin()
+                * (unit.y * 6.1 + turn).sin()
+                * (unit.z * 8.7 - turn).sin();
+            let lump = 1.0 + (broad * 0.72 + fine * 0.28) * CROWN_LUMP;
+            *position = (unit * radius * lump).to_array();
+        }
+    }
+    // The normals came off the sphere and the surface is no longer one, so
+    // without this the lumps are a silhouette and nothing else — lit exactly as
+    // flat as the ball they were carved out of.
+    mesh.compute_smooth_normals();
+    mesh
 }
 
 /// Plants one tree, and hands back the trunk so a caller can add to it.

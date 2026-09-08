@@ -119,11 +119,16 @@ const SUN_LUX: f32 = 110_000.0;
 /// red. Not a cool shadow — a navy one.
 ///
 /// Bounce is the missing red. It is sunlight, so it carries the sun's colour,
-/// and it scales with the sun rather than with the clock. Five percent is a
-/// street of asphalt at eight percent albedo and pavement and render at thirty,
-/// seen by a surface that can see a good deal of it — a shaded wall across a
-/// narrow street faces a sunlit one, which is the case this is tuned on.
-const BOUNCE: f32 = 0.05;
+/// and it scales with the sun rather than with the clock.
+///
+/// Three percent, and lower than the arithmetic alone would suggest, because it
+/// is not the only correction: `render::spawn_atmosphere` also lifted the
+/// planet's own ground albedo, which is the lower half of the environment map
+/// and therefore the other place a warm, groundward fill can come from. Between
+/// them a shaded wall comes back at about half the value of a lit one with its
+/// hue intact, which is a shadow rather than a hole and a shadow rather than a
+/// bruise.
+const BOUNCE: f32 = 0.03;
 
 /// How bright it is outside: 0 at night, 1 in full sun.
 ///

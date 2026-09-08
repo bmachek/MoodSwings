@@ -191,9 +191,17 @@ fn spawn_atmosphere(mut commands: Commands, mut mediums: ResMut<Assets<Scatterin
         Atmosphere {
             // The scattering model draws the planet's own surface out to the
             // true horizon, tens of kilometres past where this city stops.
-            // Earth's average 0.3 albedo renders that as a khaki desert; a dark
-            // cool value reads as more city, hazed out.
-            ground_albedo: Vec3::new(0.13, 0.15, 0.18),
+            // Earth's average 0.3 albedo renders that as a khaki desert; a
+            // darker, cooler value reads as more city, hazed out.
+            //
+            // But it is not only scenery. The same LUT is what the environment
+            // map is built from, and the lower half of that map is this number —
+            // so a ground dark enough to look like a city from a rooftop is also
+            // a ground that returns nothing into the shaded side of a street,
+            // leaving it lit by Rayleigh scattering and nothing else. Navy, in
+            // other words. This is the value that keeps the horizon a city and
+            // still puts something other than blue under a wall.
+            ground_albedo: Vec3::new(0.16, 0.155, 0.15),
             ..Atmosphere::earth(mediums.add(ScatteringMedium::default()))
         },
     ));

@@ -195,7 +195,11 @@ fn generate_city(
         &mut materials,
         &mut images,
     ));
-    commands.insert_resource(vegetation::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(vegetation::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(markings::build_assets(
         &mut meshes,
         &mut materials,

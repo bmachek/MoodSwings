@@ -471,6 +471,63 @@ pub fn grass() -> Image {
     })
 }
 
+// --------------------------------------------------------------- foliage ----
+
+/// How much of a canopy is leaf and how much is gap.
+///
+/// Over about a half and a tree reads as a wire mesh; under four tenths and
+/// the silhouette closes back up into the ball the geometry actually is. The
+/// number is a threshold on a field that averages a half, so it runs backwards:
+/// higher cuts away more.
+const CANOPY_COVER: f32 = 0.47;
+
+/// Leaf mass, as a field: high in the middle of a clump, low in the gaps.
+fn canopy_height(u: f32, v: f32) -> f32 {
+    // Two scales, because a crown has both. The broad one is the clump — the
+    // handful of branches that carry a bough's worth of leaves — and the fine
+    // one is the leaves themselves.
+    let clump = fbm(u, v, 5, 3, 137);
+    let leaves = fbm(u, v, 26, 3, 149);
+    (clump * 0.62 + leaves * 0.38).clamp(0.0, 1.0)
+}
+
+/// The leaf mass on a crown, and the holes between it.
+///
+/// A tree is not a ball, and a canopy modelled as one is the single loudest
+/// thing in a street that says a computer drew it: the geometry underneath here
+/// really is four spheres merged, and no amount of shading fixes an outline that
+/// smooth. What fixes it is throwing away part of the surface. The alpha channel
+/// is a hard cut through the leaf-mass field, so the sphere's edge comes apart
+/// into clumps and the sky shows through the gaps — the silhouette stops being a
+/// circle without a single extra triangle.
+///
+/// The colour is kept close to white on purpose. It multiplies the species tint,
+/// which is where a lime is meant to differ from a plane, and a texture that
+/// carried its own green would flatten the four of them into one.
+pub fn foliage() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let mass = canopy_height(u, v);
+        // Leaves out at the edge of a clump are the ones in the light, and they
+        // are also the young ones: brighter, and yellower.
+        let edge = 1.0 - (mass - CANOPY_COVER).max(0.0) * 1.6;
+        let value = 0.72 + edge * 0.42;
+        [
+            byte(value * 0.96),
+            byte(value * 1.02),
+            byte(value * 0.80),
+            // The cut. Softened by a texel or two of the fine field so a mip
+            // level down the chain still has an edge to average rather than a
+            // stack of hard-clipped ones.
+            byte(((mass - CANOPY_COVER) * 14.0).clamp(0.0, 1.0)),
+        ]
+    })
+}
+
+/// The same field as relief, so a clump that reads solid also reads round.
+pub fn foliage_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.055, canopy_height)
+}
+
 fn roof_height(u: f32, v: f32) -> f32 {
     (fbm(u, v, 56, 4, 71) * 0.8 + fbm(u, v, 4, 3, 83) * 0.2).clamp(0.0, 1.0)
 }
