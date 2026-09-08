@@ -531,6 +531,19 @@ impl CityAssets {
         &self.building
     }
 
+    /// A patch of lawn or of paving, tiled to suit something this wide.
+    ///
+    /// The bucketing is `ground_bucket`'s: one material per tiling factor,
+    /// picked so a slab comes out about `GROUND_TILE` across whatever it is
+    /// stretched over.
+    pub fn lawn(&self, extent: f32) -> Handle<StandardMaterial> {
+        self.grass[ground_bucket(extent).min(self.grass.len() - 1)].clone()
+    }
+
+    pub fn paving(&self, extent: f32) -> Handle<StandardMaterial> {
+        self.paving[ground_bucket(extent).min(self.paving.len() - 1)].clone()
+    }
+
     /// The kerb concrete, for structures that are honestly made of it.
     pub fn concrete(&self) -> Handle<StandardMaterial> {
         self.kerb.clone()
@@ -583,6 +596,98 @@ pub struct BlockContext<'a> {
     pub style: CityStyle,
 }
 
+/// The site a generated block gives one of its buildings.
+///
+/// Which of the four sides fronts the street is decided here and nowhere else:
+/// it is the one nearest the block's own perimeter, because that is the side
+/// with a pavement under it. The gap on that side is also the apron the
+/// frontage is allowed to furnish.
+fn site_in(block: &Block, building: &Building) -> Site {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let footprint = building.footprint;
+    // A building placed along a street already knows which way it looks, and
+    // its footprint is its own frontage and depth rather than a rectangle on
+    // the map. Nothing below applies to it.
+    if let Some(yaw) = building.facing {
+        return Site {
+            centre: footprint.center(),
+            span: footprint.size(),
+            yaw,
+            apron: super::citygen::SIDEWALK_WIDTH,
+            district: block.district,
+            quarter: block.quarter,
+        };
+    }
+    let gaps = [
+        footprint.min.x - block.area.min.x,
+        block.area.max.x - footprint.max.x,
+        footprint.min.y - block.area.min.y,
+        block.area.max.y - footprint.max.y,
+    ];
+    let front = gaps
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map(|(side, _)| side)
+        .unwrap_or(3);
+    let size = footprint.size();
+    Site {
+        centre: footprint.center(),
+        // The span is in the site's own frame, so a building fronting ±X has
+        // its frontage along Z and its depth along X.
+        span: if front < 2 {
+            Vec2::new(size.y, size.x)
+        } else {
+            size
+        },
+        yaw: match front {
+            0 => -FRAC_PI_2,
+            1 => FRAC_PI_2,
+            2 => PI,
+            _ => 0.0,
+        },
+        apron: gaps[front],
+        district: block.district,
+        quarter: block.quarter,
+    }
+}
+
+/// Where one building stands, how big it is, and which way it looks.
+///
+/// The whole of what a building needs to know about the ground under it, and
+/// the reason it is a type rather than five arguments: there are now two ways
+/// to arrive at one. A generated block works out which of its four sides faces
+/// the street and turns the building onto it; a real town read off
+/// `world::atlas` has no blocks at all and hands the building the direction of
+/// the street it was placed along. Everything downstream — the shells, the
+/// sign, the doorway, the frontage, the gable, the chimney — takes a centre, a
+/// span and a yaw, and has done all along.
+#[derive(Debug, Clone, Copy)]
+pub struct Site {
+    pub centre: Vec2,
+    /// Frontage across the street face, and depth back from it. In the site's
+    /// own frame: `span.x` runs along the street whichever way the street runs.
+    pub span: Vec2,
+    /// The yaw that turns a mesh's +Z out towards the street.
+    pub yaw: f32,
+    /// Pavement between the front face and the kerb.
+    pub apron: f32,
+    pub district: District,
+    pub quarter: Option<Quarter>,
+}
+
+impl Site {
+    /// The way the front face looks.
+    pub fn outward(&self) -> Vec2 {
+        Vec2::new(self.yaw.sin(), self.yaw.cos())
+    }
+
+    /// A point `out` metres in front of the middle of the front face.
+    pub fn in_front(&self, out: f32) -> Vec2 {
+        self.centre + self.outward() * (self.span.y * 0.5 + out)
+    }
+}
+
 pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, chunk: IVec2) {
     let assets = ctx.assets;
     let area = block.area;
@@ -628,8 +733,47 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
             .with_scale(Vec3::new(size.x, 1.0, size.y)),
     ));
 
+    // The ground behind a building, for a town that has no blocks.
+    //
+    // A generated block *is* a paved rectangle and everything inside it is
+    // covered. A real town read off a map has no blocks at all — the buildings
+    // line the streets and the middle is whatever is left — and the ground
+    // under the whole world is the asphalt the roads are made of, so the middle
+    // of every block came out as bare carriageway. Two thousand six hundred
+    // buildings standing on a tarmac plain.
+    //
+    // Without the faces of the street network there is no way to know where a
+    // block's inside *is*. What there is, is the knowledge that behind a
+    // building is not road: it is a yard, a garden, the back of somebody's
+    // house. So each building lays one down, and where two rows back onto each
+    // other the yards meet in the middle and the block is covered.
+    if !block.paved {
+        for building in &block.buildings {
+            let site = site_in(block, building);
+            const YARD: f32 = 17.0;
+            let behind = site.centre - site.outward() * (site.span.y * 0.5 + YARD * 0.5);
+            // Grass or paving, per building: an old town's back land is both,
+            // and one material across the whole of it reads as a golf course.
+            let seed = rooftop::seed_for(ctx.seed, building.footprint);
+            let ground = if seed & 1 == 0 {
+                assets.lawn(site.span.x)
+            } else {
+                assets.paving(site.span.x)
+            };
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(assets.unit_quad.clone()),
+                MeshMaterial3d(ground),
+                Transform::from_xyz(behind.x, 0.02, behind.y)
+                    .with_rotation(Quat::from_rotation_y(site.yaw))
+                    .with_scale(Vec3::new(site.span.x + 3.0, 1.0, YARD)),
+                NotShadowCaster,
+            ));
+        }
+    }
+
     for building in &block.buildings {
-        spawn_building(commands, ctx, block, building, chunk);
+        spawn_building(commands, ctx, &site_in(block, building), building, chunk);
     }
     for vacant in &block.vacants {
         crate::world::lots::spawn_lot(commands, ctx.lots, ctx.signs, block, vacant, chunk);
@@ -738,14 +882,14 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
 fn spawn_building(
     commands: &mut Commands,
     ctx: &BlockContext,
-    block: &Block,
+    site: &Site,
     building: &Building,
     chunk: IVec2,
 ) {
-    let district = block.district;
+    let district = site.district;
     let assets = ctx.assets;
-    let size = building.footprint.size();
-    let center = building.footprint.center();
+    let size = site.span;
+    let center = site.centre;
     let height = building.height;
     let class = FacadeClass::for_height(height);
 
@@ -755,42 +899,20 @@ fn spawn_building(
     let seed = rooftop::seed_for(ctx.seed, building.footprint);
     let parapet = rooftop::parapet(seed, class);
 
-    // Which face fronts the street: the one nearest the block perimeter,
-    // which is the side with a pavement under it. Decided once, up here,
-    // because three things hang off it — the sign, the doorway, and the room
-    // behind the doorway — and they must all agree which way is out.
-    use std::f32::consts::{FRAC_PI_2, PI};
-    let footprint = building.footprint;
-    let gaps = [
-        footprint.min.x - block.area.min.x,
-        block.area.max.x - footprint.max.x,
-        footprint.min.y - block.area.min.y,
-        block.area.max.y - footprint.max.y,
-    ];
-    let front = gaps
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.total_cmp(b.1))
-        .map(|(side, _)| side)
-        .unwrap_or(3);
-    // How much pavement there is between this building's front and the kerb.
-    // The block is inset by `SIDEWALK_WIDTH` before anything is built on it, so
-    // this is at least that — but a lot the subdivision left deep gives its
-    // building a wider apron, and the frontage is allowed to use it.
-    let apron = gaps[front];
-    let yaw = match front {
-        0 => -FRAC_PI_2,
-        1 => FRAC_PI_2,
-        2 => PI,
-        _ => 0.0,
-    };
+    // Which way is out. Worked out by whoever built the site — a block picks
+    // the side nearest its own perimeter, a street picks the street — and
+    // agreed on here once, because four things hang off it: the sign, the
+    // doorway, the room behind the doorway, and everything `frontage` puts on
+    // the pavement.
+    let yaw = site.yaw;
+    let apron = site.apron;
 
     // The wall, at three levels of detail. All three carry the same transform
     // and the same material, and `use_aabb: false` measures from the entity's
     // origin, so all three measure the same distance and hand over to one
     // another on precisely the same metre — which is what Bevy needs before it
     // will dither one into the next instead of blinking between them.
-    let material = assets.material_for(district, block.quarter, building.palette, class);
+    let material = assets.material_for(district, site.quarter, building.palette, class);
     let (near, far) = shell::ranges(ctx.lod_scale);
     // Which balconies and which awnings, from the building's own seed rather
     // than from a counter, for the same reason its roof is.
@@ -800,7 +922,7 @@ fn spawn_building(
     // Wok — which is how real quarters advertise themselves, one cuisine
     // repeated until it is a neighbourhood. Only the sign is forced; the
     // shell variant stays the building's own, so the street still varies.
-    let sign_variant = match (block.quarter, building.kind) {
+    let sign_variant = match (site.quarter, building.kind) {
         (Some(Quarter::Italia), super::citygen::BuildingKind::Restaurant) => 1,
         (Some(Quarter::Fernost), super::citygen::BuildingKind::Restaurant) => 3,
         _ => variant,
@@ -816,11 +938,10 @@ fn spawn_building(
     } else {
         None
     };
-    let (frontage, throat) = if front < 2 {
-        (size.y, size.x)
-    } else {
-        (size.x, size.y)
-    };
+    // The site's frame is already the building's: `span.x` runs along the
+    // street face and `span.y` back from it, whichever compass direction that
+    // happens to be.
+    let (frontage, throat) = (size.x, size.y);
     // The parking garage is not a facade with an inside implied — it has no
     // facade at all. Its whole structure comes from `world::garage`, plus
     // the sign over its mouth, and nothing else of a building's anatomy
@@ -843,7 +964,7 @@ fn spawn_building(
             ctx,
             building,
             sign_variant,
-            front,
+            site,
             yaw,
             frontage,
             SIDEWALK_HEIGHT + 4.6,
@@ -874,7 +995,7 @@ fn spawn_building(
             ctx,
             building,
             sign_variant,
-            front,
+            site,
             yaw,
             // The board hangs on the tower, which is much narrower than the
             // footprint — the same clamp the tower's own side length uses.
@@ -893,7 +1014,7 @@ fn spawn_building(
             ctx,
             building,
             sign_variant,
-            front,
+            site,
             yaw,
             frontage,
             SIDEWALK_HEIGHT + 3.6,
@@ -1040,7 +1161,7 @@ fn spawn_building(
         super::gable::spawn(
             commands,
             ctx.gables,
-            &assets.plain_for(district, block.quarter, building.palette),
+            &assets.plain_for(district, site.quarter, building.palette),
             seed,
             center,
             frontage,
@@ -1118,7 +1239,7 @@ fn spawn_building(
         ctx,
         building,
         sign_variant,
-        front,
+        site,
         yaw,
         frontage,
         SIDEWALK_HEIGHT + storey * 0.875,
@@ -1138,32 +1259,20 @@ fn spawn_building(
         && (seed >> 27) & 0b111 < ctx.style.advert_appetite()
     {
         let (mesh, material, poster) = ctx.signs.advert((seed >> 33) as u32);
-        // The two faces perpendicular to the front are the blind ones; one
-        // seed bit picks which. The poster must fit the wall it is pasted
-        // to with paper to spare, or it wraps the corner.
-        let side = if front < 2 {
-            2 + ((seed >> 41) & 1) as usize
-        } else {
-            ((seed >> 41) & 1) as usize
-        };
-        let side_width = if side < 2 { size.y } else { size.x };
-        let fit = (side_width * 0.55 / poster.x)
+        // A blind wall is one of the two perpendicular to the front, and one
+        // seed bit picks which. Expressed as a quarter turn off the site's own
+        // yaw rather than as a compass side, so it lands on the right wall of
+        // a building standing at any angle to anything.
+        let hand = if (seed >> 41) & 1 == 0 { 1.0f32 } else { -1.0 };
+        let side_yaw = yaw + hand * std::f32::consts::FRAC_PI_2;
+        // The flank the poster goes on is `span.y` long, because that is the
+        // side of the building the front is not.
+        let fit = (size.y * 0.55 / poster.x)
             .min(height * 0.38 / poster.y)
             .min(1.0);
         if fit > 0.45 {
-            let proud = 0.14;
-            let at = match side {
-                0 => Vec2::new(footprint.min.x - proud, center.y),
-                1 => Vec2::new(footprint.max.x + proud, center.y),
-                2 => Vec2::new(center.x, footprint.min.y - proud),
-                _ => Vec2::new(center.x, footprint.max.y + proud),
-            };
-            let side_yaw = match side {
-                0 => -FRAC_PI_2,
-                1 => FRAC_PI_2,
-                2 => PI,
-                _ => 0.0,
-            };
+            let along = Vec2::new(side_yaw.sin(), side_yaw.cos());
+            let at = center + along * (size.x * 0.5 + 0.14);
             let poster_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
             commands.spawn((
                 ChunkOf(chunk),
@@ -1189,13 +1298,7 @@ fn spawn_building(
     // class would otherwise paint there. It clears the plinth's band by
     // starting above it, and stops under the fascia the sign hangs on.
     if let Some((mesh, material)) = ctx.signs.frontage(building.kind) {
-        let proud = 0.14;
-        let at = match front {
-            0 => Vec2::new(footprint.min.x - proud, center.y),
-            1 => Vec2::new(footprint.max.x + proud, center.y),
-            2 => Vec2::new(center.x, footprint.min.y - proud),
-            _ => Vec2::new(center.x, footprint.max.y + proud),
-        };
+        let at = site.in_front(0.14);
         let foot = SIDEWALK_HEIGHT + PLINTH_HEIGHT + 0.02;
         let top = SIDEWALK_HEIGHT + storey * texture::FASCIA.0 - 0.05;
         let strip = (top - foot).max(1.2);
@@ -1245,7 +1348,7 @@ fn hang_sign(
     ctx: &BlockContext,
     building: &Building,
     variant: u32,
-    front: usize,
+    site: &Site,
     yaw: f32,
     frontage: f32,
     fascia: f32,
@@ -1254,15 +1357,11 @@ fn hang_sign(
     let Some((mesh, material, board)) = ctx.signs.get(building.kind, variant) else {
         return;
     };
-    let footprint = building.footprint;
-    let center = footprint.center();
-    let proud = crate::world::signage::PROUD;
-    let at = match front {
-        0 => Vec2::new(footprint.min.x - proud, center.y),
-        1 => Vec2::new(footprint.max.x + proud, center.y),
-        2 => Vec2::new(center.x, footprint.min.y - proud),
-        _ => Vec2::new(center.x, footprint.max.y + proud),
-    };
+    // Out in front of the middle of the face, whichever way the face looks.
+    // This used to be a four-way match on which side of an axis-aligned
+    // footprint fronted the street, which is a question a building on a curved
+    // street cannot answer.
+    let at = site.in_front(crate::world::signage::PROUD);
     let fit = (frontage * 0.8 / board.x).min(1.0);
     let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
     commands.spawn((

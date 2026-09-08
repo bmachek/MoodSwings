@@ -1,5 +1,6 @@
 //! The world: procedural city, physics, streaming, and the day/night cycle.
 
+pub mod atlas;
 pub mod buildings;
 pub mod bunting;
 pub mod church;
@@ -27,6 +28,7 @@ pub mod stadium;
 pub mod statues;
 pub mod streaming;
 pub mod streetlights;
+pub mod streetside;
 pub mod texture;
 pub mod timeofday;
 pub mod vegetation;
@@ -106,10 +108,27 @@ fn generate_city(
     mut wet: ResMut<weather::WetSurfaces>,
 ) {
     let started = std::time::Instant::now();
-    let layout = citygen::generate(config.world_seed, config.world.half_extent, config.city);
+    // A style that names a town builds that town; everything else is grown
+    // from the seed. A named town that will not load falls back to the
+    // generator with a warning rather than to an empty world — the same
+    // discipline a missing sound gets.
+    let mut layout = config
+        .city
+        .atlas()
+        .and_then(atlas::load)
+        .map(|town| atlas::layout(&town, config.world_seed, config.world.half_extent))
+        .unwrap_or_else(|| {
+            citygen::generate(config.world_seed, config.world.half_extent, config.city)
+        });
+    // A town read off a map arrives as a road network and nothing else. What
+    // fills it is not blocks — a real block is not a rectangle — but frontages
+    // marched down each side of each street; see `world::streetside`.
+    if layout.blocks.is_empty() {
+        layout.blocks = streetside::lots(&layout, config.world_seed, config.city);
+    }
 
     info!(
-        "city generated in {:.1}ms: {} blocks, {} buildings, {} intersections, {} roads",
+        "city built in {:.1}ms: {} blocks, {} buildings, {} intersections, {} roads",
         started.elapsed().as_secs_f32() * 1000.0,
         layout.blocks.len(),
         layout.building_count(),
@@ -127,6 +146,7 @@ fn generate_city(
     commands.insert_resource(bunting::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(plume::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(gable::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(streetside::build_assets(&mut meshes));
     commands.insert_resource(worksite::build_assets(
         &mut meshes,
         &mut materials,

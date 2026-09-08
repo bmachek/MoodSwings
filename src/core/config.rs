@@ -147,6 +147,24 @@ impl CityStyle {
         }
     }
 
+    /// The baked town this style builds, if it builds a real one.
+    ///
+    /// `Landshuepf` is the parody name and Landshut is the town, so this is
+    /// where the joke stops being one: the style now loads
+    /// `assets/cities/landshut.ron` and lays out the actual street plan. Every
+    /// other dial on this enum still applies on top of it — the palette, the
+    /// height scale, the gables — because those are what a postcard is, and a
+    /// map underneath a postcard is still a postcard.
+    ///
+    /// Everywhere else is `None` and is generated from the seed as it always
+    /// was.
+    pub fn atlas(self) -> Option<&'static str> {
+        match self {
+            Self::Landshuepf => Some("landshut"),
+            _ => None,
+        }
+    }
+
     /// Multiplier on every district's smallest buildable lot.
     ///
     /// The second lever the layout has, and the one a gable needs. A stepped

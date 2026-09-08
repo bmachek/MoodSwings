@@ -4,6 +4,9 @@ Mood Swings is an original work. The city, the vehicles, the crowd, every
 texture and every face are generated at runtime from a seed — there is no
 third-party art in this repository and no trademark is used.
 
+There are now two exceptions, and the second one arrived with Landshut — see
+*Map data* below. Everything else still holds.
+
 The one thing the game does not make for itself is sound. Every sound in the
 bank is a **CC0 1.0** recording made by somebody else, fetched by
 `tools/fetch-materials.sh` (or `tools/fetch-materials.bat`) into
@@ -74,6 +77,37 @@ on load.
 - **Kodack** — the camera shutter click, one decisive moment at a time.
 - **Jackie-makes-noiz** — the porch mandolin that hangs over Klein-Neapel.
 - **f-r-a-g-i-l-e** — the lotus guzheng that hangs over the Fernost-Viertel.
+
+## Map data — [OpenStreetMap](https://www.openstreetmap.org), ODbL 1.0
+
+`assets/cities/landshut.ron` is Landshut's street network: five hundred and
+fifty-four streets with their real names, widths and shapes, in a square about
+two kilometres across centred on the Altstadt. It is baked from an Overpass
+extract by `tools/fetch-city.sh`, which downloads it, and `tools/bake-city.py`,
+which projects it into metres.
+
+**Map data © OpenStreetMap contributors**, licensed under the
+[Open Database Licence 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+
+This is the one asset in the repository that is not CC0, and it is the one
+asset that could not be: nobody can generate a real town from a seed. Three
+things follow from the licence and all three are done rather than promised.
+
+The attribution is *carried*: it is in the header of the baked file, in the log
+line `world::atlas` prints every time the city loads, and here.
+
+The baked file is a **derived database** and stays under ODbL. Anyone who takes
+it — or a further derivative of it — has the same obligations: attribute
+OpenStreetMap, and keep any adapted database under ODbL.
+
+The *game* is not a derived database. Screenshots, recordings and the rendered
+world are Produced Works, which ODbL allows under any terms; the game's own
+code stays GPL-3.0-or-later as it always was.
+
+Only the roads were taken. No building footprints, no addresses, no points of
+interest — every building standing on those streets is generated from the seed
+by `world::streetside`, and any resemblance to the house actually standing
+there is a coincidence of arithmetic.
 
 ## Software
 

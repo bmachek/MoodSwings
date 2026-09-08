@@ -33,7 +33,11 @@ pub enum District {
 
 impl District {
     /// (min height, max height) in metres.
-    fn height_range(self) -> (f32, f32) {
+    ///
+    /// Public because a town read off a map has no districts of its own: it
+    /// works out which district a frontage behaves like and then wants the same
+    /// heights the generator would have given it.
+    pub fn height_range(self) -> (f32, f32) {
         match self {
             District::Downtown => (38.0, 135.0),
             District::Midtown => (16.0, 46.0),
@@ -259,6 +263,17 @@ pub fn quarter_for(seed: u64, center: Vec2) -> Option<Quarter> {
 #[derive(Debug, Clone, Copy)]
 pub struct Building {
     pub footprint: Rect,
+    /// The way this building faces, if it was placed along a street rather than
+    /// inside a block.
+    ///
+    /// `None` is the generator's own answer: a building in a rectangular block
+    /// fronts whichever of its four sides is nearest the block's perimeter, and
+    /// `buildings::site_in` works that out. `Some(yaw)` is a real town read off
+    /// `world::atlas`, where there are no blocks and no four sides to choose
+    /// between — the building faces the street it was placed along, and the
+    /// footprint is read as `frontage x depth` in that street's own frame
+    /// rather than as a rectangle on the map.
+    pub facing: Option<f32>,
     pub height: f32,
     /// Index into the district's material palette.
     pub palette: u8,
@@ -269,6 +284,15 @@ pub struct Building {
 pub struct Block {
     /// Kerb-to-kerb extent, sidewalk included.
     pub area: Rect,
+    /// Whether this block lays its own kerb slab.
+    ///
+    /// True for a generated block, whose rectangle *is* the pavement — the
+    /// ground is asphalt and the slab carves the street grid out of it as
+    /// negative space. False for the one-building blocks a real town is filled
+    /// with, where the pavement is a strip laid along each street by
+    /// `world::streetside` instead, because an axis-aligned slab round a
+    /// building on a curved street is a paving stone at the wrong angle.
+    pub paved: bool,
     pub district: District,
     pub buildings: Vec<Building>,
     /// Lots the vacancy roll left empty, now put to use.
@@ -529,6 +553,7 @@ fn build_blocks(
             let (buildings, vacants) =
                 lay_out_buildings(seed, area, district, arterial, style, &mut building_rng);
             blocks.push(Block {
+                paved: true,
                 area,
                 district,
                 buildings,
@@ -623,6 +648,7 @@ fn lay_out_buildings(
             continue;
         }
         buildings.push(Building {
+            facing: None,
             footprint,
             height: rng.random_range(min_h..max_h),
             palette: rng.random_range(0..PALETTE_SIZE),

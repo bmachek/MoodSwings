@@ -178,6 +178,7 @@ pub struct StreetKits<'w> {
     lines: Res<'w, crate::world::bunting::BuntingKit>,
     plumes: Res<'w, crate::world::plume::PlumeKit>,
     gables: Res<'w, crate::world::gable::GableKit>,
+    kerbs: Res<'w, crate::world::streetside::StreetsideKit>,
 }
 
 pub fn update_streaming(
@@ -237,6 +238,14 @@ pub fn update_streaming(
     let works_range = config.graphics.lod_distance(crate::world::worksite::RANGE);
     let bunting_range = config.graphics.lod_distance(crate::world::bunting::RANGE);
     let plume_range = crate::world::plume::draw_range(config.graphics.lod_scale);
+    let kerb_range = config
+        .graphics
+        .lod_distance(crate::world::streetside::RANGE)
+        .min(2_000.0);
+    // A town built along its streets lays its pavement along them too. A
+    // generated block *is* its own pavement, so it must not have a second one
+    // laid over the top.
+    let streetside = city.blocks.first().is_some_and(|block| !block.paved);
     for chunk in arriving {
         // One stream per chunk and per subsystem, so a chunk's furniture is
         // identical every time it is walked back into rather than reshuffling,
@@ -368,6 +377,18 @@ pub fn update_streaming(
                         chunk,
                         &plume_range,
                         &mut steaming,
+                    );
+                }
+                if streetside {
+                    super::streetside::spawn_edge(
+                        &mut commands,
+                        &street.kerbs,
+                        &kits.assets.concrete(),
+                        edge,
+                        from,
+                        to,
+                        chunk,
+                        kerb_range,
                     );
                 }
                 super::bunting::spawn_edge(
