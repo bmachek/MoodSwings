@@ -28,8 +28,20 @@ use super::boing::PreviousVelocity;
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
 
-/// How far below the soles the ground probe still counts as contact.
-const GROUND_REACH: f32 = 0.45;
+/// How far below the soles the ground probe still counts as contact, as a
+/// fraction of the body's own standing height.
+///
+/// A fraction and not a constant, and the difference is a dog. At a flat 45cm
+/// — which is what a person's soles get, and is where this number came from —
+/// a dog that stands 26cm high counted as grounded while it was nearly two of
+/// itself off the pavement. The rebound is *assigned* rather than added, so it
+/// left the ground at full hop speed from up there, fell back to 45cm, and was
+/// relaunched: no energy ever leaves the loop, and the dog spent the whole walk
+/// hovering about two metres up on the end of its leash. Scaled to the body,
+/// everybody on two feet keeps the reach they had — a flummi stands 85 to 90cm
+/// to the soles and half of that is the constant this replaces — and something
+/// knee-high gets a slack in proportion to its knees.
+const GROUND_REACH: f32 = 0.5;
 /// The probe starts a little above the origin so it cannot begin inside a kerb
 /// the body is already standing on.
 const PROBE_LIFT: f32 = 0.1;
@@ -112,6 +124,14 @@ pub fn steer(current: Vec2, desired: Vec2, accel: f32, dt: f32) -> Vec2 {
     }
 }
 
+/// How far down the ground probe reaches from the body's origin.
+///
+/// Pure, because the thing worth pinning about it is a proportion rather than a
+/// frame of physics: how much air a body is allowed to call ground.
+pub fn probe_reach(stand_height: f32) -> f32 {
+    stand_height * (1.0 + GROUND_REACH) + PROBE_LIFT
+}
+
 pub fn bounce_bodies(
     time: Res<Time>,
     config: Res<GameConfig>,
@@ -138,7 +158,7 @@ pub fn bounce_bodies(
         // above the origin hits the body's own collider first, which reads as
         // ground a body-height up — and it climbs, a metre and a half a frame.
         let from = transform.translation + Vec3::Y * PROBE_LIFT;
-        let reach = bouncer.stand_height + PROBE_LIFT + GROUND_REACH;
+        let reach = probe_reach(bouncer.stand_height);
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
         bouncer.grounded = spatial
             .cast_ray(from, Dir3::NEG_Y, reach, true, &filter)
@@ -218,6 +238,25 @@ mod tests {
             (0.25..0.85).contains(&arc),
             "a hop lasting {arc:.2}s is not a bounce"
         );
+    }
+
+    /// Nobody may call ground something they are their own height above.
+    ///
+    /// The rebound is assigned rather than added, so whatever slack the probe
+    /// allows is a floor the body hops off *without touching* — permanently, at
+    /// no cost in energy. Held under half a body height it reads as the lower
+    /// part of an arc, which is what it is for; at more than a whole one it is
+    /// a hover, and that is what a dog was doing on the end of its leash.
+    #[test]
+    fn the_probe_reaches_past_the_soles_in_proportion_to_the_body() {
+        for stand in [0.18f32, 0.26, 0.845, 0.905] {
+            let slack = probe_reach(stand) - stand - PROBE_LIFT;
+            assert!(
+                slack < stand * 0.75,
+                "a body standing {stand}m counts {slack}m of air as ground"
+            );
+            assert!(slack > stand * 0.25, "{stand}m has nothing to steer with");
+        }
     }
 
     #[test]
