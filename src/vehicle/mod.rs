@@ -2,6 +2,7 @@
 
 pub mod body;
 pub mod controller;
+pub mod delivery;
 pub mod impact;
 pub mod lights;
 pub mod paint;
@@ -18,7 +19,7 @@ pub struct VehiclePlugin;
 
 impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(lights::VehicleLightsPlugin)
+        app.add_plugins((lights::VehicleLightsPlugin, delivery::DeliveryPlugin))
             .add_message::<impact::VehicleImpact>()
             .add_systems(Startup, setup_assets)
             .add_systems(PostStartup, spawn::spawn_parked_vehicles)

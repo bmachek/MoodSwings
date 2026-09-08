@@ -41,10 +41,15 @@ use crate::world::roadgraph::NodeId;
 
 /// How far past the kerb the pavement centre sits.
 const PAVEMENT_OFFSET: f32 = 1.9;
-const RADIUS: f32 = 0.32;
-const HEIGHT: f32 = 1.05;
+/// The capsule a citizen is.
+///
+/// Public because anything that spawns a figure has to build the same one — a
+/// courier is a pedestrian who works for a living — and a second private copy
+/// of these numbers is a second thing to forget when the crowd is resized.
+pub const RADIUS: f32 = 0.32;
+pub const HEIGHT: f32 = 1.05;
 /// Distance from the capsule's centre to its lowest point.
-const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
+pub const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
 
 /// Pace multiplier at the angry end of the scale: a Wutbürger at rock bottom
 /// storms down the pavement half again as fast as they would stroll it.

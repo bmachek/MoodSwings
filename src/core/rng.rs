@@ -107,6 +107,8 @@ pub mod stream {
     /// them. Runtime behaviour, so its own stream: who is busking must not
     /// depend on how many pigeons have gone up.
     pub const BUSKERS: u64 = 29;
+    /// Which streets have a van stopped on them and who is unloading it.
+    pub const DELIVERIES: u64 = 30;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
