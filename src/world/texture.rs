@@ -235,7 +235,7 @@ pub fn ridge(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
 
 // -------------------------------------------------------------- painting ----
 
-fn srgb_to_linear(byte: u8) -> f32 {
+pub fn srgb_to_linear(byte: u8) -> f32 {
     let c = byte as f32 / 255.0;
     if c <= 0.04045 {
         c / 12.92
@@ -244,7 +244,7 @@ fn srgb_to_linear(byte: u8) -> f32 {
     }
 }
 
-fn linear_to_srgb(c: f32) -> f32 {
+pub fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 {
         c * 12.92
     } else {

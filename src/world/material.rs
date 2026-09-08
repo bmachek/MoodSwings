@@ -18,6 +18,9 @@
 //!   a single level. A 2K texture tiled a few hundred times across the ground
 //!   without mips does not shimmer, it boils. So every loaded map gets a chain
 //!   built on the CPU the frame it arrives.
+//! * **De-lighting.** A colour map off a photograph is not an albedo map: it is
+//!   an albedo map with the day the photograph was taken multiplied into it. See
+//!   [`DELIGHT`].
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler};
@@ -197,7 +200,11 @@ fn discover(asset_server: Res<AssetServer>, mut library: ResMut<MaterialLibrary>
     }
 }
 
-/// Builds a mip chain and applies a tiling sampler as each map finishes loading.
+/// De-lights, mips and applies a tiling sampler as each map finishes loading.
+///
+/// The order is load-bearing: the mip chain has to be built from the corrected
+/// texels, or every level below the top is a chain of averages of the wrong
+/// image and a wall changes albedo as you walk away from it.
 fn finish_loaded_maps(
     mut events: MessageReader<AssetEvent<Image>>,
     mut images: ResMut<Assets<Image>>,
@@ -213,11 +220,80 @@ fn finish_loaded_maps(
         let Some(mut image) = images.get_mut(*id) else {
             continue;
         };
+        if let Err(reason) = delight(&mut image) {
+            warn!("a scanned colour map was not de-lit ({reason}); it will crush");
+        }
         if let Err(reason) = add_mip_chain(&mut image) {
             warn!("no mip chain for a scanned map ({reason}); it will alias");
         }
         image.sampler = ImageSampler::Descriptor(tiling_sampler());
     }
+}
+
+/// How much of a scanned colour map's own contrast survives de-lighting.
+///
+/// A photogrammetry colour map is a photograph, and a photograph of a rough
+/// surface has that surface's own shadows in it: the dark side of every chipping
+/// in an asphalt scan, the shaded half of every stone, the soot in a mortar
+/// joint. Used as an albedo those shadows get *multiplied by the renderer's own
+/// lighting*, which shades the same relief a second time from a different sun.
+///
+/// The numbers say how far off it is. This asphalt scan's albedo runs from 0.006
+/// to 0.9 in linear light — a hundred and fifty to one, across one material.
+/// Real asphalt is closer to three to one. The rest is the photographer's day.
+///
+/// It never showed while a flat five hundred lux of ambient was propping the
+/// shadows up. With that gone, the dark end of the scan crushed: a road three
+/// metres in front of the camera came out as black salt-and-pepper over grey,
+/// which reads as broken rendering rather than as tarmac.
+///
+/// So the colour is pulled back towards its own average. Not all the way — the
+/// aggregate really is lighter than the bitumen and the mortar really is paler
+/// than the brick — but far enough that what is left is albedo and what was
+/// removed is weather. The relief it used to stand for is still there: it is in
+/// the normal map and the occlusion map, where the renderer can light it.
+const DELIGHT: f32 = 0.55;
+
+/// Pulls a scanned colour map's contrast in towards its own mean, in place.
+///
+/// Only touches sRGB images, and that is not a heuristic: this module loads the
+/// colour map through the sRGB curve and every other map linear, so the format
+/// *is* the answer to "is this an albedo".
+///
+/// The compression happens in linear light rather than on the stored bytes,
+/// because the thing being undone — a multiplication by the light — is a linear
+/// operation, and halving it in gamma space would lighten the whole image as a
+/// side effect.
+fn delight(image: &mut Image) -> Result<(), &'static str> {
+    if image.texture_descriptor.format != TextureFormat::Rgba8UnormSrgb {
+        return Ok(());
+    }
+    if image.texture_descriptor.mip_level_count > 1 {
+        return Err("already mipped");
+    }
+    let Some(data) = image.data.as_mut() else {
+        return Err("pixels were dropped before the render world");
+    };
+
+    // A per-channel mean, so the correction is neutral: a single grey mean would
+    // drag a warm brick towards its own luminance and cool it.
+    let mut sum = [0.0f64; 3];
+    for texel in data.as_chunks::<4>().0 {
+        for channel in 0..3 {
+            sum[channel] += super::texture::srgb_to_linear(texel[channel]) as f64;
+        }
+    }
+    let texels = (data.len() / 4).max(1) as f64;
+    let mean = sum.map(|s| (s / texels) as f32);
+
+    for texel in data.as_chunks_mut::<4>().0 {
+        for channel in 0..3 {
+            let linear = super::texture::srgb_to_linear(texel[channel]);
+            let pulled = mean[channel] + (linear - mean[channel]) * DELIGHT;
+            texel[channel] = super::texture::byte(super::texture::linear_to_srgb(pulled));
+        }
+    }
+    Ok(())
 }
 
 fn tiling_sampler() -> bevy::image::ImageSamplerDescriptor {
@@ -322,6 +398,64 @@ mod tests {
         let once = image.data.clone();
         add_mip_chain(&mut image).unwrap();
         assert_eq!(image.data, once, "a second pass must not stack more levels");
+    }
+
+    /// A colour map with a photographed hundred-to-one range in it comes back
+    /// with a plausible one, without moving the average — the correction has to
+    /// be about contrast alone or every wall in the city changes colour.
+    #[test]
+    fn de_lighting_narrows_a_scans_range_and_leaves_its_mean_where_it_was() {
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        // Two texels a long way apart: near black, and near white.
+        image.data = Some(vec![20, 20, 20, 255, 230, 230, 230, 255]);
+
+        let before = |image: &Image| {
+            let data = image.data.as_ref().unwrap();
+            (
+                super::super::texture::srgb_to_linear(data[0]),
+                super::super::texture::srgb_to_linear(data[4]),
+            )
+        };
+        let (dark_was, light_was) = before(&image);
+        delight(&mut image).unwrap();
+        let (dark, light) = before(&image);
+
+        assert!(light - dark < (light_was - dark_was) * 0.6, "not narrowed");
+        assert!(dark > dark_was && light < light_was, "not narrowed inwards");
+        // Within a byte's worth of the original average.
+        let moved = ((dark + light) - (dark_was + light_was)).abs() / 2.0;
+        assert!(moved < 0.01, "the average moved by {moved}");
+    }
+
+    /// Every other map in a set is a measurement rather than a photograph, and
+    /// compressing a normal or a roughness map towards its mean would be
+    /// vandalism. The format is what tells them apart.
+    #[test]
+    fn only_the_colour_map_is_de_lit() {
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::default(),
+        );
+        image.data = Some(vec![20, 20, 20, 255, 230, 230, 230, 255]);
+        let untouched = image.data.clone();
+
+        delight(&mut image).unwrap();
+        assert_eq!(image.data, untouched);
     }
 
     #[test]

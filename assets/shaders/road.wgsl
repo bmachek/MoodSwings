@@ -95,6 +95,47 @@ fn depth(world_position: vec2<f32>, wetness: f32) -> f32 {
     return smoothstep(level, level + 0.13, low);
 }
 
+// How much of the scan's relief survives, looking straight down at the road and
+// looking along it.
+const RELIEF_FACE_ON: f32 = 0.70;
+const RELIEF_GRAZING: f32 = 0.10;
+
+// Lays the asphalt's relief back down as the view goes flat along it.
+//
+// A road is the pathological case for normal mapping and it took a while to
+// recognise why. Its albedo is four percent — almost nothing comes back off it
+// by diffusion — so nearly all of what the eye sees down a street is the sky,
+// reflected. That reflection is the specular term, and at a grazing angle the
+// specular term is both very large and very sensitive to the exact normal.
+//
+// The scan's normal map varies by more than a pixel's footprint can average, so
+// the reflection became a coin toss: one pixel lands on a chipping angled to
+// catch the sky and the next on one angled away, five times darker. On screen
+// that is dense dark speckle over grey, thickest right in front of the camera
+// where the view is most grazing, thinning into the distance where the mip chain
+// does the averaging instead. It reads as broken rendering, and it is —
+// the surface is under-sampled.
+//
+// Widening the specular lobe to cover the missing samples is the textbook answer
+// and it was tried first; it made the picture worse, because at a grazing angle
+// a wider GGX lobe loses energy rather than spreading it, so the speckle became
+// a general dimming. What works is the honest observation underneath: a
+// millimetre of asphalt relief seen edge-on does not tilt the reflection, it
+// *occludes* it, and the average of a tilt this small over a whole pixel is the
+// plane. So the relief is laid down as the view flattens — which is also what a
+// normal map's own mip chain would do, if a mip chain could know which way the
+// camera was looking.
+fn settle(input: PbrInput) -> PbrInput {
+    var pbr_input = input;
+
+    // One at a bird's-eye view of the road, zero looking along it.
+    let facing = saturate(dot(pbr_input.V, pbr_input.world_normal));
+    let relief = mix(RELIEF_GRAZING, RELIEF_FACE_ON, facing);
+    pbr_input.N = normalize(mix(pbr_input.world_normal, pbr_input.N, relief));
+
+    return pbr_input;
+}
+
 fn wet(input: PbrInput) -> PbrInput {
     var pbr_input = input;
     if road.wetness <= 0.001 {
@@ -155,6 +196,10 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
+    // Settle first. Water lies on top of the relief and the wetness pass already
+    // flattens the normal where it is deep, so running it the other way round
+    // would have `settle` argue with a puddle about a surface that is not there.
+    pbr_input = settle(pbr_input);
     pbr_input = wet(pbr_input);
 
 #ifdef PREPASS_PIPELINE

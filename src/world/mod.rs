@@ -39,6 +39,7 @@ pub mod worksite;
 use avian3d::prelude::*;
 use bevy::math::Affine2;
 use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use crate::core::config::GameConfig;
 
@@ -223,13 +224,83 @@ pub(crate) const ASPHALT_TILE: f32 = 6.0;
 /// on purpose — see `setup_ground`.
 const GROUND_VIEW_EXTENT: f32 = 40_000.0;
 
+/// The most texture repeats one cell of a ground plane is allowed to carry.
+///
+/// This is a floating-point budget rather than a look. A texture coordinate is
+/// an `f32`, and an `f32` near U has a spacing of about `U × 2⁻²³` between the
+/// numbers it can represent; a 2K texture's texel is `1/2048`. The two meet at
+/// U ≈ 4096, and *at* that value a UV cannot address one texel from the next.
+///
+/// The ground used to be a single forty-kilometre quad with its UVs scaled by
+/// `extent / tile` — six and a half thousand. One texel of precision, exactly.
+/// It did not show as blur or as a seam, which is why it survived so long: what
+/// the hardware does with a UV that cannot resolve a texel is compute garbage
+/// screen-space derivatives from it, and derivatives are what choose the mip
+/// level. Neighbouring pixels landed on different levels at random, so the road
+/// three metres in front of the camera was a per-pixel lottery between the top
+/// of the asphalt's mip chain and the middle of it — dense black speckle over
+/// grey, worst close up, clean in the distance where the correct level is high
+/// anyway. It was hidden for as long as a flat five hundred lux of ambient was
+/// washing the road out; taking that away is what put it on screen.
+///
+/// So the plane is cut into cells and every cell starts its UVs at zero. At 128
+/// repeats a cell there are five bits of headroom under a texel, and the largest
+/// ground in the game is a hundred cells on a side.
+const CELL_REPEATS: f32 = 128.0;
+
+/// A ground plane whose texture coordinates restart every cell.
+///
+/// Covers at least `extent` metres square, centred on the origin, facing up. The
+/// cells are whole numbers of texture repeats, so the seam between two of them
+/// falls exactly where the texture wraps anyway and cannot be seen.
+///
+/// Returned with tangents, because everything that uses it is normal-mapped and
+/// a normal-mapped mesh without them fails to build its pipeline rather than
+/// falling back.
+fn tiled_ground(extent: f32, tile: f32) -> Mesh {
+    let cell = tile * CELL_REPEATS;
+    let cells = (extent / cell).ceil().max(1.0) as u32;
+    let half = cells as f32 * cell * 0.5;
+
+    let mut positions = Vec::with_capacity((cells * cells * 4) as usize);
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    let mut indices = Vec::with_capacity((cells * cells * 6) as usize);
+
+    for row in 0..cells {
+        for column in 0..cells {
+            let x0 = -half + column as f32 * cell;
+            let z0 = -half + row as f32 * cell;
+            let base = positions.len() as u32;
+            for (dx, dz) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                positions.push([x0 + dx * cell, 0.0, z0 + dz * cell]);
+                normals.push([0.0, 1.0, 0.0]);
+                uvs.push([dx * CELL_REPEATS, dz * CELL_REPEATS]);
+            }
+            indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+        }
+    }
+
+    buildings::with_tangents(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            bevy::asset::RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices)),
+    )
+}
+
 /// The road surface. Streets are not meshed individually: the ground *is* the
 /// asphalt, and the raised pavement slabs on each block carve the street grid
 /// out of it as negative space. One quad instead of thousands of road polys.
 ///
 /// That one quad is two kilometres across, so the asphalt tiles a few hundred
 /// times over it. Everything that makes that survivable — a texture that wraps,
-/// a mip chain, anisotropic filtering — lives in `texture`.
+/// a mip chain, anisotropic filtering, and a UV that stays inside what an `f32`
+/// can say — lives in `texture` and in [`tiled_ground`].
 fn setup_ground(
     mut commands: Commands,
     config: Res<GameConfig>,
@@ -252,10 +323,6 @@ fn setup_ground(
     // hazes the surplus into the horizon within a couple of kilometres. It
     // costs one more quad. The collider only needs to cover the city.
     let played = config.world.half_extent * 2.0 + 200.0;
-    let size = GROUND_VIEW_EXTENT;
-    let sheet = meshes.add(buildings::with_tangents(
-        Plane3d::default().mesh().size(size, size).build(),
-    ));
     if streetside {
         // The asphalt a ribbon is made of: the same material the one big quad
         // would have used, at a tiling of one, because a ribbon carries its own
@@ -267,8 +334,8 @@ fn setup_ground(
         commands.insert_resource(streetside::build_ribbons(&city, meshes.as_mut(), asphalt));
         commands.spawn((
             Name::new("Ground"),
-            Mesh3d(sheet),
-            MeshMaterial3d(materials.add(landscape(&library, images.as_mut(), size))),
+            Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE))),
+            MeshMaterial3d(materials.add(landscape(&library, images.as_mut()))),
             Transform::from_xyz(0.0, 0.0, 0.0),
         ));
         commands.spawn((
@@ -281,12 +348,12 @@ fn setup_ground(
     }
     commands.spawn((
         Name::new("Road surface"),
-        Mesh3d(sheet),
+        Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, ASPHALT_TILE))),
         // Not registered with `WetSurfaces` any more. The road's wetness is a
         // uniform its own shader reads, so it varies across the surface instead
         // of being one value recomputed onto the material — see `world::road`.
         MeshMaterial3d(roads.add(road::RoadMaterial {
-            base: road_material(&library, images.as_mut(), size),
+            base: road_material(&library, images.as_mut(), ASPHALT_TILE),
             extension: road::RoadSheen::default(),
         })),
     ));
@@ -313,13 +380,11 @@ const GRASS_TILE: f32 = 3.5;
 /// Only a town read off a map needs this. The generator's ground is the road
 /// surface itself and its blocks cover everything else, so it never has any
 /// bare ground to show.
-fn landscape(
-    library: &material::MaterialLibrary,
-    images: &mut Assets<Image>,
-    size: f32,
-) -> StandardMaterial {
+fn landscape(library: &material::MaterialLibrary, images: &mut Assets<Image>) -> StandardMaterial {
     let mut lawn = StandardMaterial {
-        uv_transform: Affine2::from_scale(Vec2::splat(size / GRASS_TILE)),
+        // No `uv_transform`: the tiling is in the mesh, where the numbers stay
+        // small enough for an `f32` to tell one texel from the next. See
+        // [`CELL_REPEATS`].
         // Grass is not wet-registered on purpose, the same as a park's: rain
         // darkens it and does not polish it, and the polish is the whole of
         // what `WetSurfaces` does.
