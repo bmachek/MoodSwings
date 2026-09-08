@@ -216,12 +216,35 @@ pub fn build_ribbons(
     }
 }
 
+/// How far short of one of its nodes a pavement has to stop.
+///
+/// A pavement runs beside its own carriageway, and where another street crosses
+/// it that puts the strip out in the middle of *that* street's tarmac — for
+/// half the crossing width, at both ends, on both sides. It is a kerb-height
+/// slab lying across the road at every junction in the town, and it is exactly
+/// what it looked like: pavements running into the carriageway. So the strip
+/// stops where the crossing carriageway begins.
+///
+/// A node where only two edges meet is not a crossing at all, it is a kink in
+/// one street, and there the two strips have to *overlap* or the bend shows a
+/// notch — hence the negative return: half a pavement's width past the node,
+/// which is the join these strips have always had.
+///
+/// `widest_other` is the widest street at the node that is not this one, so a
+/// back lane meeting a dual carriageway is held back by the dual carriageway
+/// and not by itself.
+pub fn pavement_trim(widest_other: f32, arms: usize) -> f32 {
+    match arms >= 3 {
+        true => widest_other * 0.5,
+        false => -SIDEWALK_WIDTH * 0.5,
+    }
+}
+
 /// Lays the two pavements of one street.
 ///
 /// A strip either side rather than a slab round a block, because a block on a
-/// real map is not a rectangle. Strips overlap a little at every junction,
-/// which costs nothing: they are the same height, the same material, and the
-/// overlap is under the crossing.
+/// real map is not a rectangle. `trim` is what [`pavement_trim`] says to cut
+/// off each end: an overlap at a bend, and a real setback at a crossing.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_edge(
     commands: &mut Commands,
@@ -232,6 +255,7 @@ pub fn spawn_edge(
     edge: &RoadEdge,
     from: Vec2,
     to: Vec2,
+    trim: (f32, f32),
     chunk: IVec2,
     range: f32,
 ) {
@@ -259,27 +283,32 @@ pub fn spawn_edge(
         use_aabb: false,
     };
 
+    // What is left of the street once both ends have been given back to
+    // whatever crosses them. A trim is negative at a bend, where the strips
+    // are meant to overlap, and the arithmetic is the same either way.
+    let paved = edge.length - trim.0 - trim.1;
+    if paved < 0.5 {
+        return;
+    }
+    // Cut unevenly at the two ends, so the middle of the strip is no longer the
+    // middle of the street.
+    let along = middle + *direction * ((trim.0 - trim.1) * 0.5);
+
     for side in [-1.0f32, 1.0] {
-        // Overlapping its own junctions at both ends, so a crossing is paved
-        // rather than showing four notches of asphalt where the strips stop.
-        let at = middle + normal * (side * (edge.width * 0.5 + SIDEWALK_WIDTH * 0.5));
+        let at = along + normal * (side * (edge.width * 0.5 + SIDEWALK_WIDTH * 0.5));
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(kit.slab.clone()),
             MeshMaterial3d(kerb.clone()),
             Transform::from_xyz(at.x, SIDEWALK_HEIGHT * 0.5, at.y)
                 .with_rotation(Quat::from_rotation_y(yaw))
-                .with_scale(Vec3::new(
-                    SIDEWALK_WIDTH,
-                    SIDEWALK_HEIGHT,
-                    edge.length + SIDEWALK_WIDTH,
-                )),
+                .with_scale(Vec3::new(SIDEWALK_WIDTH, SIDEWALK_HEIGHT, paved)),
             visibility.clone(),
         ));
     }
 
     // The kerb the player steps up onto, as two boxes that stop *short* of the
-    // junctions the slabs above run through.
+    // slabs above.
     //
     // The trimming is not tidiness. Laid at the slabs' own length these
     // overlap every neighbour at every corner, and four and a half thousand
@@ -288,12 +317,12 @@ pub fn spawn_edge(
     // three hundred and seventeen. The picture is unchanged either way: what is
     // trimmed away is the metre of kerb under a crossing, where there is no
     // kerb.
-    let stub = (edge.length - SIDEWALK_WIDTH * 2.0).max(0.0);
+    let stub = (paved - SIDEWALK_WIDTH * 2.0).max(0.0);
     if stub < 1.0 {
         return;
     }
     for side in [-1.0f32, 1.0] {
-        let at = middle + normal * (side * (edge.width * 0.5 + SIDEWALK_WIDTH * 0.5));
+        let at = along + normal * (side * (edge.width * 0.5 + SIDEWALK_WIDTH * 0.5));
         commands.spawn((
             ChunkOf(chunk),
             Transform::from_xyz(at.x, SIDEWALK_HEIGHT * 0.5, at.y)
@@ -596,6 +625,26 @@ fn kind_for(rng: &mut ChaCha8Rng, district: District, arterial: bool) -> Buildin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pavement stops where the crossing carriageway starts.
+    #[test]
+    fn a_pavement_gives_way_to_the_street_that_crosses_it() {
+        // A crossing: the strip has to be clear of the other street's tarmac,
+        // which reaches half its width out from the node.
+        for width in [6.0f32, 9.0, 15.0] {
+            let trim = pavement_trim(width, 4);
+            assert!(
+                trim >= width * 0.5 - 1e-6,
+                "a {width}m street is crossed by a pavement stopping {trim}m short"
+            );
+        }
+        // A kink in one street is not a crossing, and there the strips have to
+        // meet — which means running *past* the node, not short of it.
+        assert!(
+            pavement_trim(9.0, 2) < 0.0,
+            "a bend leaves a notch of bare asphalt between its two pavements"
+        );
+    }
 
     /// A building placed along a street looks at it.
     #[test]

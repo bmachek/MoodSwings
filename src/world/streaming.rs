@@ -389,6 +389,21 @@ pub fn update_streaming(
                 if let Some(ribbons) = street.ribbons.as_deref()
                     && streetside
                 {
+                    // How far each end of this street's pavements has to give
+                    // way to whatever crosses there. Read off the graph rather
+                    // than passed down, because "the widest *other* street at
+                    // this node" is a question about the network and the
+                    // paving code has only ever been handed one edge.
+                    let setback = |at: super::roadgraph::NodeId| {
+                        let node = city.graph.node(at);
+                        let widest = node
+                            .edges
+                            .iter()
+                            .filter(|&&other| other != id)
+                            .map(|&other| city.graph.edge(other).width)
+                            .fold(0.0f32, f32::max);
+                        super::streetside::pavement_trim(widest, node.edges.len())
+                    };
                     super::streetside::spawn_edge(
                         &mut commands,
                         &street.kerbs,
@@ -398,6 +413,7 @@ pub fn update_streaming(
                         edge,
                         from,
                         to,
+                        (setback(edge.a), setback(edge.b)),
                         chunk,
                         kerb_range,
                     );

@@ -239,9 +239,16 @@ pub fn maybe_chimney(
     }
     // Back from the front edge and over to one side, which is where a stack
     // comes up: never in the middle of a roof and never on the parapet.
+    //
+    // Both are measured in the building's own frame — `size.x` runs along the
+    // street face and `size.y` back from it — so the offset has to be turned by
+    // the same yaw the stack itself is. Added straight to the centre it was in
+    // map axes while the numbers it scaled were not, which on a town read off a
+    // map put chimneys out over the eaves and off the roof entirely.
     let across = rng.random_range(-0.34..0.34) * size.x;
     let back = rng.random_range(0.08..0.34) * size.y;
-    let at = footprint_centre + Vec2::new(across, back);
+    let offset = Quat::from_rotation_y(yaw) * Vec3::new(across, 0.0, back);
+    let at = footprint_centre + offset.xz();
     chimney(
         commands,
         kit,

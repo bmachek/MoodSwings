@@ -733,47 +733,57 @@ impl Site {
 pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, chunk: IVec2) {
     let assets = ctx.assets;
     let area = block.area;
-    let size = area.size();
     let center = area.center();
     let park = block.district == District::Park;
 
     // The kerb slab gets the collider: at 28cm it is a step the player walks up
     // onto, and without one they would stand sunk into it. One static box per
     // block is cheap.
-    commands.spawn((
-        ChunkOf(chunk),
-        Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(if park {
-            assets.park_kerb.clone()
-        } else {
-            assets.kerb.clone()
-        }),
-        Transform::from_xyz(center.x, SIDEWALK_HEIGHT * 0.5, center.y).with_scale(Vec3::new(
-            size.x,
-            SIDEWALK_HEIGHT,
-            size.y,
-        )),
-        RigidBody::Static,
-        Collider::cuboid(1.0, 1.0, 1.0),
-    ));
+    //
+    // Only for a block that *is* a rectangle on the map. A real town's "block"
+    // is one building and its `area` is the square its circumradius fits in —
+    // a box up to root two too big, square to the map rather than to the house,
+    // and therefore lying across whatever street the house happens to stand at
+    // an angle to. Paving the whole of that put a kerb out in the carriageway
+    // in front of every plot in Landshut. What such a building gets instead is
+    // an apron cut to its own footprint and turned onto its own street, below.
+    if block.paved {
+        let size = area.size();
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(if park {
+                assets.park_kerb.clone()
+            } else {
+                assets.kerb.clone()
+            }),
+            Transform::from_xyz(center.x, SIDEWALK_HEIGHT * 0.5, center.y).with_scale(Vec3::new(
+                size.x,
+                SIDEWALK_HEIGHT,
+                size.y,
+            )),
+            RigidBody::Static,
+            Collider::cuboid(1.0, 1.0, 1.0),
+        ));
 
-    // The walking surface is a separate quad rather than the top of the slab,
-    // so paving can tile at a metre or two while the kerb face beside it stays
-    // plain concrete instead of a stack of squashed slabs.
-    let bucket = ground_bucket((size.x + size.y) * 0.5);
-    commands.spawn((
-        ChunkOf(chunk),
-        Mesh3d(assets.unit_quad.clone()),
-        MeshMaterial3d(if park {
-            assets.grass[bucket].clone()
-        } else {
-            assets.paving[bucket].clone()
-        }),
-        // A few millimetres proud of the slab, which is enough to settle the
-        // depth test without being visible from standing height.
-        Transform::from_xyz(center.x, SIDEWALK_HEIGHT + 0.004, center.y)
-            .with_scale(Vec3::new(size.x, 1.0, size.y)),
-    ));
+        // The walking surface is a separate quad rather than the top of the
+        // slab, so paving can tile at a metre or two while the kerb face beside
+        // it stays plain concrete instead of a stack of squashed slabs.
+        let bucket = ground_bucket((size.x + size.y) * 0.5);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(assets.unit_quad.clone()),
+            MeshMaterial3d(if park {
+                assets.grass[bucket].clone()
+            } else {
+                assets.paving[bucket].clone()
+            }),
+            // A few millimetres proud of the slab, which is enough to settle
+            // the depth test without being visible from standing height.
+            Transform::from_xyz(center.x, SIDEWALK_HEIGHT + 0.004, center.y)
+                .with_scale(Vec3::new(size.x, 1.0, size.y)),
+        ));
+    }
 
     // The ground behind a building, for a town that has no blocks.
     //
@@ -792,6 +802,43 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     if !block.paved {
         for building in &block.buildings {
             let site = site_in(block, building);
+            // The apron: the step the house stands on, cut to the house and
+            // turned onto the house's own street. This is the block slab's job
+            // done per building, and it is the only shape that can do it here —
+            // a plot on a real map squares up to its street and therefore sits
+            // at some arbitrary angle to the map, so anything axis-aligned that
+            // covers it also covers a lane of somebody's carriageway.
+            //
+            // A hand's breadth proud all round, no more. In front it disappears
+            // under the street's own pavement, which is laid at the same height
+            // by `streetside::spawn_edge` and comes right up to the building
+            // line; behind and beside it reads as the base course of a wall
+            // meeting its yard.
+            const APRON: f32 = 0.7;
+            let slab = Vec3::new(
+                site.span.x + APRON * 2.0,
+                SIDEWALK_HEIGHT,
+                site.span.y + APRON * 2.0,
+            );
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.kerb.clone()),
+                Transform::from_xyz(site.centre.x, SIDEWALK_HEIGHT * 0.5, site.centre.y)
+                    .with_rotation(Quat::from_rotation_y(site.yaw))
+                    .with_scale(slab),
+                RigidBody::Static,
+                Collider::cuboid(1.0, 1.0, 1.0),
+            ));
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(assets.unit_quad.clone()),
+                MeshMaterial3d(assets.paving(site.span.x)),
+                Transform::from_xyz(site.centre.x, SIDEWALK_HEIGHT + 0.004, site.centre.y)
+                    .with_rotation(Quat::from_rotation_y(site.yaw))
+                    .with_scale(Vec3::new(slab.x, 1.0, slab.z)),
+                NotShadowCaster,
+            ));
             // Shorter than a block is wide on purpose. A yard deep enough to
             // reach the next street *does* reach it, and then covers its
             // carriageway — which is what happened at seventeen metres: green
@@ -852,6 +899,9 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                 bevy::audio::PlaybackSettings::LOOP
                     .with_spatial(true)
                     .muted(),
+                // Written by `tend_emitters` and read by the limiter; nothing
+                // sets a sink's own volume any more.
+                crate::audio::Level(0.0),
                 AmbienceEmitter { gain: loudness },
             ));
         };
@@ -1113,14 +1163,37 @@ fn spawn_building(
         &super::plume::draw_range(ctx.lod_scale),
     );
 
-    let wall = if door_shell.is_some() {
-        Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
-            .with_rotation(Quat::from_rotation_y(yaw))
-            .with_scale(Vec3::new(frontage, height, throat))
-    } else {
-        Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
-            .with_scale(Vec3::new(size.x, height, size.y))
+    // Every box this building is made of stands on one frame: centred on the
+    // site, and turned onto the street if it has one to be turned onto.
+    //
+    // Two reasons to turn, and they are not the same reason. An enterable
+    // building must, because the doorway is carved into its +Z face and the
+    // face has to be the front. A building placed along a real street must,
+    // because its street runs at whatever angle it runs at: it was the *only*
+    // thing left square to the map while its gable, its sign, its doorway and
+    // its geraniums were all turned onto the street, so every Altstadt house
+    // wore its roof at a different angle from its walls and shouldered its
+    // corners out into the carriageway.
+    //
+    // A generated block's plain buildings keep the unrotated transform they
+    // always had. Their streets run north-south and east-west, so turning them
+    // would be geometrically free — but it re-maps which face of a shell mesh
+    // looks at which street, and that is a diff across every wall in the city
+    // buying nothing.
+    let turned = door_shell.is_some() || building.facing.is_some();
+    let stand = |y: f32, scale: Vec3| {
+        let at = Transform::from_xyz(center.x, y, center.y).with_scale(scale);
+        match turned {
+            true => at.with_rotation(Quat::from_rotation_y(yaw)),
+            false => at,
+        }
     };
+    // `frontage` and `throat` are `size.x` and `size.y` — the site's own frame,
+    // which is the frame this box is scaled in whichever way it is turned.
+    let wall = stand(
+        height * 0.5 + SIDEWALK_HEIGHT,
+        Vec3::new(frontage, height, throat),
+    );
 
     commands.spawn((
         ChunkOf(chunk),
@@ -1239,16 +1312,14 @@ fn spawn_building(
             ChunkOf(chunk),
             Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.roof.clone()),
-            Transform::from_xyz(
-                center.x,
+            stand(
                 height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
-                center.y,
-            )
-            .with_scale(Vec3::new(
-                size.x + parapet.overhang * 2.0,
-                parapet.thickness,
-                size.y + parapet.overhang * 2.0,
-            )),
+                Vec3::new(
+                    frontage + parapet.overhang * 2.0,
+                    parapet.thickness,
+                    throat + parapet.overhang * 2.0,
+                ),
+            ),
         ));
     }
 
@@ -1264,12 +1335,14 @@ fn spawn_building(
             ChunkOf(chunk),
             Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.kerb.clone()),
-            Transform::from_xyz(center.x, SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5, center.y)
-                .with_scale(Vec3::new(
-                    size.x + PLINTH_PROUD * 2.0,
+            stand(
+                SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5,
+                Vec3::new(
+                    frontage + PLINTH_PROUD * 2.0,
                     PLINTH_HEIGHT,
-                    size.y + PLINTH_PROUD * 2.0,
-                )),
+                    throat + PLINTH_PROUD * 2.0,
+                ),
+            ),
             VisibilityRange {
                 start_margin: 0.0..0.0,
                 end_margin: (plinth_draw * 0.9)..plinth_draw,
@@ -1383,6 +1456,11 @@ fn spawn_building(
         ChunkOf(chunk),
         center,
         height + SIDEWALK_HEIGHT + parapet.thickness,
+        // The plan is in the footprint's axes, and for a building placed along
+        // a street the footprint is measured in the site's frame — so the deck
+        // turns with the walls. A generated block's footprint is already a
+        // rectangle on the map and its clutter stays where it was.
+        building.facing.unwrap_or(0.0),
         &rooftop::plan(seed, building.footprint, class),
         ctx.lod_scale,
     );
