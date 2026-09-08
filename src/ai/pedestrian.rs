@@ -194,6 +194,7 @@ fn setup(
     config: Res<GameConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     commands.insert_resource(PedestrianRng(stream_for(
         config.world_seed,
@@ -212,14 +213,25 @@ fn setup(
         Color::srgb(0.20, 0.22, 0.26),
         Color::srgb(0.42, 0.38, 0.52),
     ];
+    // The same weave the rest of the cast is cut from — this is where the
+    // crowd's own wardrobe is mixed, and it was thirty flat colours.
+    let weave = images.add(crate::world::texture::fabric());
+    let weave_relief = images.add(crate::world::texture::fabric_normal());
     let cloth = |materials: &mut Assets<StandardMaterial>, color: Color| {
         materials.add(StandardMaterial {
             base_color: color,
+            base_color_texture: Some(weave.clone()),
+            normal_map_texture: Some(weave_relief.clone()),
+            uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(super::figure::WEAVE_TILE)),
             perceptual_roughness: 0.85,
             ..default()
         })
     };
-    commands.insert_resource(super::figure::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(super::figure::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(PedestrianAssets {
         clothes: palette
             .into_iter()

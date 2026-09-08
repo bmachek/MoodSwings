@@ -471,6 +471,72 @@ pub fn grass() -> Image {
     })
 }
 
+// -------------------------------------------------------------- fabric ----
+
+/// Threads across one repeat of the weave.
+const THREADS: f32 = 22.0;
+
+/// Woven cloth, as a height field: warp over weft, in a twill.
+///
+/// A plain over-under weave is a checkerboard and reads as one. A twill steps
+/// the crossing by one thread per row, which is what puts the diagonal in
+/// denim and gabardine and is most of why cloth looks like cloth rather than
+/// like graph paper.
+fn weave_height(u: f32, v: f32) -> f32 {
+    let (across, along) = (u * THREADS, v * THREADS);
+    let (i, j) = (across.floor(), along.floor());
+    let (fu, fv) = (across - i, along - j);
+    // Which thread is on top here. The `2 * j` is the twill's step.
+    let warp_over = (i as i32 + 2 * j as i32).rem_euclid(3) != 0;
+    // A thread is round, so its cross-section is a bump; the ridge runs along
+    // whichever of the two is on top.
+    let ridge = if warp_over {
+        1.0 - (fu * 2.0 - 1.0).abs()
+    } else {
+        1.0 - (fv * 2.0 - 1.0).abs()
+    };
+    // Real yarn is not perfectly even, and a weave that is comes out as moiré
+    // the moment it is minified.
+    let slub = (fbm(u, v, 40, 3, 307) - 0.5) * 0.22;
+    (0.30 + ridge * 0.62 + slub).clamp(0.0, 1.0)
+}
+
+/// The colour of that weave, kept near white so a garment's own colour is what
+/// survives: this multiplies thirty different shirts and trousers.
+pub fn fabric() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        // Shallow. What a weave contributes at three millimetres is shading in
+        // its valleys, not a pattern — anything stronger and every citizen is
+        // dressed in hessian.
+        let value = 0.84 + weave_height(u, v) * 0.22;
+        [byte(value), byte(value), byte(value * 0.995), 255]
+    })
+}
+
+pub fn fabric_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.045, weave_height)
+}
+
+// -------------------------------------------------------------- rubber ----
+
+/// A moulded rubber surface, as relief and nothing else.
+///
+/// Not tiled, and that is the constraint that shaped it: a flummi's head
+/// carries its face in the same UVs, and `StandardMaterial` has one transform
+/// for all of its textures — so a rubber grain that tiled would tile the face
+/// with it. This is authored at the size of a head instead, half a millimetre
+/// to the texel, which is about the size of the pitting a mould leaves.
+pub fn rubber_normal() -> Image {
+    normal_map(FACADE_SIZE, 0.030, |u, v| {
+        // The pitting, fine and even.
+        let pits = fbm(u, v, 150, 3, 401);
+        // And the scuffs a bouncing ball collects, which are broad and shallow
+        // and are the only thing here that is not uniform.
+        let scuffs = (fbm(u, v, 7, 3, 419) - 0.5) * 0.5;
+        (pits * 0.7 + 0.15 + scuffs * 0.3).clamp(0.0, 1.0)
+    })
+}
+
 // ---------------------------------------------------------------- bark ----
 
 /// Furrows around a trunk, as a height field.

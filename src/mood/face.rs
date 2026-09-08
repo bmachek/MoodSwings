@@ -412,6 +412,7 @@ pub fn build_assets(
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
 ) -> FaceAssets {
+    let grain = images.add(crate::world::texture::rubber_normal());
     let mut faces = FaceAssets {
         materials: Vec::with_capacity(LEVELS),
         bare: Vec::with_capacity(LEVELS),
@@ -427,6 +428,18 @@ pub fn build_assets(
         let complexion = StandardMaterial {
             perceptual_roughness: 0.52,
             reflectance: 0.55,
+            // A flummi is a moulded rubber ball, and the two things that say so
+            // are the pitting the mould left and the sheen over the top of it.
+            // Without them a head is a mathematically perfect sphere, which is
+            // the one shape nothing in the real world is.
+            //
+            // The grain is authored at head scale rather than tiled, because
+            // `StandardMaterial` has a single `uv_transform` for all of its
+            // textures and the face is painted into these same UVs — a grain
+            // that tiled would tile the face with it.
+            normal_map_texture: Some(grain.clone()),
+            clearcoat: 0.55,
+            clearcoat_perceptual_roughness: 0.16,
             // A furious flummi glows a little, which is the difference between
             // a red head and a head that is *about to go off*. The texture
             // carries where the glow is; this is only how much of it there is.

@@ -382,12 +382,69 @@ const _: () = {
     );
 };
 
+/// How square a rounded body is: 2 is a sphere, and large is a box.
+///
+/// Four is the shape a party balloon takes when you press it between two
+/// hands, which is what a flummi's torso should be — the cast are made of the
+/// same rubber as their own heads and were built out of a hard-edged cuboid
+/// and two hard-edged bricks for feet. Nothing about a figure at forty pixels
+/// tall reads except its outline, so the outline is the only place worth
+/// spending anything.
+const ROUNDNESS: f32 = 4.0;
+
+/// A box with the edges inflated out of it.
+///
+/// A superellipsoid: every direction on a sphere is pushed out to where the
+/// surface `|x|ⁿ + |y|ⁿ + |z|ⁿ = 1` is, then scaled to the size wanted. At n = 2
+/// that is exactly the sphere it started as and at n = ∞ it is the cuboid it
+/// replaces; everything interesting is in between.
+///
+/// Built off a UV sphere rather than an icosphere because the poles need to
+/// land on the flat top and bottom, which is where a torso's shoulders are.
+fn rounded_box(size: Vec3) -> Mesh {
+    let mut mesh = Sphere::new(0.5).mesh().uv(16, 12);
+    let half = size * 0.5;
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for position in positions.iter_mut() {
+            let unit = Vec3::from(*position).normalize_or_zero();
+            let power = unit.abs().powf(ROUNDNESS);
+            let scale = (power.x + power.y + power.z)
+                .max(1e-6)
+                .powf(-1.0 / ROUNDNESS);
+            *position = (unit * scale * half).to_array();
+        }
+    }
+    // The normals came off the sphere and this is not one any more.
+    mesh.compute_smooth_normals();
+    mesh
+}
+
+/// Repeats of the weave across one garment.
+///
+/// A cuboid's faces and a capsule's shell both carry UVs from zero to one, so
+/// this is a count rather than a size — and the garments are all within a
+/// factor of two of each other, which is what lets one number serve. At
+/// fourteen a torso's threads come out around two millimetres, which is cloth.
+pub const WEAVE_TILE: f32 = 14.0;
+
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
 ) -> FigureAssets {
+    // One weave, worn by everybody. Every citizen was dressed in flat colour at
+    // a wool roughness, which is a material that does not exist: cloth is a
+    // *surface*, and what says so is the shading in the valleys between its
+    // threads. It costs two textures for the whole cast.
+    let weave = images.add(crate::world::texture::fabric());
+    let weave_relief = images.add(crate::world::texture::fabric_normal());
     let cloth = |color: Color| StandardMaterial {
         base_color: color,
+        base_color_texture: Some(weave.clone()),
+        normal_map_texture: Some(weave_relief.clone()),
+        uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(WEAVE_TILE)),
         perceptual_roughness: 0.88,
         ..default()
     };
@@ -398,7 +455,7 @@ pub fn build_assets(
     // `crate::mood::face` for that reason.
 
     FigureAssets {
-        torso: meshes.add(Cuboid::new(0.36, body::TORSO_HEIGHT, 0.22)),
+        torso: meshes.add(rounded_box(Vec3::new(0.36, body::TORSO_HEIGHT, 0.22))),
         // A UV sphere rather than the default icosphere: the face is painted
         // into a texture, and an icosphere's seams run wherever they like.
         // See `crate::mood::face::head_mesh` for why it is turned on its side.
@@ -413,7 +470,11 @@ pub fn build_assets(
         }),
         hand: meshes.add(Sphere::new(body::HAND_RADIUS)),
         hair: meshes.add(Sphere::new(body::HAIR_RADIUS)),
-        shoe: meshes.add(Cuboid::new(0.105, body::SHOE_HEIGHT, body::SHOE_LENGTH)),
+        shoe: meshes.add(rounded_box(Vec3::new(
+            0.105,
+            body::SHOE_HEIGHT,
+            body::SHOE_LENGTH,
+        ))),
         hair_colours: [
             Color::srgb(0.07, 0.06, 0.06),
             Color::srgb(0.19, 0.13, 0.09),
