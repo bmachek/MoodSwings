@@ -350,6 +350,14 @@ pub fn with_tangents(mut mesh: Mesh) -> Mesh {
     mesh
 }
 
+/// What a flat roof is, as a colour.
+///
+/// Tar and grey chippings, weathered: about twelve percent in linear light,
+/// which is dark. Roofs are the largest surface in any view from above and the
+/// one nobody stands on, so getting them wrong is invisible from the street and
+/// unmistakable from a rooftop.
+const ROOF_TINT: Color = Color::srgb(0.44, 0.43, 0.41);
+
 /// Texture repeats across a kerb face, along it and up it.
 ///
 /// The one deliberately lopsided tiling in the city. A unit cube's side face
@@ -549,7 +557,16 @@ pub fn build_assets(
         ..default()
     };
     match library.get(super::material::set::ROOF) {
-        Some(scanned) => scanned.apply(&mut tar),
+        Some(scanned) => {
+            scanned.apply(&mut tar);
+            // The tint is not optional, and leaving it off was the single
+            // loudest mistake in any aerial framing of this city. The scanned
+            // set is pale gravel photographed in daylight, and `apply` leaves
+            // the base colour at white — so every flat roof in the city came
+            // out at fifty percent albedo. From above, a city of snow. A tar
+            // and chippings roof is nearer twelve, which is what this is.
+            tar.base_color = ROOF_TINT;
+        }
         None => {
             tar.base_color = Color::srgb(0.38, 0.38, 0.40);
             tar.base_color_texture = Some(images.add(texture::roof()));
@@ -1286,6 +1303,31 @@ fn spawn_building(
             use_aabb: false,
         },
     ));
+    // Where this building's ground floor throws its light after dark.
+    //
+    // Every class but the house has a shopfront on its ground storey — that is
+    // what `texture::facade` paints and what `light_windows` lights — so every
+    // one of them should be putting a wash on the pavement in front of it. Only
+    // a handful of buildings are enterable, so hanging this off the interiors
+    // lit about one shop in twenty and the street stayed black.
+    //
+    // A marker and nothing else. `world::streetlights` keeps a small pool of
+    // real lights and moves it to whichever of these are nearest; a light per
+    // building would be several hundred in a district, almost all of them
+    // behind the camera.
+    if class != FacadeClass::House {
+        let outward = Quat::from_rotation_y(yaw) * Vec3::Z;
+        commands.spawn((
+            ChunkOf(chunk),
+            crate::world::interior::Shopfront,
+            Transform::from_translation(
+                Vec3::new(center.x, SIDEWALK_HEIGHT, center.y)
+                    + outward * (throat * 0.5 + 1.1)
+                    + Vec3::Y * crate::world::interior::SPILL_HEIGHT,
+            ),
+        ));
+    }
+
     // The plain box — and, for a sealed building, the collider with it,
     // deliberately on the level of detail that is never culled by *distance*,
     // only by being close. A visibility range hides a mesh and does not touch
