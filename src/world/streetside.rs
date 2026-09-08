@@ -123,6 +123,99 @@ pub fn build_assets(meshes: &mut Assets<Mesh>) -> StreetsideKit {
     }
 }
 
+/// One quad of carriageway per street, and one per junction.
+///
+/// A generated city needs none of this: its ground *is* the asphalt and its
+/// block slabs carve the streets out of it as negative space, which is one quad
+/// for the whole world. That trick only works when the blocks tile the ground,
+/// and a real town's do not — so it runs the other way round here. The ground
+/// is grass, and the roads are laid on top of it.
+///
+/// The meshes are built once, at startup, and never again. They cannot be
+/// shared — a ribbon's UVs carry its own length and width so the asphalt tiles
+/// at the right size however long the street is — and building them in the
+/// streaming path would add two thousand meshes to `Assets<Mesh>` every time a
+/// chunk came back, for ever.
+#[derive(Resource)]
+pub struct Ribbons {
+    /// Indexed by `EdgeId`.
+    roads: Vec<Handle<Mesh>>,
+    /// One shared square for a crossing. Small enough that a fixed tiling is
+    /// right whatever it is stretched over.
+    junction: Handle<Mesh>,
+    asphalt: Handle<super::road::RoadMaterial>,
+}
+
+/// Metres of road one repeat of the asphalt covers. The same number the one
+/// big ground quad uses, so a ribbon and a generated city's road are the same
+/// asphalt at the same size.
+const TILE: f32 = super::ASPHALT_TILE;
+
+/// A flat quad `width` by `length`, lying in XZ, with UVs that tile the asphalt
+/// at its true size.
+fn ribbon(width: f32, length: f32) -> Mesh {
+    let (hw, hl) = (width * 0.5, length * 0.5);
+    let (u, v) = (width / TILE, length / TILE);
+    Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [-hw, 0.0, -hl],
+            [hw, 0.0, -hl],
+            [hw, 0.0, hl],
+            [-hw, 0.0, hl],
+        ],
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 4])
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        vec![[0.0, 0.0], [u, 0.0], [u, v], [0.0, v]],
+    )
+    // Wound anticlockwise seen from above, which is the way round that faces
+    // *up*. The obvious order — 0,1,2 then 0,2,3 across those four corners —
+    // is clockwise from above, so every ribbon in the city was back-facing and
+    // culled: two thousand invisible roads, and a town that looked like it had
+    // grass where its carriageways should be.
+    .with_inserted_indices(bevy::render::mesh::Indices::U32(vec![0, 2, 1, 0, 3, 2]))
+}
+
+/// Builds the carriageway of a whole town, once.
+pub fn build_ribbons(
+    layout: &CityLayout,
+    meshes: &mut Assets<Mesh>,
+    asphalt: Handle<super::road::RoadMaterial>,
+) -> Ribbons {
+    let roads = layout
+        .graph
+        .edges()
+        .map(|edge| {
+            // Wider than the carriageway by a pavement either side, and longer
+            // than the street by its own width.
+            //
+            // The length is so that ribbons overlap at every junction; without
+            // it a crossing shows four green wedges where they stop. The width
+            // is so the asphalt runs *under* the kerb, which is where a road
+            // bed actually goes: the pavement slab is an opaque box sitting on
+            // top of it, so none of the extra is ever seen, and any daylight
+            // between the two — from a width that rounds differently, from two
+            // streets a metre out of parallel — comes out as more road instead
+            // of as a green stripe down the gutter.
+            meshes.add(super::buildings::with_tangents(ribbon(
+                edge.width + SIDEWALK_WIDTH * 2.0,
+                edge.length + edge.width,
+            )))
+        })
+        .collect();
+    Ribbons {
+        roads,
+        junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0))),
+        asphalt,
+    }
+}
+
 /// Lays the two pavements of one street.
 ///
 /// A strip either side rather than a slab round a block, because a block on a
@@ -133,7 +226,9 @@ pub fn build_assets(meshes: &mut Assets<Mesh>) -> StreetsideKit {
 pub fn spawn_edge(
     commands: &mut Commands,
     kit: &StreetsideKit,
+    ribbons: &Ribbons,
     kerb: &Handle<StandardMaterial>,
+    id: super::roadgraph::EdgeId,
     edge: &RoadEdge,
     from: Vec2,
     to: Vec2,
@@ -146,6 +241,18 @@ pub fn spawn_edge(
     let normal = Vec2::new(-direction.y, direction.x);
     let yaw = direction.x.atan2(direction.y);
     let middle = from.midpoint(to);
+
+    // The carriageway. Just off the ground so it wins the depth test against
+    // the grass without z-fighting it.
+    if let Some(mesh) = ribbons.roads.get(id.0 as usize) {
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(ribbons.asphalt.clone()),
+            Transform::from_xyz(middle.x, 0.012, middle.y)
+                .with_rotation(Quat::from_rotation_y(yaw)),
+        ));
+    }
     let visibility = bevy::camera::visibility::VisibilityRange {
         start_margin: 0.0..0.0,
         end_margin: range..(range * 1.05),
@@ -195,6 +302,31 @@ pub fn spawn_edge(
             avian3d::prelude::Collider::cuboid(SIDEWALK_WIDTH, SIDEWALK_HEIGHT, stub),
         ));
     }
+}
+
+/// Paves a crossing, so the ribbons meeting there do not leave a hole.
+pub fn spawn_junction(
+    commands: &mut Commands,
+    ribbons: &Ribbons,
+    at: Vec2,
+    widest: f32,
+    chunk: IVec2,
+) {
+    // A square the size of the widest street meeting here, plus its pavements
+    // for the same reason the ribbons carry theirs. Square rather than
+    // fitted to the arms, because a junction is covered by the ribbons of its
+    // own arms except for the diamond in the very middle, and a square covers
+    // that whatever angle the arms arrive at.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(ribbons.junction.clone()),
+        MeshMaterial3d(ribbons.asphalt.clone()),
+        Transform::from_xyz(at.x, 0.010, at.y).with_scale(Vec3::new(
+            widest + SIDEWALK_WIDTH * 2.0,
+            1.0,
+            widest + SIDEWALK_WIDTH * 2.0,
+        )),
+    ));
 }
 
 /// Which district a point of a real town behaves like.
@@ -407,6 +539,38 @@ mod tests {
                     District::Park
                 );
             }
+        }
+    }
+
+    /// A ribbon faces the sky.
+    #[test]
+    fn a_road_is_not_laid_upside_down() {
+        // The one thing about this mesh that fails silently and completely.
+        // A quad wound the wrong way is culled, so the road is not dark or
+        // striped or in the wrong place — it is simply not there, and what is
+        // underneath it looks like the answer.
+        let mesh = ribbon(8.0, 40.0);
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::render::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
+            _ => panic!("a ribbon has no positions"),
+        };
+        let indices: Vec<u32> = match mesh.indices() {
+            Some(bevy::render::mesh::Indices::U32(i)) => i.clone(),
+            _ => panic!("a ribbon has no indices"),
+        };
+        assert_eq!(indices.len(), 6, "a quad is two triangles");
+        for triangle in indices.chunks(3) {
+            let corner = |i: u32| Vec3::from_array(positions[i as usize]);
+            let (a, b, c) = (
+                corner(triangle[0]),
+                corner(triangle[1]),
+                corner(triangle[2]),
+            );
+            let facing = (b - a).cross(c - a);
+            assert!(
+                facing.y > 0.0,
+                "a triangle faces {facing:?}, which is into the ground"
+            );
         }
     }
 

@@ -91,7 +91,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<streaming::ActiveChunks>()
         .init_resource::<streaming::StreamTimer>()
         .add_systems(PreStartup, facade::load_shader)
-        .add_systems(Startup, (generate_city, setup_ground))
+        .add_systems(Startup, (generate_city, setup_ground).chain())
         .add_systems(Update, streaming::update_streaming);
     }
 }
@@ -217,21 +217,54 @@ fn setup_ground(
     mut commands: Commands,
     config: Res<GameConfig>,
     library: Res<material::MaterialLibrary>,
+    city: Res<City>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut roads: ResMut<Assets<road::RoadMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    // A town read off a map runs the ground the other way round. The generator
+    // covers the world in asphalt and lets its block slabs carve the streets
+    // out of it as negative space — one quad for the whole city — and that only
+    // works because its blocks tile the ground. A real town's do not, so the
+    // world would be a tarmac plain with houses on it. Here the ground is
+    // grass and the roads are laid on top of it, one ribbon per street.
+    let streetside = city.blocks.first().is_some_and(|block| !block.paved);
     // The visible plane runs far past the city, so that from a rooftop the
     // world does not end in a rectangle hanging in mid-air; the atmosphere
     // hazes the surplus into the horizon within a couple of kilometres. It
     // costs one more quad. The collider only needs to cover the city.
     let played = config.world.half_extent * 2.0 + 200.0;
     let size = GROUND_VIEW_EXTENT;
+    let sheet = meshes.add(buildings::with_tangents(
+        Plane3d::default().mesh().size(size, size).build(),
+    ));
+    if streetside {
+        // The asphalt a ribbon is made of: the same material the one big quad
+        // would have used, at a tiling of one, because a ribbon carries its own
+        // size in its UVs instead.
+        let asphalt = roads.add(road::RoadMaterial {
+            base: road_material(&library, images.as_mut(), ASPHALT_TILE),
+            extension: road::RoadSheen::default(),
+        });
+        commands.insert_resource(streetside::build_ribbons(&city, meshes.as_mut(), asphalt));
+        commands.spawn((
+            Name::new("Ground"),
+            Mesh3d(sheet),
+            MeshMaterial3d(materials.add(landscape(&library, images.as_mut(), size))),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ));
+        commands.spawn((
+            Name::new("Ground collider"),
+            RigidBody::Static,
+            Collider::cuboid(played, 2.0, played),
+            Transform::from_xyz(0.0, -1.0, 0.0),
+        ));
+        return;
+    }
     commands.spawn((
         Name::new("Road surface"),
-        Mesh3d(meshes.add(buildings::with_tangents(
-            Plane3d::default().mesh().size(size, size).build(),
-        ))),
+        Mesh3d(sheet),
         // Not registered with `WetSurfaces` any more. The road's wetness is a
         // uniform its own shader reads, so it varies across the surface instead
         // of being one value recomputed onto the material — see `world::road`.
@@ -246,6 +279,44 @@ fn setup_ground(
         Collider::cuboid(played, 2.0, played),
         Transform::from_xyz(0.0, -1.0, 0.0),
     ));
+}
+
+/// Metres of ground one repeat of the grass covers.
+///
+/// Bigger than the material a park lawn is painted with, and it has to be: this
+/// one quad is forty kilometres across. The park's tilings are picked to put a
+/// slab at about a metre and a half over a patch a few tens of metres wide, and
+/// the largest of them stretched over the whole world comes out at a repeat
+/// more than a kilometre long — which is not grass, it is a green smear with
+/// streaks in it. That is what the first pass at this looked like.
+const GRASS_TILE: f32 = 3.5;
+
+/// What is between the streets when the streets are not carved out of asphalt.
+///
+/// Only a town read off a map needs this. The generator's ground is the road
+/// surface itself and its blocks cover everything else, so it never has any
+/// bare ground to show.
+fn landscape(
+    library: &material::MaterialLibrary,
+    images: &mut Assets<Image>,
+    size: f32,
+) -> StandardMaterial {
+    let mut lawn = StandardMaterial {
+        uv_transform: Affine2::from_scale(Vec2::splat(size / GRASS_TILE)),
+        // Grass is not wet-registered on purpose, the same as a park's: rain
+        // darkens it and does not polish it, and the polish is the whole of
+        // what `WetSurfaces` does.
+        perceptual_roughness: 1.0,
+        ..default()
+    };
+    match library.get(material::set::GRASS) {
+        Some(scanned) => scanned.apply(&mut lawn),
+        None => {
+            lawn.base_color = Color::srgb(0.29, 0.43, 0.24);
+            lawn.base_color_texture = Some(images.add(texture::grass()));
+        }
+    }
+    lawn
 }
 
 /// The asphalt, scanned if it was downloaded and painted if it was not.

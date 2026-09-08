@@ -750,7 +750,12 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     if !block.paved {
         for building in &block.buildings {
             let site = site_in(block, building);
-            const YARD: f32 = 17.0;
+            // Shorter than a block is wide on purpose. A yard deep enough to
+            // reach the next street *does* reach it, and then covers its
+            // carriageway — which is what happened at seventeen metres: green
+            // ground with lane markings painted on it and cars parked on the
+            // grass.
+            const YARD: f32 = 13.0;
             let behind = site.centre - site.outward() * (site.span.y * 0.5 + YARD * 0.5);
             // Grass or paving, per building: an old town's back land is both,
             // and one material across the whole of it reads as a golf course.
@@ -764,7 +769,11 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                 ChunkOf(chunk),
                 Mesh3d(assets.unit_quad.clone()),
                 MeshMaterial3d(ground),
-                Transform::from_xyz(behind.x, 0.02, behind.y)
+                // Under the road, not over it. The order off the ground is
+                // yard, then carriageway, then paint, then kerb — so wherever
+                // a yard and a street want the same square metre the street
+                // wins, which is the way round that cannot look like a bug.
+                Transform::from_xyz(behind.x, 0.006, behind.y)
                     .with_rotation(Quat::from_rotation_y(site.yaw))
                     .with_scale(Vec3::new(site.span.x + 3.0, 1.0, YARD)),
                 NotShadowCaster,

@@ -179,6 +179,7 @@ pub struct StreetKits<'w> {
     plumes: Res<'w, crate::world::plume::PlumeKit>,
     gables: Res<'w, crate::world::gable::GableKit>,
     kerbs: Res<'w, crate::world::streetside::StreetsideKit>,
+    ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
 }
 
 pub fn update_streaming(
@@ -379,11 +380,15 @@ pub fn update_streaming(
                         &mut steaming,
                     );
                 }
-                if streetside {
+                if let Some(ribbons) = street.ribbons.as_deref()
+                    && streetside
+                {
                     super::streetside::spawn_edge(
                         &mut commands,
                         &street.kerbs,
+                        ribbons,
                         &kits.assets.concrete(),
+                        id,
                         edge,
                         from,
                         to,
@@ -419,6 +424,18 @@ pub fn update_streaming(
                     .edges
                     .iter()
                     .any(|&edge| city.graph.edge(edge).arterial);
+                if let Some(ribbons) = street.ribbons.as_deref()
+                    && streetside
+                {
+                    let widest = arms.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
+                    super::streetside::spawn_junction(
+                        &mut commands,
+                        ribbons,
+                        node.pos,
+                        widest,
+                        chunk,
+                    );
+                }
                 super::props::spawn_junction(
                     &mut commands,
                     &street.props,
