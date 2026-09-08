@@ -85,7 +85,10 @@ pub struct CityAssets {
     concrete: Handle<StandardMaterial>,
     /// One per entry in [`GROUND_BUCKETS`].
     paving: Vec<Handle<StandardMaterial>>,
-    grass: Vec<Handle<StandardMaterial>>,
+    /// One per entry in [`GROUND_BUCKETS`], and not a `StandardMaterial`: open
+    /// ground is the one surface in the city big enough to need variation above
+    /// the size of its own texture. See `world::ground`.
+    grass: Vec<Handle<super::ground::GroundMaterial>>,
     /// A four-sided unit cone — the church spire's pyramid, built once here
     /// because chunks respawn and a mesh added per spawn would leak.
     spire: Handle<Mesh>,
@@ -407,6 +410,7 @@ pub fn build_assets(
     images: &mut Assets<Image>,
     library: &super::material::MaterialLibrary,
     facades_out: &mut Assets<super::facade::FacadeMaterial>,
+    grounds: &mut Assets<super::ground::GroundMaterial>,
     wet: &mut super::weather::WetSurfaces,
 ) -> CityAssets {
     let districts = [
@@ -533,7 +537,10 @@ pub fn build_assets(
                 lawn.perceptual_roughness = 1.0;
             }
         }
-        grass.push(materials.add(lawn));
+        grass.push(grounds.add(super::ground::GroundMaterial {
+            base: lawn,
+            extension: super::ground::GroundBreakup::default(),
+        }));
     }
 
     let mut tar = StandardMaterial {
@@ -635,7 +642,7 @@ impl CityAssets {
     /// The bucketing is `ground_bucket`'s: one material per tiling factor,
     /// picked so a slab comes out about `GROUND_TILE` across whatever it is
     /// stretched over.
-    pub fn lawn(&self, extent: f32) -> Handle<StandardMaterial> {
+    pub fn lawn(&self, extent: f32) -> Handle<super::ground::GroundMaterial> {
         self.grass[ground_bucket(extent).min(self.grass.len() - 1)].clone()
     }
 
@@ -827,19 +834,22 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
         // slab, so paving can tile at a metre or two while the kerb face beside
         // it stays plain concrete instead of a stack of squashed slabs.
         let bucket = ground_bucket((size.x + size.y) * 0.5);
-        commands.spawn((
+        // A few millimetres proud of the slab, which is enough to settle the
+        // depth test without being visible from standing height.
+        let surface = (
             ChunkOf(chunk),
             Mesh3d(assets.unit_quad.clone()),
-            MeshMaterial3d(if park {
-                assets.grass[bucket].clone()
-            } else {
-                assets.paving[bucket].clone()
-            }),
-            // A few millimetres proud of the slab, which is enough to settle
-            // the depth test without being visible from standing height.
             Transform::from_xyz(center.x, SIDEWALK_HEIGHT + 0.004, center.y)
                 .with_scale(Vec3::new(size.x, 1.0, size.y)),
-        ));
+        );
+        // Two spawns rather than one with the material chosen inside it: lawn
+        // and paving are different material *types* now, and a component is
+        // not a value you can pick between.
+        if park {
+            commands.spawn((surface, MeshMaterial3d(assets.grass[bucket].clone())));
+        } else {
+            commands.spawn((surface, MeshMaterial3d(assets.paving[bucket].clone())));
+        }
     }
 
     // The ground behind a building, for a town that has no blocks.
@@ -906,15 +916,9 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
             // Grass or paving, per building: an old town's back land is both,
             // and one material across the whole of it reads as a golf course.
             let seed = rooftop::seed_for(ctx.seed, building.footprint);
-            let ground = if seed & 1 == 0 {
-                assets.lawn(site.span.x)
-            } else {
-                assets.paving(site.span.x)
-            };
-            commands.spawn((
+            let yard = (
                 ChunkOf(chunk),
                 Mesh3d(assets.unit_quad.clone()),
-                MeshMaterial3d(ground),
                 // Under the road, not over it. The order off the ground is
                 // yard, then carriageway, then paint, then kerb — so wherever
                 // a yard and a street want the same square metre the street
@@ -923,7 +927,12 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                     .with_rotation(Quat::from_rotation_y(site.yaw))
                     .with_scale(Vec3::new(site.span.x + 3.0, 1.0, YARD)),
                 NotShadowCaster,
-            ));
+            );
+            if seed & 1 == 0 {
+                commands.spawn((yard, MeshMaterial3d(assets.lawn(site.span.x))));
+            } else {
+                commands.spawn((yard, MeshMaterial3d(assets.paving(site.span.x))));
+            }
         }
     }
 

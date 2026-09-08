@@ -10,6 +10,7 @@ pub mod facade;
 pub mod frontage;
 pub mod gable;
 pub mod garage;
+pub mod ground;
 pub mod interior;
 pub mod litter;
 pub mod lots;
@@ -78,7 +79,7 @@ impl Plugin for WorldPlugin {
         ))
         // A second call rather than a longer tuple: `Plugins` is implemented up
         // to a fixed arity and the tuple above is at it.
-        .add_plugins(sky::SkyPlugin)
+        .add_plugins((sky::SkyPlugin, ground::GroundPlugin))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
         // bounces off concrete because *it* is elastic, and asking concrete to
@@ -110,6 +111,7 @@ fn generate_city(
     mut images: ResMut<Assets<Image>>,
     library: Res<material::MaterialLibrary>,
     mut facades: ResMut<Assets<facade::FacadeMaterial>>,
+    mut grounds: ResMut<Assets<ground::GroundMaterial>>,
     mut wear: ResMut<Assets<bevy::pbr::decal::ForwardDecalMaterial<StandardMaterial>>>,
     mut wet: ResMut<weather::WetSurfaces>,
 ) {
@@ -216,6 +218,7 @@ fn generate_city(
         &mut images,
         &library,
         &mut facades,
+        &mut grounds,
         &mut wet,
     ));
 }
@@ -314,9 +317,9 @@ fn setup_ground(
     config: Res<GameConfig>,
     library: Res<material::MaterialLibrary>,
     city: Res<City>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut roads: ResMut<Assets<road::RoadMaterial>>,
+    mut grounds: ResMut<Assets<ground::GroundMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     // A town read off a map runs the ground the other way round. The generator
@@ -343,7 +346,13 @@ fn setup_ground(
         commands.spawn((
             Name::new("Ground"),
             Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE))),
-            MeshMaterial3d(materials.add(landscape(&library, images.as_mut()))),
+            // Not a plain material. A grass scan is right at the size it was
+            // photographed and identical at every size above that, and this one
+            // quad is kilometres across — see `world::ground`.
+            MeshMaterial3d(grounds.add(ground::GroundMaterial {
+                base: landscape(&library, images.as_mut()),
+                extension: ground::GroundBreakup::default(),
+            })),
             Transform::from_xyz(0.0, 0.0, 0.0),
         ));
         commands.spawn((
