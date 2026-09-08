@@ -956,19 +956,18 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                        height: f32,
                        sound: &Handle<crate::audio::synth::SynthSound>,
                        loudness: f32| {
+            // A place, not a player. What this block sounds like and how loud
+            // it is, and nothing that costs the mixer anything: the sink is
+            // `audio::sfx::tend_emitters`' to add, and it only adds a handful.
+            // Handing one to every streamed block is what was stuttering the
+            // sound.
             commands.spawn((
                 ChunkOf(chunk),
                 Transform::from_xyz(at.x, height, at.y),
-                bevy::audio::AudioPlayer(sound.clone()),
-                // Muted until `tend_emitters` ranks it, so the first frame
-                // cannot blare — the vehicle voices' trick.
-                bevy::audio::PlaybackSettings::LOOP
-                    .with_spatial(true)
-                    .muted(),
-                // Written by `tend_emitters` and read by the limiter; nothing
-                // sets a sink's own volume any more.
-                crate::audio::Level(0.0),
-                AmbienceEmitter { gain: loudness },
+                AmbienceEmitter {
+                    gain: loudness,
+                    sound: sound.clone(),
+                },
             ));
         };
 
