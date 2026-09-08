@@ -143,7 +143,14 @@ pub struct Ribbons {
     /// One shared square for a crossing. Small enough that a fixed tiling is
     /// right whatever it is stretched over.
     junction: Handle<Mesh>,
-    asphalt: Handle<super::road::RoadMaterial>,
+    /// One material per [`super::atlas::Surface`], indexed by its own `index`.
+    paving: [Handle<super::road::RoadMaterial>; 4],
+}
+
+impl Ribbons {
+    fn material(&self, surface: super::atlas::Surface) -> Handle<super::road::RoadMaterial> {
+        self.paving[surface.index()].clone()
+    }
 }
 
 /// Metres of road one repeat of the asphalt covers. The same number the one
@@ -186,7 +193,7 @@ fn ribbon(width: f32, length: f32) -> Mesh {
 pub fn build_ribbons(
     layout: &CityLayout,
     meshes: &mut Assets<Mesh>,
-    asphalt: Handle<super::road::RoadMaterial>,
+    paving: [Handle<super::road::RoadMaterial>; 4],
 ) -> Ribbons {
     let roads = layout
         .graph
@@ -212,7 +219,7 @@ pub fn build_ribbons(
     Ribbons {
         roads,
         junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0))),
-        asphalt,
+        paving,
     }
 }
 
@@ -272,7 +279,7 @@ pub fn spawn_edge(
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(ribbons.asphalt.clone()),
+            MeshMaterial3d(ribbons.material(edge.surface)),
             Transform::from_xyz(middle.x, 0.012, middle.y)
                 .with_rotation(Quat::from_rotation_y(yaw)),
         ));
@@ -339,6 +346,7 @@ pub fn spawn_junction(
     ribbons: &Ribbons,
     at: Vec2,
     widest: f32,
+    surface: super::atlas::Surface,
     chunk: IVec2,
 ) {
     // A square the size of the widest street meeting here, plus its pavements
@@ -349,7 +357,10 @@ pub fn spawn_junction(
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(ribbons.junction.clone()),
-        MeshMaterial3d(ribbons.asphalt.clone()),
+        // Paved as the widest arm is. A junction between a cobbled square and
+        // a tarmac street is one or the other, and the bigger road is the one
+        // whose surfacing gang got there.
+        MeshMaterial3d(ribbons.material(surface)),
         Transform::from_xyz(at.x, 0.010, at.y).with_scale(Vec3::new(
             widest + SIDEWALK_WIDTH * 2.0,
             1.0,
@@ -793,9 +804,21 @@ mod tests {
         let middle = graph.add_node(Vec2::new(0.0, 0.0), (0, 1));
         let east = graph.add_node(Vec2::new(200.0, 0.0), (0, 2));
         let south = graph.add_node(Vec2::new(0.0, 200.0), (0, 3));
-        graph.connect(west, middle, 14.0, true);
-        graph.connect(middle, east, 14.0, true);
-        graph.connect(middle, south, 7.5, false);
+        graph.connect(
+            west,
+            middle,
+            14.0,
+            true,
+            crate::world::atlas::Surface::Asphalt,
+        );
+        graph.connect(middle, east, 14.0, true, crate::world::atlas::Surface::Sett);
+        graph.connect(
+            middle,
+            south,
+            7.5,
+            false,
+            crate::world::atlas::Surface::Asphalt,
+        );
 
         let layout = CityLayout {
             seed: 1,

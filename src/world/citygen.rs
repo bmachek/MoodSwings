@@ -499,7 +499,7 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street], canal: Option<Canal>)
             let a = graph.node_at_grid((xi as u16, zi as u16));
             let b = graph.node_at_grid((xi as u16, zi as u16 + 1));
             if let (Some(a), Some(b)) = (a, b) {
-                graph.connect(a, b, xs.width, xs.arterial);
+                graph.connect(a, b, xs.width, xs.arterial, super::atlas::Surface::Asphalt);
             }
         }
     }
@@ -511,7 +511,7 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street], canal: Option<Canal>)
             let a = graph.node_at_grid((xi as u16, zi as u16));
             let b = graph.node_at_grid((xi as u16 + 1, zi as u16));
             if let (Some(a), Some(b)) = (a, b) {
-                graph.connect(a, b, zs.width, zs.arterial);
+                graph.connect(a, b, zs.width, zs.arterial, super::atlas::Surface::Asphalt);
             }
         }
     }

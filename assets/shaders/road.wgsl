@@ -46,6 +46,12 @@ struct RoadSettings {
     time: f32,
     // How hard the rain is falling, which is what decides ripple strength.
     fall: f32,
+    // How much of the asphalt ageing below this surface takes. One for tarmac,
+    // zero for setts and slabs — see `world::road::RoadSettings`.
+    wear: f32,
+    // How coarse this surface's relief is, which decides how much of it
+    // survives being looked at edge-on.
+    relief: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> road: RoadSettings;
@@ -123,13 +129,16 @@ const CRACK_AREA: f32 = 26.0;
 // wear at the size of the puddles would read as one thing, not two.
 fn age(input: PbrInput) -> PbrInput {
     var pbr_input = input;
+    if road.wear <= 0.001 {
+        return pbr_input;
+    }
     let here = pbr_input.world_position.xz;
 
     // The patchwork. A generous smoothstep either side of the middle, so most
     // of the road is near its own colour and the made-good bays have edges.
     let field = fbm(here / PATCH_TILE);
     let mend = (smoothstep(0.34, 0.44, field) + smoothstep(0.66, 0.56, field) - 1.0);
-    let value = 1.0 + mend * PATCH;
+    let value = 1.0 + mend * PATCH * road.wear;
 
     // Cracks, drawn as a ridge through a higher-frequency field and cut off
     // hard. A soft threshold gives tarmac rivers rather than a crack — the same
@@ -151,7 +160,7 @@ fn age(input: PbrInput) -> PbrInput {
     // own ends, or the modulation is a gentle ripple in the darkness of a line
     // that is still, unmistakably, a line.
     let along = clamp((fbm(here / 2.4) - 0.5) * 3.2 + 0.55, 0.0, 1.0);
-    let crack = smoothstep(CRACK_LINE, 1.0, ridge) * cracked * along;
+    let crack = smoothstep(CRACK_LINE, 1.0, ridge) * cracked * along * road.wear;
 
     pbr_input.material.base_color = vec4(
         pbr_input.material.base_color.rgb * value * (1.0 - crack * 0.45),
@@ -170,9 +179,11 @@ fn age(input: PbrInput) -> PbrInput {
 }
 
 // How much of the scan's relief survives, looking straight down at the road and
-// looking along it.
+// looking along it. The grazing figure is for the finest surface there is; a
+// coarse one keeps far more, and `road.relief` says which this is.
 const RELIEF_FACE_ON: f32 = 0.70;
 const RELIEF_GRAZING: f32 = 0.10;
+const RELIEF_GRAZING_COARSE: f32 = 0.62;
 
 // Lays the asphalt's relief back down as the view goes flat along it.
 //
@@ -204,7 +215,8 @@ fn settle(input: PbrInput) -> PbrInput {
 
     // One at a bird's-eye view of the road, zero looking along it.
     let facing = saturate(dot(pbr_input.V, pbr_input.world_normal));
-    let relief = mix(RELIEF_GRAZING, RELIEF_FACE_ON, facing);
+    let grazing = mix(RELIEF_GRAZING, RELIEF_GRAZING_COARSE, saturate(road.relief));
+    let relief = mix(grazing, RELIEF_FACE_ON, facing);
     pbr_input.N = normalize(mix(pbr_input.world_normal, pbr_input.N, relief));
 
     return pbr_input;

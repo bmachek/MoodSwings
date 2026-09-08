@@ -55,6 +55,31 @@ pub struct RoadSettings {
     /// inferred from `wetness`: a road left glossy after a shower must be still,
     /// and that is a state the weather has and a single dial did not.
     pub fall: f32,
+    /// How much of the asphalt ageing this surface takes, 0 to 1.
+    ///
+    /// One for tarmac, zero for anything else. The patches and cracks the
+    /// shader draws are things that happen to a *poured* surface: it was laid
+    /// in bays, dug up for a main and made good in a different mix, and it
+    /// cracks where the ground moves under it. A cobbled street does none of
+    /// that — its joints take the movement, which is why it has joints — so
+    /// running the same wear over setts paints tar seams across granite.
+    ///
+    /// Everything else in this shader applies to any carriageway: standing
+    /// water finds the low spots on a market square exactly as it does on a
+    /// road, and the relief has to lie down at a grazing angle whatever it is
+    /// relief of.
+    pub wear: f32,
+    /// How coarse this surface's relief is, 0 to 1.
+    ///
+    /// The shader lays a carriageway's normal map flat as the view goes flat
+    /// along it, because asphalt's relief is a millimetre of chipping and a
+    /// millimetre of chipping seen edge-on does not tilt a reflection, it
+    /// occludes it — see `settle` in `road.wgsl`. That is right for tarmac and
+    /// wrong for setts: the joint between two cobbles is two centimetres deep
+    /// and fifteen apart, and the shadow in it is most of what a cobbled street
+    /// *is* when you look down one. So the coarser the paving, the more of its
+    /// relief survives the grazing angle.
+    pub relief: f32,
 }
 
 impl Default for RoadSettings {
@@ -64,6 +89,8 @@ impl Default for RoadSettings {
             tile: PUDDLE_TILE,
             time: 0.0,
             fall: 0.0,
+            wear: 1.0,
+            relief: 0.0,
         }
     }
 }

@@ -471,6 +471,110 @@ pub fn grass() -> Image {
     })
 }
 
+// ------------------------------------------------------------ cobblestone ----
+
+/// Stones across one repeat of the sett texture.
+///
+/// With the tile a metre and a bit, this puts a sett at about fifteen
+/// centimetres, which is what the granite blocks in a Bavarian market square
+/// actually measure.
+const SETTS: f32 = 7.0;
+
+/// Resolution the setts are painted at.
+///
+/// Four times the other ground textures. A cobbled street is read from a metre
+/// away by somebody standing on it, and at 256 a sett is thirty-six pixels
+/// across — enough for the shape and not enough for the stone.
+const SETT_SIZE: u32 = 512;
+
+/// Where a point sits among the setts: how far into a stone it is, and which
+/// stone.
+///
+/// A jittered-lattice Voronoi, which is the shape cobbles genuinely have — a
+/// paviour lays whatever stone comes to hand into whatever gap is left, so the
+/// joints are irregular polygons and no two stones are the same size. The two
+/// nearest cell centres are what matters: the *difference* between those
+/// distances is zero exactly on a joint and grows into the middle of a stone,
+/// which is a mortar groove and a domed top in one expression.
+///
+/// Returns the groove depth (0 in the joint, 1 in the middle of a stone) and a
+/// number per stone, so the colour can vary from one to the next — a sett
+/// pavement is grey the way a crowd is one colour.
+fn sett_at(u: f32, v: f32) -> (f32, f32) {
+    let point = Vec2::new(u * SETTS, v * SETTS);
+    let cell = point.floor();
+
+    let (mut nearest, mut second) = (f32::MAX, f32::MAX);
+    let mut winner = Vec2::ZERO;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            // Wrapped, so the tile still tiles: a lattice that runs off the
+            // edge has to come back on the other side or there is a seam down
+            // every repeat.
+            let neighbour = cell + Vec2::new(dx as f32, dy as f32);
+            let wrapped = Vec2::new(neighbour.x.rem_euclid(SETTS), neighbour.y.rem_euclid(SETTS));
+            let jitter = Vec2::new(
+                hash01(wrapped.x as u32, wrapped.y as u32, 17),
+                hash01(wrapped.x as u32, wrapped.y as u32, 29),
+            );
+            // Not the full cell: a paviour lays courses, and centres that can
+            // reach the next cell's give slivers rather than stones.
+            let centre = neighbour + Vec2::splat(0.22) + jitter * 0.56;
+            let distance = centre.distance(point);
+            if distance < nearest {
+                second = nearest;
+                nearest = distance;
+                winner = wrapped;
+            } else if distance < second {
+                second = distance;
+            }
+        }
+    }
+
+    let groove = ((second - nearest) * 3.4).clamp(0.0, 1.0);
+    (groove, hash01(winner.x as u32, winner.y as u32, 43))
+}
+
+/// The height field the setts' colour and their relief are both built from.
+fn sett_height(u: f32, v: f32) -> f32 {
+    let (groove, stone) = sett_at(u, v);
+    // Domed rather than flat-topped: a sett is a rounded block, and centuries
+    // of cartwheels round it further. The square root is that dome.
+    let top = groove.sqrt();
+    // Each stone sits a little proud or a little sunk of its neighbours, which
+    // is most of what makes an old pavement look laid rather than printed.
+    let settled = (stone - 0.5) * 0.16;
+    // And a fine grain over all of it, so the granite is granite.
+    let grain = (fbm(u, v, 96, 3, 61) - 0.5) * 0.09;
+    (top * 0.84 + 0.08 + settled + grain).clamp(0.0, 1.0)
+}
+
+/// Kopfsteinpflaster: granite setts with mortar between them.
+pub fn cobbles() -> Image {
+    painted(SETT_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let (groove, stone) = sett_at(u, v);
+        // The joint is sand and grit, and it is darker than any stone.
+        let joint = 1.0 - groove.min(1.0);
+        let value =
+            0.86 - joint * 0.34 + (stone - 0.5) * 0.20 + (fbm(u, v, 96, 3, 61) - 0.5) * 0.10;
+        // Granite is faintly warm where it is worn and faintly cool where it
+        // is not, so the stones do not all read as the same block of concrete.
+        let warm = 0.03 * (stone - 0.5);
+        [
+            byte(value * (1.0 + warm)),
+            byte(value),
+            byte(value * (1.0 - warm * 0.6)),
+            255,
+        ]
+    })
+}
+
+/// And its relief, which is the half that matters: setts are read almost
+/// entirely by the shadow in the joints.
+pub fn cobbles_normal() -> Image {
+    normal_map(SETT_SIZE, 0.075, sett_height)
+}
+
 // --------------------------------------------------------------- foliage ----
 
 /// How much of a canopy is leaf and how much is gap.

@@ -338,11 +338,12 @@ fn setup_ground(
         // The asphalt a ribbon is made of: the same material the one big quad
         // would have used, at a tiling of one, because a ribbon carries its own
         // size in its UVs instead.
-        let asphalt = roads.add(road::RoadMaterial {
-            base: road_material(&library, images.as_mut(), ASPHALT_TILE),
-            extension: road::RoadSheen::default(),
-        });
-        commands.insert_resource(streetside::build_ribbons(&city, meshes.as_mut(), asphalt));
+        // One material per surface the extract knows about, built up front:
+        // a ribbon picks by its edge's surface, so a cobbled Altstadt costs
+        // four materials for the whole town rather than one per street.
+        let paving = atlas::Surface::ALL
+            .map(|surface| roads.add(carriageway(surface, &library, images.as_mut())));
+        commands.insert_resource(streetside::build_ribbons(&city, meshes.as_mut(), paving));
         commands.spawn((
             Name::new("Ground"),
             Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE))),
@@ -416,6 +417,103 @@ fn landscape(library: &material::MaterialLibrary, images: &mut Assets<Image>) ->
         }
     }
     lawn
+}
+
+/// Metres of street one repeat of each paving covers.
+///
+/// A sett is about fifteen centimetres and there are seven across the texture,
+/// so a metre and a bit is the true size of it. Slabs and grit are looser: what
+/// they have to avoid is reading as a pattern, and the repeat is what does that.
+const SETT_TILE: f32 = 1.35;
+const SLAB_TILE: f32 = 1.6;
+const GRIT_TILE: f32 = 2.1;
+
+/// The carriageway material for one kind of surface, and how much asphalt
+/// ageing it takes.
+///
+/// A ribbon's UVs already tile at [`ASPHALT_TILE`], because that is what the
+/// mesh was built for and one mesh serves whatever is laid on it. So a paving
+/// with a different true size arrives as a `uv_transform` on top — which is
+/// also the only way it could arrive, since the same ribbon may be resurfaced
+/// by nothing more than a change to a tag in the extract.
+fn carriageway(
+    surface: atlas::Surface,
+    library: &material::MaterialLibrary,
+    images: &mut Assets<Image>,
+) -> road::RoadMaterial {
+    use atlas::Surface;
+
+    // Set, tile, tint, how much asphalt ageing it takes, and how coarse its
+    // relief is.
+    let (set, tile, tint, wear, relief) = match surface {
+        // Tarmac is the one surface the ageing in `road.wgsl` describes: it is
+        // poured, so it is patched and it cracks. It is also the finest, which
+        // is why its relief is the one that has to lie down at a grazing angle.
+        Surface::Asphalt => (
+            material::set::ROAD,
+            ASPHALT_TILE,
+            Color::srgb(0.50, 0.50, 0.52),
+            1.0,
+            0.0,
+        ),
+        Surface::Sett => (
+            material::set::SETT,
+            SETT_TILE,
+            Color::srgb(0.62, 0.61, 0.60),
+            0.0,
+            1.0,
+        ),
+        Surface::Slabs => (
+            material::set::PAVEMENT,
+            SLAB_TILE,
+            Color::srgb(0.66, 0.65, 0.63),
+            0.0,
+            0.65,
+        ),
+        Surface::Gravel => (
+            material::set::ROOF,
+            GRIT_TILE,
+            Color::srgb(0.55, 0.51, 0.45),
+            0.0,
+            0.45,
+        ),
+    };
+
+    let mut base = StandardMaterial {
+        uv_transform: Affine2::from_scale(Vec2::splat(ASPHALT_TILE / tile)),
+        ..default()
+    };
+    match library.get(set) {
+        Some(scanned) => {
+            scanned.apply(&mut base);
+            base.base_color = tint;
+        }
+        None => {
+            let (color, relief) = match surface {
+                Surface::Sett => (texture::cobbles(), texture::cobbles_normal()),
+                Surface::Gravel => (texture::roof(), texture::roof_normal()),
+                // Asphalt's own painted fallback is the one `road_material`
+                // has always had; slabs borrow the pavement's.
+                Surface::Asphalt => (texture::asphalt(), texture::asphalt_normal()),
+                Surface::Slabs => (texture::paving(), texture::paving_normal()),
+            };
+            base.base_color = tint;
+            base.base_color_texture = Some(images.add(color));
+            base.normal_map_texture = Some(images.add(relief));
+            base.perceptual_roughness = 0.94;
+        }
+    }
+
+    road::RoadMaterial {
+        base,
+        extension: road::RoadSheen {
+            settings: road::RoadSettings {
+                wear,
+                relief,
+                ..default()
+            },
+        },
+    }
 }
 
 /// The asphalt, scanned if it was downloaded and painted if it was not.

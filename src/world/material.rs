@@ -43,6 +43,9 @@ pub mod set {
     pub const PAVEMENT: &str = "PavingStones138";
     pub const ROOF: &str = "Gravel023";
     pub const GRASS: &str = "Grass005";
+    /// Kopfsteinpflaster: granite setts laid in fans, which is what a fifth of
+    /// Landshut's carriageways are tagged as and what the Altstadt is made of.
+    pub const SETT: &str = "PavingStones151";
 
     // Walls. Six of them, because one set dressed four ways still leaves every
     // brick building in the city cut from the same photograph — and a facade
@@ -54,11 +57,12 @@ pub mod set {
     pub const BRICK_OLD: &str = "Bricks075A";
     pub const PLASTER: &str = "PaintedPlaster006";
 
-    pub const ALL: [&str; 10] = [
+    pub const ALL: [&str; 11] = [
         ROAD,
         PAVEMENT,
         ROOF,
         GRASS,
+        SETT,
         CONCRETE,
         CONCRETE_ROUGH,
         BRICK,

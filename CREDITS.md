@@ -23,9 +23,9 @@ This page is the human-readable version of it.
 
 ## Materials — [ambientCG](https://ambientcg.com), CC0 1.0
 
-Ten scanned PBR sets, at 2K JPEG: `Asphalt031`, `PavingStones138`,
-`Concrete034`, `Concrete046`, `Bricks097`, `Bricks104`, `Bricks075A`,
-`PaintedPlaster006`, `Gravel023`, `Grass005`.
+Eleven scanned PBR sets, at 2K JPEG: `Asphalt031`, `PavingStones138`,
+`PavingStones151`, `Concrete034`, `Concrete046`, `Bricks097`, `Bricks104`,
+`Bricks075A`, `PaintedPlaster006`, `Gravel023`, `Grass005`.
 
 These are an *optional* upgrade. `world::texture` paints a procedural stand-in
 for anything missing, and a fresh clone that never runs the fetch script

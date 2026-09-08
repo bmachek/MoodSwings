@@ -28,7 +28,7 @@ set "RESOLUTION=2K-JPG"
 set "FORCE=%1"
 
 rem The set the renderer looks for — mirror of MATERIALS in the .sh.
-set MATERIALS=Asphalt031 PavingStones138 Concrete034 Concrete046 Bricks097 Bricks104 Bricks075A PaintedPlaster006 Gravel023 Grass005
+set MATERIALS=Asphalt031 PavingStones138 PavingStones151 Concrete034 Concrete046 Bricks097 Bricks104 Bricks075A PaintedPlaster006 Gravel023 Grass005
 
 if not exist "%DEST%" mkdir "%DEST%"
 for %%M in (%MATERIALS%) do (

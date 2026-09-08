@@ -52,12 +52,55 @@ pub struct Atlas {
     pub streets: Vec<Street>,
 }
 
+/// What a street is paved with.
+///
+/// A fifth of Landshut is not asphalt, and the bake used to throw that away.
+/// The Altstadt is `sett` — the dressed granite Kopfsteinpflaster a Bavarian
+/// market street has been laid in since it was a market — and the Neustadt is
+/// sawn `paving_stones`; between them that is a hundred and thirty-six ways of
+/// the extract, and they are the two streets the town is known for.
+///
+/// Four values rather than OSM's forty. The game draws a carriageway, and the
+/// question a carriageway asks is which of four materials, not which of the
+/// nine words a mapper might have used for gravel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub enum Surface {
+    #[default]
+    Asphalt,
+    /// Kopfsteinpflaster: setts, laid in fans.
+    Sett,
+    /// Sawn rectangular slabs.
+    Slabs,
+    /// A lane that was never surfaced.
+    Gravel,
+}
+
+impl Surface {
+    pub const ALL: [Self; 4] = [Self::Asphalt, Self::Sett, Self::Slabs, Self::Gravel];
+
+    /// Its slot in the tables that are indexed by surface. Written out rather
+    /// than derived from the discriminant, so reordering the enum cannot
+    /// silently repave the town.
+    pub fn index(self) -> usize {
+        match self {
+            Self::Asphalt => 0,
+            Self::Sett => 1,
+            Self::Slabs => 2,
+            Self::Gravel => 3,
+        }
+    }
+}
+
 /// One way out of the extract: a polyline in metres, with a carriageway width.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Street {
     pub name: String,
     pub width: f32,
     pub arterial: bool,
+    /// Defaulted, so an atlas baked before surfaces existed still loads as the
+    /// asphalt town it was.
+    #[serde(default)]
+    pub surface: Surface,
     pub points: Vec<(f32, f32)>,
 }
 
@@ -170,7 +213,7 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
                 && from != node
                 && before.distance(at) >= SHORTEST
             {
-                graph.connect(from, node, street.width, street.arterial);
+                graph.connect(from, node, street.width, street.arterial, street.surface);
                 signs.per_edge.push(name);
             }
             previous = Some((at, node));
@@ -224,8 +267,48 @@ mod tests {
             name: "Teststraße".into(),
             width: 8.0,
             arterial: false,
+            surface: Surface::Asphalt,
             points: points.to_vec(),
         }
+    }
+
+    /// The committed extract is the one asset in the repository that is data
+    /// rather than code, and every field of it is a promise to a match arm
+    /// somewhere. Nothing else in the test suite would notice if a re-bake
+    /// changed the shape of the file, or if `surface` quietly went back to
+    /// defaulting because the baker stopped writing it.
+    #[test]
+    fn the_committed_landshut_still_says_what_it_is_paved_with() {
+        let Some(town) = load("landshut") else {
+            // A checkout without the extract is not a failure; the game falls
+            // back to the generator and says so.
+            return;
+        };
+        assert!(town.streets.len() > 400, "{} streets", town.streets.len());
+
+        let widths: Vec<f32> = town.streets.iter().map(|street| street.width).collect();
+        let narrowest = widths.iter().copied().fold(f32::MAX, f32::min);
+        let widest = widths.iter().copied().fold(0.0, f32::max);
+        // Real widths, off `width` and `lanes` tags. Before those were read the
+        // whole town came off a table of six class defaults, and three streets
+        // in five were the identical 7.5m.
+        assert!(
+            widest - narrowest > 6.0,
+            "every street is about {narrowest}m wide"
+        );
+
+        let setts = town
+            .streets
+            .iter()
+            .filter(|street| street.surface == Surface::Sett)
+            .count();
+        assert!(setts > 50, "only {setts} cobbled streets in Landshut");
+        assert!(
+            town.streets
+                .iter()
+                .any(|street| street.name == "Altstadt" && street.surface == Surface::Sett),
+            "the Altstadt is not cobbled"
+        );
     }
 
     /// Two ways that meet share a junction rather than passing through one

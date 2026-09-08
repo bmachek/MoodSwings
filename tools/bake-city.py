@@ -23,7 +23,10 @@ so putting north on -Z makes a screenshot of the minimap the same way up as a
 paper map of the same place.
 
 *The names come too.* They cost a few kilobytes and they are the whole
-difference between a street plan and *this* street plan.
+difference between a street plan and *this* street plan. So does the surface,
+and so does the width the mappers actually recorded: an Altstadt paved in setts
+and thirteen metres wide is not a fact the game could have guessed, and it is
+the difference between a real town and a street plan of one.
 
 The data this reads is © OpenStreetMap contributors, ODbL 1.0. Anything baked
 out of it carries the same licence — see CREDITS.md.
@@ -62,6 +65,82 @@ WIDTH = {
 # Which classes the game treats as arterial: signals go up at their junctions,
 # and its traffic prefers them.
 ARTERIAL = {"motorway", "trunk", "primary", "secondary"}
+
+# Metres of carriageway per marked lane, and the margin either side of them.
+#
+# The class table above is a guess about a road nobody measured; `lanes` is
+# something a mapper stood in the street and counted, and it is on four hundred
+# of Landshut's six hundred and seventy ways. A German urban lane is about three
+# metres, and the margin is the gutter and the parking that the class widths
+# already have folded into them — without it, every two-lane residential street
+# comes out at six metres and the town reads as a model railway.
+LANE = 3.05
+MARGIN = 1.7
+
+# What the game may believe about a width, in metres. An OSM `width` is free
+# text and occasionally says "3;4" or the width of the whole square.
+NARROWEST = 4.0
+WIDEST = 22.0
+
+# OSM `surface` values, collapsed to what the game can draw. Everything not
+# named here is asphalt, which is what four fifths of any town is.
+#
+# The two that matter are the ones Landshut is actually made of: `sett` is
+# Kopfsteinpflaster, the dressed granite blocks the Altstadt is laid in, and
+# `paving_stones` is the sawn rectangular slabs of the Neustadt. They are
+# ninety-six and forty ways of this extract respectively — a fifth of the town
+# — and the bake used to throw both away.
+SURFACE = {
+    "sett": "Sett",
+    "cobblestone": "Sett",
+    "unhewn_cobblestone": "Sett",
+    "paving_stones": "Slabs",
+    "concrete:plates": "Slabs",
+    "bricks": "Slabs",
+    "paved": "Asphalt",
+    "asphalt": "Asphalt",
+    "concrete": "Asphalt",
+    "gravel": "Gravel",
+    "fine_gravel": "Gravel",
+    "compacted": "Gravel",
+    "unpaved": "Gravel",
+    "ground": "Gravel",
+    "dirt": "Gravel",
+    "earth": "Gravel",
+    "grass": "Gravel",
+    "sand": "Gravel",
+    "pebblestone": "Gravel",
+}
+
+
+def carriageway(tags, kind):
+    """How wide to draw this way, in metres.
+
+    Three sources, most specific first: what a mapper measured, what a mapper
+    counted, and what the class implies. Only five ways in Landshut carry a
+    `width` and four hundred carry `lanes`, so the middle one is where nearly
+    all of the variety comes from.
+    """
+    raw = tags.get("width")
+    if raw:
+        try:
+            # Free text: "8", "8 m", "3;4" for a way that changes width.
+            measured = float(raw.split(";")[0].replace("m", "").strip())
+            if NARROWEST <= measured <= WIDEST:
+                return round(measured, 1)
+        except ValueError:
+            pass
+
+    lanes = tags.get("lanes")
+    if lanes:
+        try:
+            counted = float(lanes.split(";")[0])
+            if counted >= 1.0:
+                return round(min(max(counted * LANE + MARGIN, NARROWEST), WIDEST), 1)
+        except ValueError:
+            pass
+
+    return WIDTH.get(kind)
 
 
 def project(lat, lon, lat0, lon0):
@@ -108,9 +187,10 @@ def main():
             continue
         tags = element.get("tags", {})
         kind = tags.get("highway")
-        width = WIDTH.get(kind)
-        if width is None:
+        if kind not in WIDTH:
             continue
+        width = carriageway(tags, kind)
+        surface = SURFACE.get(tags.get("surface", ""), "Asphalt")
 
         ids = element.get("nodes", []) or []
         points = []
@@ -148,6 +228,7 @@ def main():
             "name": tags.get("name", ""),
             "width": width,
             "arterial": kind in ARTERIAL,
+            "surface": surface,
             "points": [(x, z) for x, z, _ in thinned],
         })
 
@@ -167,15 +248,25 @@ def main():
             out.write(
                 f'        (name: "{name}", width: {street["width"]}, '
                 f'arterial: {str(street["arterial"]).lower()}, '
+                f'surface: {street["surface"]}, '
                 f'points: {ron_points(street["points"])}),\n'
             )
         out.write("    ],\n")
         out.write(")\n")
 
     total = sum(len(s["points"]) for s in streets)
+    surfaces = {}
+    for street in streets:
+        surfaces[street["surface"]] = surfaces.get(street["surface"], 0) + 1
+    widths = sorted(s["width"] for s in streets)
     print(
         f"{len(streets)} streets, {total} points "
         f"({dropped} ways outside the square) -> {args.out}",
+        file=sys.stderr,
+    )
+    print(
+        f"  widths {widths[0]}..{widths[-1]}m, median {widths[len(widths) // 2]}m; "
+        + ", ".join(f"{count} {name}" for name, count in sorted(surfaces.items())),
         file=sys.stderr,
     )
 

@@ -470,11 +470,21 @@ pub fn update_streaming(
                     && streetside
                 {
                     let widest = arms.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
+                    // Read off the graph rather than off `arms`, which several
+                    // other spawners share and none of them wants widened.
+                    let paved = node
+                        .edges
+                        .iter()
+                        .map(|&edge| city.graph.edge(edge))
+                        .max_by(|a, b| a.width.total_cmp(&b.width))
+                        .map(|edge| edge.surface)
+                        .unwrap_or_default();
                     super::streetside::spawn_junction(
                         &mut commands,
                         ribbons,
                         node.pos,
                         widest,
+                        paved,
                         chunk,
                     );
                 }

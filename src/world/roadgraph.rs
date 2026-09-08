@@ -30,6 +30,9 @@ pub struct RoadEdge {
     pub b: NodeId,
     pub width: f32,
     pub arterial: bool,
+    /// What it is paved with. Only a town read off a map has anything but
+    /// asphalt here; the generator lays tarmac everywhere by construction.
+    pub surface: super::atlas::Surface,
     pub length: f32,
 }
 
@@ -52,7 +55,14 @@ impl RoadGraph {
         id
     }
 
-    pub fn connect(&mut self, a: NodeId, b: NodeId, width: f32, arterial: bool) -> EdgeId {
+    pub fn connect(
+        &mut self,
+        a: NodeId,
+        b: NodeId,
+        width: f32,
+        arterial: bool,
+        surface: super::atlas::Surface,
+    ) -> EdgeId {
         let length = self.node(a).pos.distance(self.node(b).pos);
         let id = EdgeId(self.edges.len() as u32);
         self.edges.push(RoadEdge {
@@ -60,6 +70,7 @@ impl RoadGraph {
             b,
             width,
             arterial,
+            surface,
             length,
         });
         self.nodes[a.0 as usize].edges.push(id);
