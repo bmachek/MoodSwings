@@ -87,7 +87,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), churches & cathedrals (`church`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -149,9 +149,10 @@ cannot see. Only meshes and colliders stream, per 250 m chunk, in
 leaks.
 
 `CityStyle` (`core::config`) is the second input to that layout, next to the
-seed: a postcard, not a map. It is a handful of dials — height scale, palette
-override, how many churches and whether one of them is a cathedral, how wide
-the market band runs, how much the walls advertise — so a style is a *tuning*
+seed: a postcard, not a map. It is a handful of dials — height scale, how far
+lots subdivide, whether the low buildings step into a gable, palette override,
+how many churches and whether one of them is a cathedral, how wide the market
+band runs, how much the walls advertise — so a style is a *tuning*
 of the same generator, and a new one costs a match arm rather than a data file.
 Anything a style decides belongs on `CityStyle`, not as a `match` at the use
 site; the layout must stay a pure function of `(seed, style)` or the chunks

@@ -61,8 +61,10 @@ pub struct GameConfig {
 /// deliberately a *style* and not a map — the world is built of axis-aligned
 /// rectangles from the kerbs up, and a street plan that matches the real
 /// Landshut needs curved blocks the whole pipeline cannot hold yet. What a
-/// style *can* honestly deliver is what a postcard delivers: the heights,
-/// the colours, the number of spires, and the name.
+/// style *can* honestly deliver is what a postcard delivers: the heights, how
+/// narrow the plots are and therefore how the roofline breaks up, whether
+/// those roofs are flat or step into the sky, the colours, the number of
+/// spires, and the name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CityStyle {
     /// The city as it always was: nowhere in particular.
@@ -111,7 +113,10 @@ impl CityStyle {
     pub fn height_scale(self) -> f32 {
         match self {
             Self::Generisch => 1.0,
-            Self::Landshuepf => 0.5,
+            // Not the two storeys this said at first. Landshut's Altstadt is
+            // four-storey townhouses under very tall gables, and at half scale
+            // the gable came out taller than the house it was standing on.
+            Self::Landshuepf => 0.82,
             Self::NewDork => 1.8,
             Self::Londoof => 0.8,
             Self::Minga => 0.7,
@@ -139,6 +144,48 @@ impl CityStyle {
         match self {
             Self::Minga => 0.30..0.40,
             _ => 0.30..0.335,
+        }
+    }
+
+    /// Multiplier on every district's smallest buildable lot.
+    ///
+    /// The second lever the layout has, and the one a gable needs. A stepped
+    /// screen is measured off the *width* of the house it caps — that is what
+    /// gives a row of them one pitch and one silhouette — and the generator's
+    /// default lot is eleven to twenty-five metres across, which is a
+    /// warehouse. Landshut's Altstadt is burgage plots: narrow fronts, deep
+    /// backs, four storeys, and the whole street is one roofline because of it.
+    ///
+    /// Below one this subdivides further, so a block yields more and narrower
+    /// buildings out of the same draws — and that is the expensive direction.
+    /// At 0.52, which is what real burgage plots would want, the city came out
+    /// at fourteen thousand buildings against the default four, and eleven
+    /// frames a second. 0.78 is the most narrowness this generator will carry.
+    pub fn lot_scale(self) -> f32 {
+        match self {
+            Self::Landshuepf => 0.78,
+            // Haussmann's blocks are long runs of one building, not plots.
+            Self::Paree => 1.25,
+            _ => 1.0,
+        }
+    }
+
+    /// Share of low buildings that carry a stepped gable instead of a flat
+    /// parapet — a `Giebelhaus`, front wall carried up past the roof as a
+    /// stair-stepped screen.
+    ///
+    /// The single strongest lever a *roofline* has, and the reason it exists at
+    /// all: what anybody who has stood in the Landshut Altstadt remembers is
+    /// not the street plan and not the colour, it is a row of tall narrow
+    /// houses whose fronts step up into the sky at their own heights. Nowhere
+    /// else in this list has them — Minga has a few because the Bavarian
+    /// old towns share the habit, and everywhere else is nought, because a
+    /// stepped gable on a New York block is not a postcard, it is a mistake.
+    pub fn gables(self) -> f32 {
+        match self {
+            Self::Landshuepf => 0.80,
+            Self::Minga => 0.22,
+            _ => 0.0,
         }
     }
 

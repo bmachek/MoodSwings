@@ -574,7 +574,17 @@ fn lay_out_buildings(
     }
 
     let mut lots = Vec::new();
-    subdivide(buildable, district.min_lot(), rng, 0, &mut lots);
+    // The style's second lever, and the one that decides how *wide* a house is
+    // rather than how tall: a postcard of burgage plots subdivides further than
+    // one of city blocks. Applied here rather than inside `min_lot`, because
+    // `min_lot` is a fact about a district and this is a fact about a city.
+    subdivide(
+        buildable,
+        district.min_lot() * style.lot_scale(),
+        rng,
+        0,
+        &mut lots,
+    );
 
     // The style's one big lever: the same draws, a different skyline.
     let (min_h, max_h) = district.height_range();

@@ -70,6 +70,9 @@ pub struct CityAssets {
     unit_quad: Handle<Mesh>,
     /// Indexed by `(district_index * PALETTE_SIZE + palette) * CLASS_COUNT + class`.
     building: Vec<Handle<super::facade::FacadeMaterial>>,
+    /// The same colours as `building`, as plain paint with no windows on it.
+    /// Indexed by `district_index * PALETTE_SIZE + palette`.
+    plain: Vec<Handle<StandardMaterial>>,
     roof: Handle<StandardMaterial>,
     kerb: Handle<StandardMaterial>,
     park_kerb: Handle<StandardMaterial>,
@@ -359,8 +362,17 @@ pub fn build_assets(
         .collect();
 
     let mut building = Vec::with_capacity(groups.len() * PALETTE_SIZE as usize * CLASS_COUNT);
+    let mut plain = Vec::with_capacity(groups.len() * PALETTE_SIZE as usize);
     for (colors, grain_district) in groups {
         for (slot, color) in colors.into_iter().enumerate() {
+            // The same colour with nothing painted on it. Pushed here rather
+            // than in a second loop, so the two lists cannot get out of step
+            // with the addressing they share.
+            plain.push(materials.add(StandardMaterial {
+                base_color: color,
+                perceptual_roughness: 0.94,
+                ..default()
+            }));
             // The grain is the district's, but how it is dressed — scale, and
             // whether it is turned — belongs to the palette slot, so a street
             // of one district is not a street of one photograph.
@@ -457,6 +469,7 @@ pub fn build_assets(
             Plane3d::default().mesh().size(1.0, 1.0).build(),
         )),
         building,
+        plain,
         roof: materials.add(tar),
         kerb: materials.add(StandardMaterial {
             base_color: Color::srgb(0.50, 0.50, 0.51),
@@ -489,6 +502,28 @@ impl CityAssets {
         let slot = group * PALETTE_SIZE as usize + palette as usize;
         let i = slot * CLASS_COUNT + class.index();
         self.building[i.min(self.building.len() - 1)].clone()
+    }
+
+    /// The same colour as [`material_for`](Self::material_for), as plain paint.
+    ///
+    /// The facade material is an extension over a shader that paints windows
+    /// on whatever it is put on, which is exactly right for a wall and exactly
+    /// wrong for anything that is masonry and nothing else — a gable screen
+    /// above the roof, for one. This is that wall's colour with no windows in
+    /// it, on the same `group * PALETTE_SIZE + palette` addressing, so the two
+    /// cannot drift apart.
+    pub fn plain_for(
+        &self,
+        district: District,
+        quarter: Option<Quarter>,
+        palette: u8,
+    ) -> Handle<StandardMaterial> {
+        let group = match quarter {
+            Some(quarter) => quarter_index(quarter),
+            None => district_index(district),
+        };
+        let i = group * PALETTE_SIZE as usize + palette as usize;
+        self.plain[i.min(self.plain.len() - 1)].clone()
     }
 
     /// Every facade material, for the day/night cycle to light up.
@@ -536,6 +571,7 @@ pub struct BlockContext<'a> {
     pub interior: &'a crate::world::interior::InteriorKit,
     pub frontage: &'a crate::world::frontage::FrontageKit,
     pub plumes: &'a crate::world::plume::PlumeKit,
+    pub gables: &'a crate::world::gable::GableKit,
     /// `None` only before the bank has landed — streaming simply spawns that
     /// chunk's emitters never, which resolves itself on the next re-entry.
     pub bank: Option<&'a crate::audio::bank::SoundBank>,
@@ -991,6 +1027,32 @@ fn spawn_building(
         );
     }
 
+    // A gable, if this postcard has them and this building drew one.
+    //
+    // Only on the low classes: a `Giebelhaus` is a house, and a stepped screen
+    // on the top of a nine-storey block is a hat on a filing cabinet. Drawn
+    // from the building's own seed like everything else about its roof, so a
+    // chunk walked back into keeps the same skyline.
+    let gabled = ctx.style.gables() > 0.0
+        && matches!(class, FacadeClass::House | FacadeClass::Lowrise)
+        && (seed >> 31) as f32 / u32::MAX as f32 % 1.0 < ctx.style.gables();
+    if gabled {
+        super::gable::spawn(
+            commands,
+            ctx.gables,
+            &assets.plain_for(district, block.quarter, building.palette),
+            seed,
+            center,
+            frontage,
+            throat,
+            height,
+            height + SIDEWALK_HEIGHT,
+            yaw,
+            chunk,
+            ctx.lod_scale,
+        );
+    }
+
     // A capping slab, slightly oversailing the walls. It hides the windowed top
     // face of the cube, and the overhang reads as a parapet from street level —
     // which is most of what stops a box looking like a box. Visual only: the
@@ -1000,21 +1062,23 @@ fn spawn_building(
     // constant. That costs nothing — the slab was already an entity with its
     // own transform — and it is the only variation in the roofline that still
     // reads from a kilometre up, where the clutter below is sub-pixel.
-    commands.spawn((
-        ChunkOf(chunk),
-        Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.roof.clone()),
-        Transform::from_xyz(
-            center.x,
-            height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
-            center.y,
-        )
-        .with_scale(Vec3::new(
-            size.x + parapet.overhang * 2.0,
-            parapet.thickness,
-            size.y + parapet.overhang * 2.0,
-        )),
-    ));
+    if !gabled {
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.roof.clone()),
+            Transform::from_xyz(
+                center.x,
+                height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
+                center.y,
+            )
+            .with_scale(Vec3::new(
+                size.x + parapet.overhang * 2.0,
+                parapet.thickness,
+                size.y + parapet.overhang * 2.0,
+            )),
+        ));
+    }
 
     // The plinth course. Shares the kerb material on purpose — the base of a
     // building and the kerb in front of it are the two things at street level
@@ -1153,7 +1217,12 @@ fn spawn_building(
     }
 
     // And what accumulated on the deck. Sits on top of the slab, so nothing is
-    // buried in it and nothing floats over it.
+    // buried in it and nothing floats over it — and not at all on a gabled
+    // building, which has a pitch instead of a deck and would carry its air
+    // handling inside its own rafters.
+    if gabled {
+        return;
+    }
     rooftop::spawn(
         commands,
         ctx.roofs,

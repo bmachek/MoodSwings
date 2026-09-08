@@ -7,6 +7,7 @@ pub mod citygen;
 pub mod decals;
 pub mod facade;
 pub mod frontage;
+pub mod gable;
 pub mod garage;
 pub mod interior;
 pub mod litter;
@@ -125,6 +126,7 @@ fn generate_city(
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(bunting::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(plume::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(gable::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(worksite::build_assets(
         &mut meshes,
         &mut materials,

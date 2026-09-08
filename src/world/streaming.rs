@@ -177,6 +177,7 @@ pub struct StreetKits<'w> {
     works: Res<'w, crate::world::worksite::WorksiteKit>,
     lines: Res<'w, crate::world::bunting::BuntingKit>,
     plumes: Res<'w, crate::world::plume::PlumeKit>,
+    gables: Res<'w, crate::world::gable::GableKit>,
 }
 
 pub fn update_streaming(
@@ -212,6 +213,7 @@ pub fn update_streaming(
         interior: &kits.interior,
         frontage: &kits.frontage,
         plumes: &street.plumes,
+        gables: &street.gables,
         bank: kits.bank.as_deref(),
         cast: match (&kits.figures, &kits.faces, &kits.tempers) {
             (Some(figures), Some(faces), Some(tempers)) => {
