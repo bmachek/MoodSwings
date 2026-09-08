@@ -36,6 +36,25 @@ tools/shoot.sh                 # the whole battery of framings into shots/
 tools/shoot.sh --only street,night --out shots/after
 ```
 
+### Letting the game find its own bugs
+
+`core::capture` renders one *posed* frame. `core::patrol` plays instead:
+
+```sh
+cargo run --release -- --patrol 120        # two minutes, then a report
+cargo run --release -- --patrol 60 --city minga
+```
+
+It writes `ActionState<Action>` directly — gameplay has never read a key, only
+the action — and walks the city junction by junction, taunting, whistling and
+taking a car, while `Watch` takes the city's vital signs once a second: the
+player's position and speed, moods outside their range, entity and *asset*
+counts that only ever climb (the documented leak: a mesh built in the streaming
+path is added afresh every time a chunk comes back), audio sources being mixed,
+frame hitches, and anything that belongs on the road found above the rooftops.
+A patrol ending with no complaints is the point. It found the parked cars that
+were being fired into the sky by the kerb collider arriving inside them.
+
 `--lineup` stands one of every archetype in a row and points the camera down
 it — the cast's `--showroom`. The rare archetypes are the ones whose costume
 goes wrong and the ones a street framing cannot be relied on to contain, so

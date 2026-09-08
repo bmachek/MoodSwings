@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod capture;
 pub mod config;
+pub mod patrol;
 pub mod rng;
 pub mod schedule;
 pub mod settings;
@@ -19,6 +20,7 @@ impl Plugin for CorePlugin {
             schedule::SchedulePlugin,
             settings::SettingsPlugin,
             capture::CapturePlugin,
+            patrol::PatrolPlugin,
         ));
     }
 }

@@ -566,6 +566,13 @@ pub fn update_wheel_visuals(
     }
 }
 
+/// How much daylight a parked car leaves between itself and the kerb.
+///
+/// A third of a metre, which is about how badly a real person parks. It has to
+/// be more than nothing, because the kerb's collider arrives with the chunk and
+/// a body already overlapping one is ejected rather than nudged.
+const KERB_CLEARANCE: f32 = 0.34;
+
 /// Scatters parked cars along the kerbs so there is always something to steal.
 pub fn spawn_parked_vehicles(
     mut commands: Commands,
@@ -599,12 +606,26 @@ pub fn spawn_parked_vehicles(
         } else {
             -1.0
         };
-        let offset = edge.width * 0.5 - 1.6;
-        let position = a + *direction * (edge.length * along) + normal * offset * side;
-
         let class = VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
         let mut spec = class.spec();
         (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+        // Off the kerb by the car's own width, which the fixed metre and a half
+        // above was not.
+        //
+        // Parked cars are startup-resident and the kerbs they are parked
+        // against are streamed, so a car overlapping one is not a car sitting
+        // in a wall — it is a *static collider appearing inside a dynamic
+        // body*, a second later, when the chunk arrives. Avian resolves that
+        // the only way it can, and the patrol caught what it looks like: a
+        // parked car leaving the ground at thirteen metres a second and coming
+        // down from seventy.
+        //
+        // It went unnoticed for as long as every street was one of six widths
+        // from a table. Real widths off the extract run down to four and a
+        // half metres, and on one of those a van parked a metre and a half off
+        // the centre line has its flank inside the kerb.
+        let offset = (edge.width * 0.5 - spec.half_extents.x - KERB_CLEARANCE).max(0.0);
+        let position = a + *direction * (edge.length * along) + normal * offset * side;
         // Nose along the street, facing the way traffic on that side runs.
         let facing = if side > 0.0 { *direction } else { -*direction };
         let heading = heading_towards(facing);

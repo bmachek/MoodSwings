@@ -156,6 +156,8 @@ pub struct Ribbons {
     /// of it across a hundred and fifty metres per repeat, which is what made
     /// every pavement in Landshut a featureless pale sheet.
     footways: Vec<Handle<Mesh>>,
+    /// The walking surface of one corner pad, at the size every one of them is.
+    corner: Handle<Mesh>,
     slabs: Handle<StandardMaterial>,
 }
 
@@ -249,6 +251,11 @@ pub fn build_ribbons(
         junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0, TILE))),
         paving,
         footways,
+        corner: meshes.add(super::buildings::with_tangents(ribbon(
+            SIDEWALK_WIDTH * CORNER_SPREAD,
+            SIDEWALK_WIDTH * CORNER_SPREAD,
+            FOOTWAY_TILE,
+        ))),
         slabs,
     }
 }
@@ -270,10 +277,116 @@ pub fn build_ribbons(
 /// `widest_other` is the widest street at the node that is not this one, so a
 /// back lane meeting a dual carriageway is held back by the dual carriageway
 /// and not by itself.
-pub fn pavement_trim(widest_other: f32, arms: usize) -> f32 {
+/// The shallowest crossing the trim is willing to believe, as a sine.
+///
+/// Two streets meeting at fifteen degrees would need a setback of four times
+/// the crossing width, which is most of a short street; past this the setback
+/// is capped and the sliver of pavement that pokes out is the lesser evil.
+const SHALLOWEST: f32 = 0.26;
+
+pub fn pavement_trim(widest_other: f32, arms: usize, crossing: f32) -> f32 {
     match arms >= 3 {
-        true => widest_other * 0.5,
+        // Divided by the sine of the crossing angle, and *that* is the half of
+        // this that was missing. A pavement stops where the crossing
+        // carriageway begins — but "where it begins", measured along this
+        // street, is half the crossing width only when the two meet square.
+        // The generator's streets always do. A town read off a map never does:
+        // Landshut's junctions come in at every angle there is, and at forty
+        // degrees the true setback is half as much again. What that looked like
+        // was pavements running out across the carriageway at every oblique
+        // corner in the town.
+        true => widest_other * 0.5 / crossing.abs().max(SHALLOWEST),
         false => -SIDEWALK_WIDTH * 0.5,
+    }
+}
+
+/// How much of a corner one pavement pad covers, against the pavement's width.
+const CORNER_SPREAD: f32 = 1.5;
+
+/// Lays the pavement round the outside of a junction.
+///
+/// The pavements of the streets meeting here all stop short of the crossing
+/// carriageway — they have to, or they lie across it — and what that leaves is
+/// a hole at every corner in the town, filled by the junction's own square of
+/// tarmac. So every junction had four wedges of carriageway where the pavement
+/// should turn the corner, which is exactly what a corner is *for*.
+///
+/// One pad per pair of adjacent arms, on the bisector between them, pushed out
+/// far enough to clear both carriageways. Not a fillet and not a radius: a
+/// square slab at kerb height, which is what the strips either side of it are,
+/// and which meets them because it is placed off the same two numbers they are.
+pub fn spawn_corner(
+    commands: &mut Commands,
+    kit: &StreetsideKit,
+    ribbons: &Ribbons,
+    kerb: &Handle<StandardMaterial>,
+    at: Vec2,
+    arms: &[(Vec2, f32)],
+    chunk: IVec2,
+    range: f32,
+) {
+    if arms.len() < 3 {
+        return;
+    }
+    // Sorted by bearing, so "adjacent" means adjacent going round.
+    let mut bearings: Vec<(f32, f32)> = arms
+        .iter()
+        .filter_map(|(towards, width)| {
+            let to = *towards - at;
+            Dir2::new(to).ok().map(|d| (d.y.atan2(d.x), *width))
+        })
+        .collect();
+    if bearings.len() < 3 {
+        return;
+    }
+    bearings.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let visibility = bevy::camera::visibility::VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: range..(range * 1.05),
+        use_aabb: false,
+    };
+
+    for index in 0..bearings.len() {
+        let (first, wide_a) = bearings[index];
+        let (second, wide_b) = bearings[(index + 1) % bearings.len()];
+        // The gap going anticlockwise from the first arm to the second.
+        let mut gap = second - first;
+        if gap <= 0.0 {
+            gap += std::f32::consts::TAU;
+        }
+        // Two arms that are nearly opposite have no corner between them, they
+        // have a straight kerb, and the strips already meet along it.
+        if gap > std::f32::consts::PI * 0.92 {
+            continue;
+        }
+        let bisector = first + gap * 0.5;
+        let out = Vec2::new(bisector.cos(), bisector.sin());
+        // Where the two kerb lines cross, which is the point of the corner.
+        // `sin(gap/2)` is how much of a carriageway's half-width is spent
+        // getting away from the bisector.
+        let half = wide_a.max(wide_b) * 0.5;
+        let reach = half / (gap * 0.5).sin().abs().max(SHALLOWEST);
+        let centre = at + out * (reach + SIDEWALK_WIDTH * CORNER_SPREAD * 0.5);
+        let size = SIDEWALK_WIDTH * CORNER_SPREAD;
+
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.slab.clone()),
+            MeshMaterial3d(kerb.clone()),
+            Transform::from_xyz(centre.x, SIDEWALK_HEIGHT * 0.5, centre.y)
+                .with_rotation(Quat::from_rotation_y(-bisector))
+                .with_scale(Vec3::new(size, SIDEWALK_HEIGHT, size)),
+            visibility.clone(),
+        ));
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(ribbons.corner.clone()),
+            MeshMaterial3d(ribbons.slabs.clone()),
+            Transform::from_xyz(centre.x, SIDEWALK_HEIGHT + 0.004, centre.y)
+                .with_rotation(Quat::from_rotation_y(-bisector)),
+            visibility.clone(),
+        ));
     }
 }
 
@@ -698,7 +811,7 @@ mod tests {
         // A crossing: the strip has to be clear of the other street's tarmac,
         // which reaches half its width out from the node.
         for width in [6.0f32, 9.0, 15.0] {
-            let trim = pavement_trim(width, 4);
+            let trim = pavement_trim(width, 4, 1.0);
             assert!(
                 trim >= width * 0.5 - 1e-6,
                 "a {width}m street is crossed by a pavement stopping {trim}m short"
@@ -707,9 +820,27 @@ mod tests {
         // A kink in one street is not a crossing, and there the strips have to
         // meet — which means running *past* the node, not short of it.
         assert!(
-            pavement_trim(9.0, 2) < 0.0,
+            pavement_trim(9.0, 2, 1.0) < 0.0,
             "a bend leaves a notch of bare asphalt between its two pavements"
         );
+    }
+
+    /// The half of the setback a grid never needed. Two streets meeting square
+    /// give up half a carriageway; two meeting at forty degrees give up half a
+    /// carriageway *measured along the crossing street*, which is much further
+    /// along this one. A town read off a map is mostly the second case.
+    #[test]
+    fn an_oblique_crossing_is_given_more_room_than_a_square_one() {
+        let square = pavement_trim(10.0, 4, 1.0);
+        let oblique = pavement_trim(10.0, 4, (40.0f32).to_radians().sin());
+        assert!(
+            oblique > square * 1.4,
+            "a forty-degree crossing was trimmed {oblique}m against {square}m square"
+        );
+        // And a street meeting at almost nothing does not ask for a setback
+        // longer than the street.
+        let grazing = pavement_trim(10.0, 4, (2.0f32).to_radians().sin());
+        assert!(grazing < 25.0, "a grazing crossing asked for {grazing}m");
     }
 
     /// A building placed along a street looks at it.

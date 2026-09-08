@@ -394,15 +394,28 @@ pub fn update_streaming(
                     // than passed down, because "the widest *other* street at
                     // this node" is a question about the network and the
                     // paving code has only ever been handed one edge.
-                    let setback = |at: super::roadgraph::NodeId| {
+                    let setback = |at: super::roadgraph::NodeId, away: Vec2| {
                         let node = city.graph.node(at);
-                        let widest = node
-                            .edges
-                            .iter()
-                            .filter(|&&other| other != id)
-                            .map(|&other| city.graph.edge(other).width)
-                            .fold(0.0f32, f32::max);
-                        super::streetside::pavement_trim(widest, node.edges.len())
+                        let mine = (away - node.pos).normalize_or_zero();
+                        let mut widest = 0.0f32;
+                        // The *shallowest* crossing, not the average: one
+                        // street coming in at twenty degrees is what decides
+                        // how far back this pavement has to stop, however
+                        // square the others are.
+                        let mut crossing = 1.0f32;
+                        for &other in &node.edges {
+                            if other == id {
+                                continue;
+                            }
+                            let edge = city.graph.edge(other);
+                            widest = widest.max(edge.width);
+                            let far = if edge.a == at { edge.b } else { edge.a };
+                            let theirs = (city.graph.node(far).pos - node.pos).normalize_or_zero();
+                            // |sin| between the two, from the 2D cross product.
+                            let sine = (mine.x * theirs.y - mine.y * theirs.x).abs();
+                            crossing = crossing.min(sine.max(1e-3));
+                        }
+                        super::streetside::pavement_trim(widest, node.edges.len(), crossing)
                     };
                     super::streetside::spawn_edge(
                         &mut commands,
@@ -413,7 +426,7 @@ pub fn update_streaming(
                         edge,
                         from,
                         to,
-                        (setback(edge.a), setback(edge.b)),
+                        (setback(edge.a, to), setback(edge.b, from)),
                         chunk,
                         kerb_range,
                     );
@@ -486,6 +499,18 @@ pub fn update_streaming(
                         widest,
                         paved,
                         chunk,
+                    );
+                    // And the pavement round the outside of it, which is what
+                    // the strips give up when they stop short of the crossing.
+                    super::streetside::spawn_corner(
+                        &mut commands,
+                        &street.kerbs,
+                        ribbons,
+                        &kits.assets.concrete(),
+                        node.pos,
+                        &arms,
+                        chunk,
+                        kerb_range,
                     );
                 }
                 super::props::spawn_junction(
