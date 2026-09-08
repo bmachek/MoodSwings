@@ -314,7 +314,9 @@ pub fn build_assets(
     images: &mut Assets<Image>,
 ) -> FoliageKit {
     let bark = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.27, 0.24, 0.21),
+        base_color: Color::srgb(0.42, 0.38, 0.33),
+        base_color_texture: Some(images.add(super::texture::bark())),
+        normal_map_texture: Some(images.add(super::texture::bark_normal())),
         perceptual_roughness: 0.94,
         ..default()
     });
@@ -330,13 +332,9 @@ pub fn build_assets(
         // point it grows out of — which is what lets the wind rotate it.
         let height = clear + 0.8;
         trunk.push((
-            meshes.add(
-                Cylinder::new(radius, height)
-                    .mesh()
-                    .resolution(7)
-                    .build()
-                    .translated_by(Vec3::Y * height * 0.5),
-            ),
+            meshes.add(super::buildings::with_tangents(timber(
+                species, radius, height,
+            ))),
             bark.clone(),
         ));
 
@@ -372,6 +370,77 @@ pub fn build_assets(
             )),
         ),
     }
+}
+
+/// How thick a bough is where it leaves the trunk, against the trunk's own
+/// radius, and how far out along its blob it reaches before the leaves take
+/// over.
+const BOUGH_THICK: f32 = 0.40;
+const BOUGH_REACH: f32 = 0.78;
+
+/// A tapered limb between two points: the one primitive a tree is made of.
+///
+/// Two stacked cylinders rather than one, because a branch that does not get
+/// thinner is a pipe. Bevy has no frustum in its shape kit and one is not worth
+/// hand-rolling for a shape that is three pixels wide at the distance anybody
+/// looks at it.
+fn limb(from: Vec3, to: Vec3, radius: f32) -> Mesh {
+    let axis = to - from;
+    let length = axis.length().max(1e-3);
+    let along = axis / length;
+    let turn = Quat::from_rotation_arc(Vec3::Y, along);
+
+    let piece = |at: f32, span: f32, radius: f32| {
+        Cylinder::new(radius, length * span)
+            .mesh()
+            .resolution(5)
+            .build()
+            .rotated_by(turn)
+            .translated_by(from + axis * (at + span * 0.5))
+    };
+
+    let mut mesh = piece(0.0, 0.55, radius);
+    if let Err(error) = mesh.merge(&piece(0.5, 0.5, radius * 0.6)) {
+        warn!("a branch came out in one piece: {error}");
+    }
+    mesh
+}
+
+/// Trunk and boughs, as one mesh.
+///
+/// One mesh and therefore one draw, and — because the boughs are part of the
+/// trunk rather than of the crown — they lean with the wind for free: the trunk
+/// is the entity the sway rotates, and everything welded to it comes along.
+///
+/// Boughs are new, and they are new because the crown became see-through. While
+/// a canopy was an opaque ball there was nothing to look into and a bare trunk
+/// running up to it was fine; with the leaves cut away you can see through the
+/// gaps, and what you saw through them was nothing at all. A tree read as a
+/// lollipop from underneath, which is the angle a street tree is most often
+/// seen from.
+fn timber(species: Species, radius: f32, height: f32) -> Mesh {
+    let mut mesh = limb(Vec3::ZERO, Vec3::Y * height, radius);
+
+    // Out of the top of the trunk, one to each blob of crown, stopping well
+    // short of its middle so the leaves swallow the end.
+    let fork = Vec3::Y * (height - 0.45);
+    for (centre, blob) in species.crown() {
+        let (_, clear) = species.trunk();
+        let target = Vec3::new(centre.x, clear + centre.y, centre.z);
+        let out = fork + (target - fork) * BOUGH_REACH;
+        if let Err(error) = mesh.merge(&limb(fork, out, radius * BOUGH_THICK)) {
+            warn!("a {species:?} lost a bough: {error}");
+        }
+        // And one sub-branch off it, thrown to the side, which is what stops a
+        // crown looking like an umbrella frame.
+        let aside = out
+            + (target - fork).normalize_or_zero() * (blob * 0.35)
+            + Vec3::new(centre.z, blob * 0.30, -centre.x) * 0.28;
+        if let Err(error) = mesh.merge(&limb(out, aside, radius * BOUGH_THICK * 0.55)) {
+            warn!("a {species:?} lost a branch: {error}");
+        }
+    }
+    mesh
 }
 
 /// How far a blob's surface is pushed in and out, as a fraction of its radius.

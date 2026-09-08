@@ -471,6 +471,44 @@ pub fn grass() -> Image {
     })
 }
 
+// ---------------------------------------------------------------- bark ----
+
+/// Furrows around a trunk, as a height field.
+///
+/// A trunk's UVs run around it in `u` and up it in `v`, so a bark pattern is
+/// one that is *continuous* along v and broken across u — ridges that run up
+/// the tree and wander as they go. Which is a stretched noise, plus a second
+/// one to make the ridges themselves lumpy.
+fn bark_height(u: f32, v: f32) -> f32 {
+    // Stretched fifteen to one: the ridges run up the trunk, not around it.
+    let furrow = fbm(u * 8.0, v * 0.55, 8, 4, 211);
+    // And crack across, every so often, the way an old plane tree does.
+    let plates = fbm(u * 2.0, v * 3.5, 5, 3, 223);
+    (furrow * 0.72 + plates * 0.28).clamp(0.0, 1.0)
+}
+
+/// Bark: deep vertical furrows with the light left in the ridges.
+pub fn bark() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let height = bark_height(u, v);
+        // Dark in the furrow and pale on the ridge, which is the whole of what
+        // bark looks like from three metres away.
+        let value = 0.55 + height * 0.62;
+        // Plane bark is grey-green where it has flaked and brown where it has
+        // not, so the two ends of the range are not the same hue.
+        [
+            byte(value * 0.98),
+            byte(value * 0.94),
+            byte(value * (0.78 + height * 0.14)),
+            255,
+        ]
+    })
+}
+
+pub fn bark_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.085, bark_height)
+}
+
 // ------------------------------------------------------------ cobblestone ----
 
 /// Stones across one repeat of the sett texture.
@@ -583,7 +621,7 @@ pub fn cobbles_normal() -> Image {
 /// the silhouette closes back up into the ball the geometry actually is. The
 /// number is a threshold on a field that averages a half, so it runs backwards:
 /// higher cuts away more.
-const CANOPY_COVER: f32 = 0.47;
+const CANOPY_COVER: f32 = 0.435;
 
 /// Leaf mass, as a field: high in the middle of a clump, low in the gaps.
 fn canopy_height(u: f32, v: f32) -> f32 {
@@ -614,7 +652,10 @@ pub fn foliage() -> Image {
         // Leaves out at the edge of a clump are the ones in the light, and they
         // are also the young ones: brighter, and yellower.
         let edge = 1.0 - (mass - CANOPY_COVER).max(0.0) * 1.6;
-        let value = 0.72 + edge * 0.42;
+        // Kept under one. Above it the young leaves at the edge of every clump
+        // came out brighter than the sky behind them, and a canopy dusted with
+        // white reads as snow rather than as sunlight.
+        let value = 0.66 + edge * 0.30;
         [
             byte(value * 0.96),
             byte(value * 1.02),
