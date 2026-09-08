@@ -74,8 +74,15 @@ pub struct CityAssets {
     /// Indexed by `district_index * PALETTE_SIZE + palette`.
     plain: Vec<Handle<StandardMaterial>>,
     roof: Handle<StandardMaterial>,
+    /// The kerb face, tiled for a band a quarter of a metre tall.
     kerb: Handle<StandardMaterial>,
     park_kerb: Handle<StandardMaterial>,
+    /// The same concrete, tiled for something with two comparable dimensions —
+    /// a church wall, a parking deck, a stand. Separate from `kerb` only
+    /// because a unit cube's faces carry UVs from zero to one whatever they are
+    /// scaled to, so the tiling that suits a thirty-metre strip a quarter of a
+    /// metre tall does not suit anything else in the city.
+    concrete: Handle<StandardMaterial>,
     /// One per entry in [`GROUND_BUCKETS`].
     paving: Vec<Handle<StandardMaterial>>,
     grass: Vec<Handle<StandardMaterial>>,
@@ -340,6 +347,47 @@ pub fn with_tangents(mut mesh: Mesh) -> Mesh {
     mesh
 }
 
+/// Texture repeats across a kerb face, along it and up it.
+///
+/// The one deliberately lopsided tiling in the city. A unit cube's side face
+/// carries UVs from zero to one however the cube is scaled, and a kerb is scaled
+/// to something like thirty metres by a quarter of one — so a square tiling puts
+/// three metres of concrete across the length and eight millimetres of it up the
+/// height. Stretching the *u* axis instead lands roughly a metre of grain along
+/// the kerb and about eighty centimetres up a face that is only twenty-eight
+/// high, which is a four-to-one stretch and reads as a brushed kerbstone rather
+/// than as the flat grey paint that was there before.
+const KERB_TILING: Vec2 = Vec2::new(10.0, 0.4);
+
+/// A concrete surface, scanned if the set was downloaded and painted if not.
+///
+/// The tint survives either way, which is what `park_kerb` is: the same
+/// concrete, browner, because a park's edging is not a city kerbstone.
+fn concrete_slab(
+    library: &super::material::MaterialLibrary,
+    images: &mut Assets<Image>,
+    tint: Color,
+    tiling: Vec2,
+) -> StandardMaterial {
+    let mut slab = StandardMaterial {
+        uv_transform: Affine2::from_scale(tiling),
+        perceptual_roughness: 0.95,
+        ..default()
+    };
+    match library.get(super::material::set::CONCRETE_ROUGH) {
+        Some(scanned) => {
+            scanned.apply(&mut slab);
+            slab.base_color = tint;
+        }
+        None => {
+            slab.base_color = tint;
+            slab.base_color_texture = Some(images.add(texture::paving()));
+            slab.normal_map_texture = Some(images.add(texture::paving_normal()));
+        }
+    }
+    slab
+}
+
 /// Nearest tiling factor that puts ground tiles near [`GROUND_TILE`] across a
 /// surface `extent` metres wide.
 fn ground_bucket(extent: f32) -> usize {
@@ -443,6 +491,7 @@ pub fn build_assets(
     // Painted stand-ins, made whether or not they end up used: the scanned
     // library decides per surface, and a set can be present for the pavement
     // and missing for the grass.
+    // (See `concrete_slab` below for the two kerb/concrete materials.)
     let paving_texture = images.add(texture::paving());
     let paving_relief = images.add(texture::paving_normal());
     let grass_texture = images.add(texture::grass());
@@ -513,16 +562,24 @@ pub fn build_assets(
         building,
         plain,
         roof: materials.add(tar),
-        kerb: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.50, 0.50, 0.51),
-            perceptual_roughness: 0.95,
-            ..default()
-        }),
-        park_kerb: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.33, 0.31, 0.26),
-            perceptual_roughness: 1.0,
-            ..default()
-        }),
+        kerb: materials.add(concrete_slab(
+            library,
+            images,
+            Color::srgb(0.50, 0.50, 0.51),
+            KERB_TILING,
+        )),
+        park_kerb: materials.add(concrete_slab(
+            library,
+            images,
+            Color::srgb(0.33, 0.31, 0.26),
+            KERB_TILING,
+        )),
+        concrete: materials.add(concrete_slab(
+            library,
+            images,
+            Color::srgb(0.50, 0.50, 0.51),
+            Vec2::splat(7.0),
+        )),
         paving,
         grass,
         spire: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(4).build()),
@@ -588,7 +645,7 @@ impl CityAssets {
 
     /// The kerb concrete, for structures that are honestly made of it.
     pub fn concrete(&self) -> Handle<StandardMaterial> {
-        self.kerb.clone()
+        self.concrete.clone()
     }
 
     /// The tarred-roof material, for anything that wants to read as roofing.

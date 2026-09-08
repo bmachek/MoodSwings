@@ -95,6 +95,72 @@ fn depth(world_position: vec2<f32>, wetness: f32) -> f32 {
     return smoothstep(level, level + 0.13, low);
 }
 
+// Metres across one repeat of the largest scale of road wear — the patch a
+// utility dug up and made good, the bay that was resurfaced on its own.
+const PATCH_TILE: f32 = 34.0;
+// How far a patch is allowed to move the road's value either way.
+const PATCH: f32 = 0.30;
+// Metres across one repeat of the crack field, and how much of that field is
+// actually cracked.
+const CRACK_TILE: f32 = 4.2;
+const CRACK_LINE: f32 = 0.982;
+// Metres across the field that decides *where* the road is cracked at all.
+const CRACK_AREA: f32 = 26.0;
+
+// Ages the road.
+//
+// One scan tiled at six metres gives a surface that is correct everywhere and
+// the same everywhere: stand in the middle of a junction and the tarmac fifty
+// metres down each of the four streets is the identical grey. Real tarmac is
+// not, and not because of anything at the scale of the aggregate — it is
+// because a road is a patchwork. It was laid in bays, dug up for a main and
+// made good in a slightly different mix, sealed along the joins, and cracked
+// where the ground moved under it.
+//
+// So a second field, an order of magnitude larger than the texture, in world
+// space where it belongs. It costs no texture fetch: the noise is already here
+// for the puddles, which is also why the two are tuned to different tile sizes —
+// wear at the size of the puddles would read as one thing, not two.
+fn age(input: PbrInput) -> PbrInput {
+    var pbr_input = input;
+    let here = pbr_input.world_position.xz;
+
+    // The patchwork. A generous smoothstep either side of the middle, so most
+    // of the road is near its own colour and the made-good bays have edges.
+    let field = fbm(here / PATCH_TILE);
+    let mend = (smoothstep(0.34, 0.44, field) + smoothstep(0.66, 0.56, field) - 1.0);
+    let value = 1.0 + mend * PATCH;
+
+    // Cracks, drawn as a ridge through a higher-frequency field and cut off
+    // hard. A soft threshold gives tarmac rivers rather than a crack — the same
+    // lesson `texture::asphalt_height` records, at ten times the size, because
+    // a crack in a road runs for metres and the ones in the scan run for
+    // centimetres.
+    let ridge = 1.0 - abs(fbm(here / CRACK_TILE) * 2.0 - 1.0);
+    // Gated by a third, slower field, because a ridge through smooth noise runs
+    // unbroken for as far as the noise does — which came out as a single line
+    // wandering the length of a street and reading as a cable somebody had
+    // dropped rather than as a crack. A road cracks in patches, where the ground
+    // under *that bit* moved, and everywhere else is intact.
+    let cracked = smoothstep(0.46, 0.62, fbm(here / CRACK_AREA));
+    let crack = smoothstep(CRACK_LINE, 1.0, ridge) * cracked;
+
+    pbr_input.material.base_color = vec4(
+        pbr_input.material.base_color.rgb * value * (1.0 - crack * 0.45),
+        pbr_input.material.base_color.a,
+    );
+    // A fresh patch is blacker *and* less worn, so it is rougher; the old
+    // surface around it has been polished by tyres. And a crack is a hole,
+    // which reflects nothing at all.
+    pbr_input.material.perceptual_roughness = clamp(
+        pbr_input.material.perceptual_roughness + mend * 0.12 + crack * 0.25,
+        0.04,
+        1.0,
+    );
+
+    return pbr_input;
+}
+
 // How much of the scan's relief survives, looking straight down at the road and
 // looking along it.
 const RELIEF_FACE_ON: f32 = 0.70;
@@ -196,9 +262,11 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-    // Settle first. Water lies on top of the relief and the wetness pass already
-    // flattens the normal where it is deep, so running it the other way round
-    // would have `settle` argue with a puddle about a surface that is not there.
+    // Order: what the road is, then how flat it looks from here, then what is
+    // lying on it. Water goes last because it covers everything under it — a
+    // puddle over a crack is a puddle, and the wetness pass is the one that
+    // knows that.
+    pbr_input = age(pbr_input);
     pbr_input = settle(pbr_input);
     pbr_input = wet(pbr_input);
 

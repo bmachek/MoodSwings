@@ -137,6 +137,91 @@ fn dress(input: PbrInput) -> PbrInput {
     let tilt = (tangent * packed.x + bitangent * packed.y) * settings.relief * wall;
     pbr_input.N = normalize(pbr_input.N + tilt);
 
+    return weather_it(pbr_input, plane, mean, wall, facing);
+}
+
+// ---------------------------------------------------------------------------
+// What a building has been standing in
+// ---------------------------------------------------------------------------
+
+// How far the wall's own value is allowed to wander at the largest scale, and
+// how many metres of wall one repeat of that wandering covers.
+const MACRO: f32 = 0.26;
+const MACRO_TILE: f32 = 11.0;
+
+// Metres over which splash-back from the pavement fades out.
+const SPLASH: f32 = 2.6;
+// How many times taller than they are wide a rain streak runs.
+const STREAK_STRETCH: f32 = 14.0;
+// How dark the dirtiest part of a wall gets, and how matte.
+const GRIME: f32 = 0.30;
+
+// Ages a wall.
+//
+// Everything above this point makes a wall out of one photograph, and one
+// photograph of a wall is a wall that has been standing for exactly as long as
+// the shutter was open. What is missing is not detail — the grain has plenty —
+// but *scale*. A real facade differs from itself over ten metres as much as it
+// does over ten centimetres: the render was mixed in batches, the sun has been
+// on one end of it longer, and the whole thing has been rained on for forty
+// years by rain that runs downwards.
+//
+// So three things, and none of them needs a new texture. The grain is sampled
+// again at a twelfth of the frequency for the slow wander, and again at a
+// stretched aspect for the streaks — a photograph read as noise, which is what
+// a photograph mostly is at that magnification. And the splash zone comes from
+// nothing at all: it is the height above the pavement, which the fragment
+// already knows.
+//
+// Only vertical faces. A roof is rained *on* rather than run down, and a
+// horizontal surface with vertical streaks on it reads as a mistake.
+fn weather_it(
+    input: PbrInput,
+    plane: vec2<f32>,
+    mean: f32,
+    wall: f32,
+    facing: vec3<f32>,
+) -> PbrInput {
+    var pbr_input = input;
+    let upright = 1.0 - saturate(facing.y * 2.0);
+    let mask = wall * upright;
+    if mask < 0.01 {
+        return pbr_input;
+    }
+
+    // The slow wander. Green channel alone: a scanned wall's three channels are
+    // near enough the same shape at this scale that the other two are two more
+    // fetches for nothing, and taking one keeps the wander achromatic — a
+    // district's colour is decided elsewhere and this must not tint it.
+    let broad = textureSample(grain_color, grain_color_sampler, plane / MACRO_TILE).g;
+    let wander = 1.0 + (broad / mean - 1.0) * MACRO * mask;
+
+    // Rain runs down. `plane.y` is world height on any wall — the projection
+    // above picks the zy or xy plane for a vertical face — so stretching the
+    // sample along it smears the grain into vertical runs, which is the shape
+    // dirt on a building actually has.
+    let run = textureSample(
+        grain_color,
+        grain_color_sampler,
+        vec2(plane.x * 0.75, plane.y / STREAK_STRETCH) / settings.tile,
+    ).g;
+    let streak = saturate((1.0 - run / mean) * 1.4);
+
+    // And splash-back off the pavement, which is the dirtiest part of any wall
+    // in any city and the part a camera at eye height is always looking at.
+    let base = exp(-max(pbr_input.world_position.y, 0.0) / SPLASH);
+
+    let dirt = saturate(base * 0.85 + streak * 0.55) * GRIME * mask;
+
+    pbr_input.material.base_color = vec4(
+        pbr_input.material.base_color.rgb * wander * (1.0 - dirt),
+        pbr_input.material.base_color.a,
+    );
+    // Dirt is matte. Leaving the roughness alone would give a wall that is
+    // darker where it is filthy and no less polished, which reads as paint.
+    pbr_input.material.perceptual_roughness =
+        mix(pbr_input.material.perceptual_roughness, 0.96, dirt);
+
     return pbr_input;
 }
 
@@ -148,6 +233,12 @@ fn dress(input: PbrInput) -> PbrInput {
 const ROOM_DEPTH: f32 = 1.35;
 // How many rooms have something drawn across the window instead.
 const BLINDS: f32 = 0.34;
+// How polished a pane is. Not zero: a mirror finish reflects the environment
+// map as a hard-edged sun disc and every window in the city catches it at once.
+const GLASS_ROUGHNESS: f32 = 0.075;
+// How far a pane is allowed to bow out of the plane of its wall, in radians of
+// surface normal. Small — this is a tilt you only ever see in a reflection.
+const GLASS_BOW: f32 = 0.055;
 
 struct Face {
     u: vec3<f32>,
@@ -309,6 +400,25 @@ fn glaze(input: PbrInput, uv: vec2<f32>) -> PbrInput {
     // A dielectric at this roughness still mirrors the street at a glancing
     // angle, which is when a window actually reflects anything.
     pbr_input.material.metallic = 0.0;
+    // And it is *smooth*. The roughness arriving here is the wall's, off the
+    // facade's packed map, and at that value a pane returns a smear of sky
+    // rather than an image of one — which is most of why a generated building
+    // reads as a model of a building. Glass is nearly a mirror.
+    pbr_input.material.perceptual_roughness = GLASS_ROUGHNESS;
+
+    // Panes are not coplanar and never have been. A sheet of glass in a frame
+    // bows a little under its own weight and its putty, an older one bows a
+    // lot, and what that does is make each window in a row reflect the sky at a
+    // slightly different angle. Without it a facade of forty windows returns
+    // forty copies of the same reflection, lined up, which the eye reads as a
+    // printed pattern faster than it reads any amount of correct shading.
+    //
+    // Two hashes off the key that already identifies this pane, so the tilt is
+    // constant across a window and different for the next one along.
+    let bow = vec2(hash21(key + 7.1) - 0.5, hash21(key + 63.9) - 0.5) * GLASS_BOW;
+    let across = normalize(axes.u);
+    let up = normalize(axes.v);
+    pbr_input.N = normalize(pbr_input.N + across * bow.x + up * bow.y);
     // And a lit room lights its own back wall, so the parallax survives after
     // dark — which is the hour this whole function exists for.
     pbr_input.material.emissive = vec4(
