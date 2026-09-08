@@ -108,6 +108,27 @@ pub fn effect_gain(config: &GameConfig, gain: f32) -> f32 {
     config.audio.master * config.audio.effects * gain
 }
 
+/// The level a sound is asking for, before the limiter has had its say.
+///
+/// Bevy applies [`GlobalVolume`] when a sink is *created* and never touches it
+/// again — its own documented behaviour — so the master fader used to be a
+/// fader with nothing on the far end of it. It moved, and everything already
+/// sounding carried on at whatever level it happened to start at: a bed that
+/// began under a crash stayed ducked for the rest of the session, the crash
+/// itself was never turned down at all, and the sum went on clipping, which is
+/// the one thing the limiter exists to stop. The gain was even measured off
+/// the sinks it had already discounted, so it fought its own last frame.
+///
+/// So [`ride_the_gain`] rides the sinks by hand, and to do that it has to know
+/// what each of them *wanted*. It cannot read that back off the sink: a sink's
+/// volume is the ducked one, and ducking it again every frame is a fade to
+/// silence. A one-shot's wish never changes and is already on its
+/// `PlaybackSettings`. A loop's changes every frame — engine load, distance,
+/// how hard a geyser is blowing — and this is where its own system writes it,
+/// instead of writing the sink and being overruled.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Level(pub f32);
+
 /// The summed level the master fader is allowed to let through.
 ///
 /// Above one, because summing the sinks' own volumes is a pessimistic
@@ -116,6 +137,12 @@ pub fn effect_gain(config: &GameConfig, gain: f32) -> f32 {
 /// again by the mixer for its distance after this has read it. Set at the
 /// point where a junction full of traffic is held down and a single crash
 /// still lands at full force.
+///
+/// Read against the sum with the master fader divided out, so this is a claim
+/// about the mix rather than about the setting — see [`ride_the_gain`]. An
+/// ordinary Landshut street asks for about three and a half and a busy one for
+/// six and a half, so the fader is doing real work most of the time: that is
+/// the sum that was going out unattenuated and being heard as crackle.
 const CEILING: f32 = 1.5;
 
 /// Master gain, kept moving by [`ride_the_gain`].
@@ -185,35 +212,110 @@ pub fn ride(current: f32, target: f32, dt: f32) -> f32 {
 /// Reads the sinks rather than being told by the systems that set them: they
 /// are the one place every loop, one-shot, bed and emitter is guaranteed to
 /// turn up, whoever spawned it and whether or not they remembered to book it
-/// in anywhere.
+/// in anywhere. What it reads off each of them is the level it *asked* for —
+/// see [`Level`] for why that cannot be the sink's own volume, and why this
+/// has to write every sink itself rather than leave it to `GlobalVolume`.
+///
+/// In `Ui`, after everything that sets a level, so a sink is written once per
+/// frame and the write is the last word.
 fn ride_the_gain(
     time: Res<Time>,
+    config: Res<GameConfig>,
     mut limiter: ResMut<Limiter>,
     mut global: ResMut<GlobalVolume>,
-    plain: Query<&bevy::audio::AudioSink>,
-    spatial: Query<&bevy::audio::SpatialAudioSink>,
+    mut plain: Query<(
+        &mut bevy::audio::AudioSink,
+        &PlaybackSettings,
+        Option<&Level>,
+    )>,
+    mut spatial: Query<(
+        &mut bevy::audio::SpatialAudioSink,
+        &PlaybackSettings,
+        Option<&Level>,
+    )>,
 ) {
     use bevy::audio::AudioSinkPlayback;
 
+    /// What one sink is asking for. A loop says so every frame; a one-shot
+    /// said so once, when it was spawned, and its `PlaybackSettings` still
+    /// carry it.
+    fn wanted(settings: &PlaybackSettings, level: Option<&Level>) -> f32 {
+        level.map_or_else(|| settings.volume.to_linear(), |level| level.0)
+    }
+
+    // A muted sink is asking for nothing and must not be counted, or the
+    // fader spends a quiet street holding down silence.
     let mut loud = 0.0;
-    for sink in &plain {
+    for (sink, settings, level) in &plain {
         if !sink.is_muted() {
-            loud += sink.volume().to_linear();
+            loud += wanted(settings, level);
         }
     }
-    for sink in &spatial {
+    for (sink, settings, level) in &spatial {
         if !sink.is_muted() {
-            loud += sink.volume().to_linear();
+            loud += wanted(settings, level);
         }
     }
+
+    // Measured with the master fader divided back out, so the ceiling is a
+    // statement about the *mix* and not about the setting. Every level in the
+    // game is master times something, so a limiter that ducked the raw sum
+    // would cancel the master exactly: turning the game up would raise `loud`,
+    // lower the gain by the same factor, and come out at the same loudness.
+    // The slider would do nothing at all on a busy street — which is where a
+    // player is most likely to reach for it.
+    let master = config.audio.master.max(1e-3);
     limiter.loud = loud;
-    limiter.gain = ride(limiter.gain, duck(loud, CEILING), time.delta_secs());
-    global.volume = Volume::Linear(limiter.gain);
+    limiter.gain = ride(
+        limiter.gain,
+        duck(loud / master, CEILING),
+        time.delta_secs(),
+    );
+    let gain = limiter.gain;
+
+    // New sinks are born ducked, so nothing spawned this frame blares for the
+    // one frame before the loop below first reaches it...
+    global.volume = Volume::Linear(gain);
+    // ...and everything already sounding is held there. Muted sinks are written
+    // too: rodio remembers a muted sink's volume, so unmuting has to land on
+    // the current gain rather than on whatever was true when it went quiet.
+    for (mut sink, settings, level) in &mut plain {
+        sink.set_volume(Volume::Linear(wanted(settings, level) * gain));
+    }
+    for (mut sink, settings, level) in &mut spatial {
+        sink.set_volume(Volume::Linear(wanted(settings, level) * gain));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Turning the game up must make it louder, ceiling or no ceiling.
+    ///
+    /// Every level in the bank is the master fader times something, so the
+    /// summed level moves with the fader too — and a limiter that ducked the
+    /// raw sum would divide out exactly what the player just added. This pins
+    /// the arithmetic that stops it: at twice the master, the same street ends
+    /// up twice as loud, both settings ducking.
+    #[test]
+    fn the_master_fader_still_does_something_under_the_ceiling() {
+        let asked = 4.0; // what a busy street wants, at master 1.0
+        let out = |master: f32| {
+            let loud = asked * master;
+            loud * duck(loud / master, CEILING)
+        };
+        assert!(
+            out(1.0) > CEILING - 1e-4,
+            "a full master is below the ceiling"
+        );
+        assert!(
+            (out(2.0) / out(1.0) - 2.0).abs() < 1e-4,
+            "twice the master came out {} times as loud",
+            out(2.0) / out(1.0)
+        );
+        assert!((out(0.5) / out(1.0) - 0.5).abs() < 1e-4);
+    }
 
     #[test]
     fn a_quiet_street_is_not_turned_down_at_all() {

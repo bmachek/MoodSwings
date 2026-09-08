@@ -13,14 +13,14 @@
 //! Nothing in here writes to the simulation. If a system in this file were
 //! deleted the game would play identically, in silence.
 
-use bevy::audio::{AudioSinkPlayback, SpatialAudioSink, Volume};
+use bevy::audio::{AudioSinkPlayback, SpatialAudioSink};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use rand::RngExt;
 
 use super::bank::SoundBank;
 use super::synth::SynthSound;
-use super::{AudioRng, close_once, effect_gain, spatial_once};
+use super::{AudioRng, Level, close_once, effect_gain, spatial_once};
 use crate::ai::animal::{Cat, Dog};
 use crate::bounce::launch::KnockedDown;
 use crate::core::config::GameConfig;
@@ -183,6 +183,7 @@ fn tend_emitters(
         Entity,
         &GlobalTransform,
         &AmbienceEmitter,
+        &mut Level,
         &mut SpatialAudioSink,
     )>,
 ) {
@@ -200,13 +201,13 @@ fn tend_emitters(
     near.truncate(EMITTER_CHOIR);
     let audible: Vec<Entity> = near.into_iter().map(|(_, entity)| entity).collect();
 
-    for (entity, at, emitter, mut sink) in &mut emitters {
+    for (entity, at, emitter, mut wants, mut sink) in &mut emitters {
         let level = if audible.contains(&entity) {
             base * emitter.gain * linger(at.translation().distance(ears))
         } else {
             0.0
         };
-        sink.set_volume(Volume::Linear(level));
+        wants.0 = level;
         // A muted sink remembers its volume, so unmuting lands on the level
         // just set rather than on last week's.
         if level > 0.001 {
@@ -439,7 +440,7 @@ fn voice_geysers(
     config: Res<GameConfig>,
     bank: Res<SoundBank>,
     fresh: Query<Entity, (With<Geyser>, Without<SpatialAudioSink>)>,
-    mut running: Query<(&Geyser, &mut SpatialAudioSink)>,
+    mut running: Query<(&Geyser, &mut Level, &mut SpatialAudioSink)>,
 ) {
     for geyser in &fresh {
         commands.entity(geyser).insert((
@@ -447,12 +448,12 @@ fn voice_geysers(
             // Muted for the same reason the vehicle voices start muted: the
             // first frame must not blare before the level below has run once.
             PlaybackSettings::LOOP.with_spatial(true).muted(),
+            Level(0.0),
         ));
     }
-    for (geyser, mut sink) in &mut running {
-        let level = effect_gain(&config, gain::SPRAY) * pressure(geyser.life.fraction());
-        sink.set_volume(Volume::Linear(level));
-        if level > 0.001 && sink.is_muted() {
+    for (geyser, mut level, mut sink) in &mut running {
+        level.0 = effect_gain(&config, gain::SPRAY) * pressure(geyser.life.fraction());
+        if level.0 > 0.001 && sink.is_muted() {
             sink.unmute();
         }
     }
@@ -613,6 +614,7 @@ fn manage_vehicle_voices(
                 AudioPlayer(bank.engine.clone()),
                 looping,
                 place,
+                Level(0.0),
             ));
             car.spawn((
                 Voice {
@@ -622,6 +624,7 @@ fn manage_vehicle_voices(
                 AudioPlayer(bank.screech.clone()),
                 looping,
                 place,
+                Level(0.0),
             ));
         });
     }
@@ -641,7 +644,7 @@ fn update_vehicle_voices(
     config: Res<GameConfig>,
     listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
     vehicles: Query<(Entity, &VehicleState, &VehicleInput, &Transform)>,
-    mut voices: Query<(&Voice, &mut SpatialAudioSink)>,
+    mut voices: Query<(&Voice, &mut Level, &mut SpatialAudioSink)>,
 ) {
     // Measured from the camera, because that is where the `SpatialListener`
     // sits — this used to measure from the player, and in the free camera the
@@ -662,7 +665,7 @@ fn update_vehicle_voices(
     near.truncate(ENGINE_CHOIR);
     let audible: HashSet<Entity> = near.into_iter().map(|(_, entity)| entity).collect();
 
-    for (voice, mut sink) in &mut voices {
+    for (voice, mut wants, mut sink) in &mut voices {
         let Ok((_, state, input, at)) = vehicles.get(voice.owner) else {
             continue;
         };
@@ -695,7 +698,7 @@ fn update_vehicle_voices(
         // A muted sink still remembers its volume, so unmuting lands on the
         // right level rather than on whatever it was before.
         let level = level * heard;
-        sink.set_volume(Volume::Linear(level));
+        wants.0 = level;
         if level > 0.001 {
             if sink.is_muted() {
                 sink.unmute();
@@ -728,6 +731,7 @@ fn start_ambience(
             // Muted until the first mix pass, so no bed blares at full
             // synthesis level for a frame before the mood is read.
             PlaybackSettings::LOOP.muted(),
+            Level(0.0),
         ));
     }
 }
@@ -752,17 +756,17 @@ pub fn ambience_mix(mood: f32) -> (f32, f32, f32) {
 fn update_ambience(
     config: Res<GameConfig>,
     city: Res<CityMood>,
-    mut beds: Query<(&Ambience, &mut bevy::audio::AudioSink)>,
+    mut beds: Query<(&Ambience, &mut Level, &mut bevy::audio::AudioSink)>,
 ) {
     let (traffic, birds, uproar) = ambience_mix(city.average);
     let base = config.audio.master * config.audio.ambience;
-    for (bed, mut sink) in &mut beds {
+    for (bed, mut wants, mut sink) in &mut beds {
         let level = match bed {
             Ambience::Traffic => traffic * gain::TRAFFIC_BED,
             Ambience::Birdsong => birds * gain::BIRDS_BED,
             Ambience::Uproar => uproar * gain::UPROAR_BED,
         };
-        sink.set_volume(Volume::Linear(base * level));
+        wants.0 = base * level;
         // A muted sink remembers its volume, so unmuting lands on the level
         // just set rather than on last week's.
         if base * level > 0.001 {
