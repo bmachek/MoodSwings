@@ -260,6 +260,31 @@ pub fn build_ribbons(
     }
 }
 
+/// The lowest a carriageway is laid, in metres above the ground, and how much
+/// height the widest street in the town is allowed to claim over the narrowest.
+const ROAD_BED: f32 = 0.008;
+const ROAD_RANK: f32 = 0.006;
+/// The width, in metres, at which a street has claimed all of it.
+const WIDEST_STREET: f32 = 18.0;
+
+/// How high one street's carriageway is laid.
+///
+/// Every ribbon used to sit at the same twelve millimetres, and every junction
+/// in a real town is two or three of them overlapping — a rectangle each, at
+/// arbitrary angles, all coplanar. What that gives is z-fighting where they
+/// cross and, where the depth test happens to settle, a hard straight edge of
+/// one street's surface cut across another's.
+///
+/// So width decides. The wider street's carriageway is laid over the narrower
+/// one's, which is not a trick to break the tie — it is what a resurfacing gang
+/// actually does: the main road runs through and the side road stops at it. The
+/// last fraction of a millimetre is the edge's own index, so two streets of
+/// exactly the same width still cannot fight.
+fn carriageway_height(width: f32, id: super::roadgraph::EdgeId) -> f32 {
+    let rank = (width / WIDEST_STREET).clamp(0.0, 1.0);
+    ROAD_BED + rank * ROAD_RANK + (id.0 % 8) as f32 * 0.00005
+}
+
 /// How far short of one of its nodes a pavement has to stop.
 ///
 /// A pavement runs beside its own carriageway, and where another street crosses
@@ -423,7 +448,7 @@ pub fn spawn_edge(
             ChunkOf(chunk),
             Mesh3d(mesh.clone()),
             MeshMaterial3d(ribbons.material(edge.surface)),
-            Transform::from_xyz(middle.x, 0.012, middle.y)
+            Transform::from_xyz(middle.x, carriageway_height(edge.width, id), middle.y)
                 .with_rotation(Quat::from_rotation_y(yaw)),
         ));
     }
@@ -529,7 +554,10 @@ pub fn spawn_junction(
         // a tarmac street is one or the other, and the bigger road is the one
         // whose surfacing gang got there.
         MeshMaterial3d(ribbons.material(surface)),
-        Transform::from_xyz(at.x, 0.010, at.y).with_scale(Vec3::new(
+        // Under every arm's own ribbon, so what shows in the middle of a
+        // junction is the ribbons themselves and this is only what fills the
+        // diamond none of them covers.
+        Transform::from_xyz(at.x, ROAD_BED - 0.002, at.y).with_scale(Vec3::new(
             widest + SIDEWALK_WIDTH * 2.0,
             1.0,
             widest + SIDEWALK_WIDTH * 2.0,

@@ -378,6 +378,26 @@ fn loft(sections: &[Section], scale: Vec3, belt: Option<f32>) -> Mesh {
     .with_computed_smooth_normals()
 }
 
+/// Copies a mesh's UVs into a second set, scaled.
+///
+/// The bodywork needs two textures at two scales — the panel gaps at the size
+/// of the whole car, the metallic flake at the size of a hand — and
+/// `StandardMaterial` applies one `uv_transform` to every channel it samples.
+/// So the tiling goes into the mesh instead: the second set is the first one
+/// multiplied, and the material asks for the channel it wants per texture.
+pub fn with_tiled_uv(mut mesh: Mesh, tiling: Vec2) -> Mesh {
+    let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0) else {
+        warn!("a body panel has no UVs; its flake will not tile");
+        return mesh;
+    };
+    let tiled: Vec<[f32; 2]> = uvs
+        .iter()
+        .map(|uv| [uv[0] * tiling.x, uv[1] * tiling.y])
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, tiled);
+    mesh
+}
+
 /// A surface of revolution about the X axis, for wheels.
 ///
 /// `profile` is a series of (position across the wheel, radius) pairs, both in

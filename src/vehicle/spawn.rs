@@ -124,6 +124,8 @@ pub struct VehicleAssets {
     /// Shared by every car: the flake is a property of automotive paint, not
     /// of one car's paint, and the colour that varies is in the material.
     flake: Handle<Image>,
+    /// The panel gaps and the road film, in the body's own UVs.
+    detail: Handle<Image>,
     /// The finishes a car can come off the line in, built once.
     ///
     /// Every colour in this city comes from one of two closed lists — the
@@ -195,7 +197,16 @@ pub fn build_assets(
             let built = super::body::build(class, &class.spec());
             // Normal maps need a tangent basis, and mikktspace is the one the
             // shader agrees with.
-            let mut add = |mesh| meshes.add(crate::world::buildings::with_tangents(mesh));
+            // Two UV sets, because the body wants two textures at two scales
+            // and `StandardMaterial` has one transform for all of them. The
+            // first is the loft's own, nought to one over the whole car, and
+            // carries the panel gaps and the road film; the second is the same
+            // one multiplied by the flake tiling, and carries the flake.
+            let mut add = |mesh| {
+                meshes.add(crate::world::buildings::with_tangents(
+                    super::body::with_tiled_uv(mesh, super::paint::FLAKE_TILING),
+                ))
+            };
             (
                 class,
                 BodyHandles {
@@ -215,6 +226,7 @@ pub fn build_assets(
     // could pick the same colour and two handles for one paint would put the
     // batching back where it was.
     let flake = images.add(super::paint::flake());
+    let detail = images.add(super::paint::detail());
     let mut stock: Vec<(LinearRgba, f32, f32, Handle<StandardMaterial>)> = Vec::new();
     for (color, metallic) in super::paint::stock().chain(
         VehicleClass::ALL
@@ -235,13 +247,14 @@ pub fn build_assets(
                 linear,
                 metallic,
                 age,
-                materials.add(bodywork(color, metallic, age, &flake)),
+                materials.add(bodywork(color, metallic, age, &flake, &detail)),
             ));
         }
     }
 
     VehicleAssets {
         bodies,
+        detail,
         tyre_mesh: meshes.add(crate::world::buildings::with_tangents(
             super::body::tyre_mesh(TYRE_WIDTH),
         )),
@@ -287,7 +300,13 @@ pub fn build_assets(
 ///
 /// Pulled out of the spawner so the same recipe serves both the stock finishes
 /// built at startup and the one-off a hand-tinted car still needs.
-fn bodywork(color: Color, metallic: f32, age: f32, flake: &Handle<Image>) -> StandardMaterial {
+fn bodywork(
+    color: Color,
+    metallic: f32,
+    age: f32,
+    flake: &Handle<Image>,
+    detail: &Handle<Image>,
+) -> StandardMaterial {
     // Car paint is a coloured base under a clear lacquer, and modelling it that
     // way rather than as "shiny metal" is what makes the highlight sit *on* the
     // panel instead of tinting itself the colour of the car.
@@ -304,7 +323,11 @@ fn bodywork(color: Color, metallic: f32, age: f32, flake: &Handle<Image>) -> Sta
         // The loft's UVs run nought to one over the whole car, so the tile has
         // to be brought down to the size of a hand before it is flake rather
         // than dents.
-        uv_transform: bevy::math::Affine2::from_scale(super::paint::FLAKE_TILING),
+        // Identity. The flake's tiling lives in the mesh's second UV set now —
+        // see `build_assets` — because this one transform applies to every
+        // channel, and the detail map has to arrive untiled.
+        base_color_texture: Some(detail.clone()),
+        normal_map_channel: bevy::mesh::UvChannel::Uv1,
         ..default()
     }
 }
@@ -352,6 +375,7 @@ pub fn spawn_vehicle(
             spec.body_metallic,
             spec.body_age,
             &assets.flake,
+            &assets.detail,
         )),
     };
     let fittings = fittings_range();

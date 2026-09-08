@@ -15,7 +15,7 @@ use bevy::render::render_resource::TextureFormat;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 
-use crate::world::texture::{byte, fbm, hash01, normal_map, painted, smoothstep01};
+use crate::world::texture::{byte, fbm, hash01, normal_map, painted, painted_rect, smoothstep01};
 
 const WHEEL_SIZE: u32 = 256;
 
@@ -116,6 +116,93 @@ pub fn finish(body_color: Color, body_metallic: f32, age: f32) -> Finish {
         // rather than staying put. Age moves it the same way.
         perceptual_roughness: (0.30 + body_metallic * 0.22 + age * 0.26).clamp(0.0, 1.0),
     }
+}
+
+/// Where a car is cut into panels, along its length.
+///
+/// The loft's `v` runs nose to tail, so a shut line is a band at a constant
+/// `v` — which is the whole reason this can be a texture at all. The four are
+/// the bonnet's trailing edge, the front door, the rear door and the boot lid,
+/// and they are the same four on a sports car and a van because the loft is the
+/// same loft: what changes between classes is the section it is swept along,
+/// not where the doors are.
+///
+/// Nothing before a fifth of the way back. The nose cap's UVs collapse to a
+/// point, so a seam that far forward draws a ring on it rather than a line
+/// across it.
+const SEAMS: [f32; 4] = [0.34, 0.53, 0.71, 0.87];
+
+/// Half-width of a shut line, in `v`, and how dark it goes.
+///
+/// A panel gap is four millimetres on a car four metres long — a thousandth of
+/// the length — and at that width it vanishes into the mip chain from ten
+/// metres away. This is nearer a centimetre, which is the width at which a gap
+/// survives being looked at from across the street and is still narrow enough
+/// to read as a gap rather than as a stripe.
+const SEAM_WIDTH: f32 = 0.0045;
+const SEAM_DARK: f32 = 0.72;
+
+/// Side of the detail map, in texels.
+///
+/// Long in `v` and short in `u`: everything in this texture is a line at a
+/// constant `v` or a gradient in `u`, so the resolution that matters is the one
+/// the seams are drawn across.
+const DETAIL_WIDTH: u32 = 128;
+const DETAIL_HEIGHT: u32 = 1024;
+
+/// How dark the road film at the sills gets, and how far up the flank it
+/// reaches.
+const FILM_DARK: f32 = 0.52;
+const FILM_REACH: f32 = 0.62;
+
+/// The panel gaps and the road film, in the body's own UVs.
+///
+/// Two things a car has that this one did not, and both of them are about the
+/// same thing: a car is *assembled* and then *driven*, and a single unbroken
+/// shell of clean lacquer is neither. The gaps say it was made out of parts;
+/// the film at the sills says it has been down a road.
+///
+/// Multiplies the paint, so it is near white everywhere it is not doing
+/// something. The flake normal map has to move to the mesh's second UV set to
+/// make room — see `spawn::build_assets` — because `StandardMaterial` applies
+/// one `uv_transform` to every channel it has, and the flake needs tiling by
+/// forty while this needs tiling by exactly one.
+pub fn detail() -> Image {
+    painted_rect(
+        DETAIL_WIDTH,
+        DETAIL_HEIGHT,
+        TextureFormat::Rgba8UnormSrgb,
+        |u, v| {
+            let mut value = 1.0f32;
+
+            // The gaps. Softened at the edges because a hard-edged black line
+            // aliases into a dotted one the moment the car is more than a few
+            // metres away, which is worse than no line at all.
+            for seam in SEAMS {
+                let across = ((v - seam).abs() / SEAM_WIDTH).min(1.0);
+                value *= 1.0 - SEAM_DARK * (1.0 - across * across);
+            }
+
+            // The film. `u` runs round the section from the floor at nought,
+            // up the right flank, over the roof at a half and down the left, so
+            // this is how far up the body a point is.
+            let up = 0.5 - 0.5 * (std::f32::consts::TAU * u).cos();
+            let film = (1.0 - (up / FILM_REACH).min(1.0)).powf(1.15);
+            // Not even: what throws it up there is the wheels, so it is heavier
+            // behind them and streaked along the car.
+            let streak = 0.55 + 0.45 * fbm(u * 0.5, v, 9, 3, 811);
+            value *= 1.0 - FILM_DARK * film * streak;
+
+            // Road dirt is brown, not grey, and that is most of what stops it
+            // reading as shadow.
+            [
+                byte(value),
+                byte(value * (1.0 - 0.05 * (1.0 - value))),
+                byte(value * (1.0 - 0.14 * (1.0 - value))),
+                255,
+            ]
+        },
+    )
 }
 
 /// Side of the flake tile, in texels.
