@@ -25,7 +25,6 @@ use crate::mood::face::{FaceAssets, FaceLevel};
 use crate::mood::feeling::{Mood, MoodRng, Tempers};
 use crate::mood::provoke::Provoker;
 use crate::mood::voice::Voicebox;
-use crate::player::on_foot::Player;
 use crate::world::City;
 use crate::world::roadgraph::NodeId;
 
@@ -126,14 +125,13 @@ fn maintain_cyclists(
     mut rng: ResMut<CyclistRng>,
     mut tempers: ResMut<MoodRng>,
     mix: Res<Tempers>,
-    players: Query<&Transform, With<Player>>,
+    focus: Res<super::focus::SimFocus>,
     cyclists: Query<(Entity, &Transform), With<Cyclist>>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let Ok(player) = players.single() else { return };
-    let focus = player.translation.xz();
+    let focus = focus.ground();
 
     let mut riding = 0usize;
     for (entity, transform) in &cyclists {

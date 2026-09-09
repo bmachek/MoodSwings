@@ -41,6 +41,23 @@ use crate::world::roadgraph::NodeId;
 
 /// How far past the kerb the pavement centre sits.
 const PAVEMENT_OFFSET: f32 = 1.9;
+
+/// How often a new arrival steps out of a doorway rather than simply being
+/// there, and how far it will look for one.
+///
+/// A city where nobody ever comes out of a building is a city of people who
+/// live on the pavement. It costs nothing: this is the same arrival, placed
+/// somewhere better.
+const OUT_OF_A_DOOR: f32 = 0.4;
+const DOORWAY_REACH: f32 = 18.0;
+
+/// How many citizens may arrive on one refill tick.
+///
+/// The refill used to drain the whole deficit at once, which on a jump — a
+/// chunk reload, a fast camera move, the first frame of a capture — is the
+/// entire population spawned in a single frame, fully dressed. Spread over a
+/// couple of seconds it is a street filling up rather than a hitch.
+const ARRIVALS_PER_TICK: usize = 5;
 /// The capsule a citizen is.
 ///
 /// Public because anything that spawns a figure has to build the same one — a
@@ -104,8 +121,12 @@ pub struct Pedestrian {
     /// Counts down while fleeing; keeps them running a moment after the danger
     /// passes rather than snapping back to a stroll.
     pub panic: f32,
-    /// Metres per second this frame. Read by the walk cycle, which paces the
-    /// stride off distance covered rather than off time.
+    /// Metres per second this citizen *intends* to cover this frame.
+    ///
+    /// Not what paces the walk cycle any more — that is read off the body, so
+    /// that every override in `ai::social` and `mood` moves the legs without
+    /// having to remember to. Kept because it is the intent, and the intent is
+    /// what a future crossing or queue has to be able to zero.
     pub current_speed: f32,
 }
 
@@ -249,12 +270,59 @@ fn setup(
     });
 }
 
+/// How near the far end of a street a citizen has to get before turning the
+/// corner, measured along the street.
+///
+/// Along it, because across it a pavement is always the best part of a
+/// carriageway away from the centreline — see the note in `walk_pavements`.
+const ARRIVE: f32 = 2.5;
+
+/// How wide the street between two junctions is.
+fn street_width(city: &City, from: NodeId, to: NodeId) -> f32 {
+    city.graph
+        .neighbors(from)
+        .find(|(node, _)| *node == to)
+        .map(|(_, edge)| city.graph.edge(edge).width)
+        .unwrap_or(9.0)
+}
+
+/// Which pavement of the street `at -> ahead` somebody standing at `position`
+/// is already on.
+///
+/// A citizen turning a corner should walk round it, not step off the kerb and
+/// cross to the other side of the new street because their `side` happened to
+/// be written down as +1. With the pavements mitred at every junction the
+/// corner is a continuous surface, so turning it is a matter of picking the
+/// half of the new street the citizen is already standing on.
+fn same_corner(at: Vec2, ahead: Vec2, position: Vec2) -> f32 {
+    match Dir2::new(ahead - at) {
+        Ok(direction) => {
+            let across = right_of(*direction).dot(position - at);
+            if across >= 0.0 { 1.0 } else { -1.0 }
+        }
+        Err(_) => 1.0,
+    }
+}
+
 /// Centre of the pavement alongside the segment `a -> b`.
 fn pavement_point(a: Vec2, b: Vec2, width: f32, side: f32, t: f32) -> Vec2 {
     let Ok(direction) = Dir2::new(b - a) else {
         return a;
     };
     a.lerp(b, t) + right_of(*direction) * side * (width * 0.5 + PAVEMENT_OFFSET)
+}
+
+/// Everything a citizen is dressed out of.
+///
+/// Bundled because Bevy caps a system at sixteen parameters and this one has
+/// been at the ceiling since the archetypes landed — the note in the argument
+/// list said so. The doorway query is what went over it, and "what somebody is
+/// made of" is one thing anyway.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct Wardrobe<'w> {
+    assets: Res<'w, PedestrianAssets>,
+    figures: Res<'w, super::figure::FigureAssets>,
+    faces: Res<'w, FaceAssets>,
 }
 
 fn maintain_population(
@@ -269,22 +337,24 @@ fn maintain_population(
         Res<crate::world::weather::Weather>,
     ),
     city: Res<City>,
-    assets: Res<PedestrianAssets>,
-    figures: Res<super::figure::FigureAssets>,
-    faces: Res<FaceAssets>,
+    wardrobe: Wardrobe,
     mut rng: ResMut<PedestrianRng>,
     mut tempers: ResMut<MoodRng>,
     mix: Res<Tempers>,
     mut crowd_rng: ResMut<super::archetype::CrowdRng>,
     cast: Res<super::archetype::Cast>,
-    players: Query<&Transform, With<Player>>,
+    focus: Res<super::focus::SimFocus>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
+    // Every shopfront the streaming has put up. A share of every arrival comes
+    // out of one instead of appearing in the middle of a pavement — which is
+    // the other half of `ai::errands`, and the classic tell of a fake city
+    // either way round.
+    doors: Query<&Transform, With<crate::world::interior::Shopfront>>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let Ok(player) = players.single() else { return };
-    let focus = player.translation.xz();
+    let focus = focus.ground();
     let crowd = &config.crowd;
 
     // The clock and the sky thin the crowd: the small hours keep a fraction
@@ -313,24 +383,49 @@ fn maintain_population(
         return;
     }
 
-    let candidates: Vec<_> = city
+    // The streets in the ring, each with a ticket size.
+    //
+    // Weighted rather than uniform, and it matters more than the population
+    // does: a uniform draw over every edge in the annulus spreads the crowd
+    // evenly over two and a half thousand back alleys, so the street the
+    // player is actually standing in gets its proportional share of nothing.
+    // The weight is length — a long street holds more people than a stub —
+    // over distance, so the crowd gathers where the camera is.
+    let candidates: Vec<(&crate::world::roadgraph::RoadEdge, f32)> = city
         .graph
         .edges()
-        .filter(|edge| {
+        .filter_map(|edge| {
             let midpoint = city
                 .graph
                 .node(edge.a)
                 .pos
                 .midpoint(city.graph.node(edge.b).pos);
-            (crowd.spawn_min..crowd.spawn_max).contains(&midpoint.distance(focus))
+            let away = midpoint.distance(focus);
+            (crowd.spawn_min..crowd.spawn_max)
+                .contains(&away)
+                .then(|| (edge, edge.length / (1.0 + away / 40.0)))
         })
         .collect();
-    if candidates.is_empty() {
+    let total: f32 = candidates.iter().map(|(_, weight)| weight).sum();
+    if candidates.is_empty() || total <= 0.0 {
         return;
     }
 
-    while alive < population {
-        let edge = candidates[rng.0.random_range(0..candidates.len())];
+    // And filled a few at a time. Draining the whole deficit on one tick is a
+    // couple of dozen fully dressed figures in a single frame, which is a
+    // visible hitch every time a chunk reloads or the camera jumps.
+    let mut arriving = 0usize;
+    while alive < population && arriving < ARRIVALS_PER_TICK {
+        arriving += 1;
+        let mut ticket = rng.0.random_range(0.0..total);
+        let edge = candidates
+            .iter()
+            .find(|(_, weight)| {
+                ticket -= weight;
+                ticket <= 0.0
+            })
+            .map(|(edge, _)| *edge)
+            .unwrap_or(candidates[candidates.len() - 1].0);
         let (from, to) = if rng.0.random_range(0.0..1.0) < 0.5 {
             (edge.a, edge.b)
         } else {
@@ -352,6 +447,20 @@ fn maintain_population(
         if dark && archetype == super::archetype::Archetype::Missionary {
             archetype = super::archetype::Archetype::Everyday;
         }
+        // Out of a door, some of the time, if there is one on this street.
+        // Measured against the pavement point the citizen would otherwise
+        // have appeared at, so nobody is teleported across the town to use a
+        // doorway — they come out of the one they would have walked past.
+        let doorway = (rng.0.random_range(0.0..1.0) < OUT_OF_A_DOOR)
+            .then(|| {
+                let would_be = pavement_point(a, b, edge.width, side, t);
+                doors
+                    .iter()
+                    .map(|door| door.translation.xz())
+                    .filter(|at| at.distance(would_be) < DOORWAY_REACH)
+                    .min_by(|x, y| x.distance(would_be).total_cmp(&y.distance(would_be)))
+            })
+            .flatten();
         let mut leader: Option<Entity> = None;
         for member in 0..archetype.group_size() {
             // And how old. Drawn per member — a group of missionaries spans
@@ -366,12 +475,20 @@ fn maintain_population(
                 break;
             }
             let t = (t + member as f32 * 0.03).min(0.95);
-            let position = pavement_point(a, b, edge.width, side, t);
-            let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
+            // The leader of a group may step out of a doorway; the rest of the
+            // group follows them out of it, one behind the other, which is
+            // what a family leaving a shop looks like.
+            let position = match doorway {
+                Some(door) => door + Vec2::new(member as f32 * 0.35, member as f32 * 0.2),
+                None => pavement_point(a, b, edge.width, side, t),
+            };
+            let material = wardrobe.assets.clothes
+                [rng.0.random_range(0..wardrobe.assets.clothes.len())]
+            .clone();
             // The fixed wardrobe overrides the draw; it never replaces it.
             // Every stream must consume the same draws whoever is spawned, or
             // retuning the cast's shares would reshuffle everybody after them.
-            let material = assets.coat_for(archetype).unwrap_or(material);
+            let material = wardrobe.assets.coat_for(archetype).unwrap_or(material);
 
             // Drawn from its own stream: a citizen's disposition must not
             // depend on how many of them have been spawned already, and
@@ -379,7 +496,7 @@ fn maintain_population(
             let drawn = mix.draw(&mut tempers.0);
             let temper = archetype.temper().unwrap_or(drawn);
             let mood = temper.baseline;
-            let worn = faces.wear(mood);
+            let worn = wardrobe.faces.wear(mood);
             // Their own voice, for as long as they are resident. The same
             // stream as the temperament: how somebody sounds is part of who
             // they are, and both are drawn once and never again.
@@ -432,7 +549,7 @@ fn maintain_population(
             }
             super::figure::dress(
                 &mut person,
-                &figures,
+                &wardrobe.figures,
                 material,
                 &worn,
                 archetype,
@@ -482,11 +599,26 @@ fn walk_pavements(
 
     for (mut pedestrian, mut bouncer, mut transform, mood, archetype, age) in &mut pedestrians {
         let position = transform.translation.xz();
-        let a = city.graph.node(pedestrian.from).pos;
-        let b = city.graph.node(pedestrian.to).pos;
+        let mut a = city.graph.node(pedestrian.from).pos;
+        let mut b = city.graph.node(pedestrian.to).pos;
+        let mut width = street_width(&city, pedestrian.from, pedestrian.to);
+        let mut segment = b - a;
+        let mut length = segment.length().max(1.0);
+        let mut travelled = ((position - a).dot(segment) / (length * length)).clamp(0.0, 1.0);
 
-        // Arrived at the junction: pick a new street to walk down.
-        if position.distance(b) < 4.0 {
+        // Arrived at the far end of the street, measured *along* it.
+        //
+        // Not by distance to the junction, which is what this used to be and
+        // which could never fire: a pavement runs half a carriageway plus two
+        // metres out from the centreline the junction node sits on, so the
+        // nearest a citizen ever came to their own destination node was four
+        // and a third metres on the narrowest street in the game and ten on
+        // the widest, against a four-metre test. Every citizen therefore
+        // walked to the end of the block it spawned on and then stood there
+        // jittering against a target it could not reach, spinning, until the
+        // despawn ring recycled it. That, and not the population, is why the
+        // city did not look alive.
+        if travelled * length > length - ARRIVE {
             let next = city
                 .graph
                 .neighbors(pedestrian.to)
@@ -494,21 +626,20 @@ fn walk_pavements(
                 .filter(|node| *node != pedestrian.from)
                 .choose(&mut rng.0)
                 .unwrap_or(pedestrian.from);
+            let corner = city.graph.node(pedestrian.to).pos;
+            let ahead = city.graph.node(next).pos;
             pedestrian.from = pedestrian.to;
             pedestrian.to = next;
-            continue;
+            // Turn the corner rather than crossing the road to do it: the new
+            // street's pavement on the side the citizen is already standing.
+            pedestrian.side = same_corner(corner, ahead, position);
+            a = corner;
+            b = ahead;
+            width = street_width(&city, pedestrian.from, pedestrian.to);
+            segment = b - a;
+            length = segment.length().max(1.0);
+            travelled = ((position - a).dot(segment) / (length * length)).clamp(0.0, 1.0);
         }
-
-        let width = city
-            .graph
-            .neighbors(pedestrian.from)
-            .find(|(node, _)| *node == pedestrian.to)
-            .map(|(_, edge)| city.graph.edge(edge).width)
-            .unwrap_or(9.0);
-
-        let segment = b - a;
-        let length = segment.length().max(1.0);
-        let travelled = ((position - a).dot(segment) / (length * length)).clamp(0.0, 1.0);
         let target = pavement_point(
             a,
             b,

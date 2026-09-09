@@ -207,14 +207,13 @@ fn maintain_flocks(
     kit: Res<PigeonKit>,
     city: Res<City>,
     mut rng: ResMut<PigeonRng>,
-    players: Query<&Transform, With<Player>>,
+    focus: Res<super::focus::SimFocus>,
     birds: Query<(Entity, &Transform, &Pigeon)>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let Ok(player) = players.single() else { return };
-    let focus = player.translation.xz();
+    let focus = focus.ground();
 
     // Forget the far ones, and count what flocks are left. A flock is gone
     // when its last bird is, which is what makes the count honest without

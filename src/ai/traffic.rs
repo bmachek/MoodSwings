@@ -17,7 +17,6 @@ use rand_chacha::ChaCha8Rng;
 use super::steering::{ground_axes, lane_point, steer_towards, throttle_for_speed};
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
-use crate::player::on_foot::Player;
 use crate::vehicle::controller::{VehicleInput, VehicleState};
 use crate::vehicle::spawn::{AlwaysSimulated, VehicleAssets, resting_height, spawn_vehicle};
 use crate::vehicle::spec::VehicleClass;
@@ -150,7 +149,7 @@ fn maintain_population(
     assets: Res<VehicleAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<TrafficRng>,
-    players: Query<&Transform, With<Player>>,
+    focus: Res<super::focus::SimFocus>,
     traffic: Query<(Entity, &Transform), With<TrafficDriver>>,
     // Every car in the city, parked or moving. Startup-resident, so this is
     // the complete list and a candidate can be rejected before it is spawned
@@ -162,8 +161,7 @@ fn maintain_population(
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let Ok(player) = players.single() else { return };
-    let focus = player.translation.xz();
+    let focus = focus.ground();
 
     let mut alive = 0usize;
     for (entity, transform) in &traffic {

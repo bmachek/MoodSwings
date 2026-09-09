@@ -34,7 +34,6 @@ use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
 use crate::mood::feeling::{Mood, Temperament};
-use crate::player::on_foot::Player;
 
 /// How many of each are about.
 const DOGS: usize = 3;
@@ -258,7 +257,7 @@ fn maintain_animals(
     mut timer: ResMut<AnimalTimer>,
     kit: Res<AnimalKit>,
     mut rng: ResMut<AnimalRng>,
-    players: Query<&Transform, With<Player>>,
+    focus: Res<super::focus::SimFocus>,
     owners: Query<(Entity, &Transform), (With<Pedestrian>, Without<Dog>)>,
     dogs: Query<(Entity, &Transform, &Dog)>,
     cats: Query<(Entity, &Transform), With<Cat>>,
@@ -267,8 +266,7 @@ fn maintain_animals(
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let Ok(player) = players.single() else { return };
-    let focus = player.translation.xz();
+    let focus = focus.ground();
 
     // Dogs: despawn with distance or with a vanished owner — a leash to a
     // despawned pedestrian is a crash waiting on a solver tick.

@@ -643,6 +643,8 @@ const BAY_END_CLEAR: f32 = 9.0;
 /// And how far it keeps clear of a plain bend, which is almost nothing: a bend
 /// is a kink in one street, and a kerb runs straight through it.
 const BAY_BEND_CLEAR: f32 = 0.8;
+/// And the daylight left between two cars in a row.
+const BAY_GAP: f32 = 0.35;
 
 /// Scatters parked cars along the kerbs so there is always something to steal.
 pub fn spawn_parked_vehicles(
@@ -744,8 +746,17 @@ pub fn spawn_parked_vehicles(
             // looks like: a parked car leaving the ground at thirteen metres a
             // second and coming down from seventy.
             let offset = (edge.width * 0.5 - spec.half_extents.x - KERB_CLEARANCE).max(0.0);
-            let slack = (BAY_LENGTH - spec.half_extents.z * 2.0 - 0.6).max(0.05);
-            let along = head + bay as f32 * BAY_LENGTH + rng.random_range(0.3..0.3 + slack);
+            // Where in its own bay the car stands, measured to its *middle*.
+            // A bay is a car's length plus shunting room, so the middle can
+            // only move by what is left over — half a metre or so for a truck.
+            // Placed as a front offset instead, a long body reached two and a
+            // half metres back into the bay behind it and the patrol caught
+            // what that does: a parked car leaving the ground at fourteen
+            // metres a second, one second into the run.
+            let nose = spec.half_extents.z + BAY_GAP;
+            let slack = (BAY_LENGTH - nose * 2.0).max(0.0);
+            let along =
+                head + bay as f32 * BAY_LENGTH + nose + rng.random_range(0.0..slack.max(1e-3));
             let position = a + *direction * along + normal * offset * side;
             // Nose along the street, facing the way traffic on that side runs.
             let facing = if side > 0.0 { *direction } else { -*direction };

@@ -673,7 +673,15 @@ impl Default for GameConfig {
                 npc_spring_max: 1.5,
             },
             crowd: CrowdConfig {
-                population: 45,
+                // A hundred and sixty, against the forty-five this was.
+                //
+                // Forty-five over a hundred and sixty-five metres of despawn
+                // ring is one citizen per eighty-five metres of pavement, and
+                // an old town at half past nine runs one every few metres. It
+                // was never the whole story — the crowd could not turn a
+                // corner, so most of it was stalled at a block end rather than
+                // walking — but with that fixed the number is what is left.
+                population: 160,
                 spawn_min: 25.0,
                 spawn_max: 110.0,
                 despawn: 165.0,

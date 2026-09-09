@@ -154,6 +154,49 @@ impl Posture {
     }
 }
 
+/// Something worth looking at, and how long it stays worth looking at.
+///
+/// A head used to be welded to a chest. `animate` wrote a rotation only for
+/// the children carrying a [`Limb`], so a citizen could not look at the person
+/// they were talking to, at the busker they had stopped for, at the accident
+/// they were rubbernecking — the rubbernecking turned the *whole body*, which
+/// is what somebody does when they are about to walk over, not when they have
+/// glanced round — or at the player standing in front of them.
+///
+/// This is the cheapest intelligence in the game. A figure that turns its head
+/// towards what it is dealing with reads as having noticed it; four sine-driven
+/// limbs and a fixed stare read as a machine walking a route, which is exactly
+/// what the crowd was.
+///
+/// `until` is on the game clock, so an interest expires on its own and the head
+/// falls back to looking where the body is going.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Attention {
+    pub at: Vec3,
+    pub until: f32,
+}
+
+impl Attention {
+    /// Look at a point for `seconds`, from now.
+    pub fn to(at: Vec3, now: f32, seconds: f32) -> Self {
+        Self {
+            at,
+            until: now + seconds,
+        }
+    }
+}
+
+/// How far a neck turns, and how fast.
+///
+/// Seventy degrees of yaw is about what a person manages without moving their
+/// shoulders; past it they turn their body, which several systems here already
+/// do for their own reasons. The pitch is smaller because a head that tips
+/// right back to look at a first-floor window reads as a faint rather than as
+/// curiosity. The slew is what makes it a glance instead of a snap.
+const NECK_YAW: f32 = 1.22;
+const NECK_PITCH: f32 = 0.44;
+const NECK_SLEW: f32 = 7.0;
+
 /// A figure that is sitting down, and therefore has no stride.
 ///
 /// Deliberately not a [`Posture`]: a posture is something a figure is doing
@@ -890,16 +933,27 @@ pub fn animate(
         Option<&Stature>,
         Option<&Posture>,
         Option<&Seated>,
+        Option<&Attention>,
+        &GlobalTransform,
         &Children,
     )>,
-    mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
+    mut parts: Query<(&mut Transform, &Rest, Option<&Limb>, Option<&Head>)>,
 ) {
     let dt = time.delta_secs();
     let elapsed = time.elapsed_secs();
-    for (mut cycle, bouncer, stature, posture, seated, children) in figures {
+    for (mut cycle, bouncer, stature, posture, seated, attention, placed, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
+        // And a figure that has stopped brings its feet together instead of
+        // freezing mid-stride. Eased rather than snapped, so somebody who
+        // stops for a word arrives at standing over about a third of a
+        // second — which is what stopping looks like.
+        if cycle.speed < STANDING_STILL {
+            let settle = (SETTLE_RATE * dt).min(1.0);
+            cycle.phase += shortest_turn(cycle.phase, 0.0) * settle;
+            cycle.phase = cycle.phase.rem_euclid(TAU_F32);
+        }
 
         let (vertical, horizontal) = match bouncer {
             // The gait gates the squash along with the hop: a walking body is
@@ -917,8 +971,15 @@ pub fn animate(
         let size = stature.map_or(1.0, |stature| stature.0);
         let pose = Vec3::new(horizontal, vertical, horizontal) * size;
 
+        // Where the neck wants to be, in the body's own frame. `None` while
+        // there is nothing worth looking at, which is when the head goes back
+        // to facing the way the body does.
+        let looking = attention
+            .filter(|attention| attention.until > elapsed)
+            .and_then(|attention| neck(placed, attention.at));
+
         for &child in children {
-            let Ok((mut transform, rest, limb)) = parts.get_mut(child) else {
+            let Ok((mut transform, rest, limb, head)) = parts.get_mut(child) else {
                 continue;
             };
             // The rest pose scaled by the squash, so parts stay attached to one
@@ -934,6 +995,14 @@ pub fn animate(
                     (None, None) => limb_angle(*limb, cycle.phase),
                 };
                 transform.rotation = Quat::from_rotation_x(angle);
+            } else if head.is_some() {
+                // Slewed rather than set: a head that snaps onto its target is
+                // a turret. Six or seven radians a second is a glance.
+                let (yaw, pitch) = looking.unwrap_or((0.0, 0.0));
+                let wanted = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
+                transform.rotation = transform
+                    .rotation
+                    .slerp(wanted, (NECK_SLEW * dt).clamp(0.0, 1.0));
             }
         }
     }
@@ -941,10 +1010,68 @@ pub fn animate(
 
 const TAU_F32: f32 = std::f32::consts::TAU;
 
-/// Paces the crowd's figures from what the pedestrian AI decided this frame.
-pub fn pace_pedestrians(mut walkers: Query<(&super::pedestrian::Pedestrian, &mut WalkCycle)>) {
-    for (pedestrian, mut cycle) in &mut walkers {
-        cycle.speed = pedestrian.current_speed;
+/// Yaw and pitch that turn a figure's head towards a world point.
+///
+/// In the body's own frame, and clamped to what a neck does: past the limit the
+/// head simply stops turning rather than following something round behind the
+/// figure, which is the one failure mode that reads as possession rather than
+/// as interest. `None` when the target is too close to be looked at, where the
+/// direction is noise.
+fn neck(body: &GlobalTransform, at: Vec3) -> Option<(f32, f32)> {
+    let to = at - body.translation();
+    if to.length_squared() < 0.16 {
+        return None;
+    }
+    // Into the body's frame. The head hangs off the body, so what matters is
+    // the body's rotation and nothing else.
+    let local = body.rotation().inverse() * to;
+    // A figure faces -Z.
+    let yaw = (-local.x).atan2(-local.z);
+    if yaw.abs() > NECK_YAW {
+        return None;
+    }
+    let flat = local.xz().length().max(1e-3);
+    let pitch = (local.y / flat).atan().clamp(-NECK_PITCH, NECK_PITCH);
+    // Positive rotation about X tips a head *down* here, the same convention
+    // the limbs use, so looking up is negative.
+    Some((yaw, -pitch))
+}
+
+/// Under this, in metres per second, a figure is standing rather than walking.
+///
+/// Well under a stroll and well over the drift a dynamic body has while it is
+/// being leaned on by the crowd around it.
+const STANDING_STILL: f32 = 0.22;
+/// How fast a stopped figure brings its feet together, in 1/s.
+const SETTLE_RATE: f32 = 7.0;
+
+/// The shorter way round from one phase to another.
+fn shortest_turn(from: f32, to: f32) -> f32 {
+    let delta = (to - from).rem_euclid(TAU_F32);
+    if delta > TAU_F32 * 0.5 {
+        delta - TAU_F32
+    } else {
+        delta
+    }
+}
+
+/// Paces the crowd's figures from how fast they are actually moving.
+///
+/// Off the body, not off the pedestrian AI's intent, and for the same reason
+/// the player's is: half the interesting things that happen to a citizen are
+/// *overrides*. Stopping for a chat, staring into a window, holding a grudge,
+/// being knocked flying — every one of them writes over the walking intent
+/// somewhere in `ai::social` or `mood`, and none of them thought to write the
+/// walk speed back down. What that looked like was a city where everybody who
+/// stopped to talk carried on striding on the spot.
+pub fn pace_pedestrians(
+    mut walkers: Query<
+        (&avian3d::prelude::LinearVelocity, &mut WalkCycle),
+        With<super::pedestrian::Pedestrian>,
+    >,
+) {
+    for (velocity, mut cycle) in &mut walkers {
+        cycle.speed = velocity.0.xz().length();
     }
 }
 

@@ -7,7 +7,9 @@ pub mod brolly;
 pub mod busker;
 pub mod captain;
 pub mod cyclist;
+pub mod errands;
 pub mod figure;
+pub mod focus;
 pub mod pedestrian;
 pub mod pigeon;
 pub mod social;
@@ -21,9 +23,11 @@ pub struct AiPlugin;
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            focus::FocusPlugin,
             traffic::TrafficPlugin,
             pedestrian::PedestrianPlugin,
             social::SocialPlugin,
+            errands::ErrandPlugin,
             captain::CaptainPlugin,
             cyclist::CyclistPlugin,
             animal::AnimalPlugin,

@@ -38,6 +38,13 @@ use crate::mood::feeling::{Mood, Temperament, caught};
 use crate::mood::grudge::{Grudge, Pirouette};
 use crate::world::City;
 
+/// How far above a body's origin its face is, near enough.
+///
+/// A citizen's transform is the middle of its capsule; looking at that is
+/// looking at somebody's chest. Written down once here because every system
+/// that aims a head wants the same offset.
+const LOOK_AT_FACE: f32 = 0.55;
+
 /// How close two citizens have to pass for a chat to strike up, in metres.
 const CHAT_RANGE: f32 = 1.7;
 /// Chance per second that a pair in range actually stops, before either
@@ -171,6 +178,7 @@ impl Plugin for SocialPlugin {
                     show_off,
                     busk,
                     snap,
+                    notice_the_player,
                 ),
                 (hold_chats, hold_loiters, gawk),
             )
@@ -320,6 +328,7 @@ fn hold_chats(
     )>,
 ) {
     let dt = time.delta_secs();
+    let now = time.elapsed_secs();
     let others: HashMap<Entity, (Vec3, f32)> = chatting
         .iter()
         .map(|(entity, transform, _, mood, ..)| (entity, (transform.translation, mood.value)))
@@ -351,6 +360,15 @@ fn hold_chats(
             transform.rotation =
                 Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
         }
+        // And look at them while doing it. The body already turns; what the
+        // head adds is that the eyes follow the other person when they shift
+        // their weight, which is most of what "talking to somebody" looks
+        // like from across a street.
+        commands.entity(entity).insert(super::figure::Attention::to(
+            there.with_y(there.y + LOOK_AT_FACE),
+            now,
+            1.0,
+        ));
         // Talking is catching a mood on purpose: the ordinary contagion,
         // several times over, aimed at exactly one person.
         mood.value = caught(
@@ -524,6 +542,7 @@ fn gawk(
     )>,
 ) {
     let dt = time.delta_secs();
+    let now = time.elapsed_secs();
     for (entity, mut transform, mut bouncer, pedestrian, mut look) in &mut gawkers {
         look.left -= dt;
         if look.left <= 0.0 || pedestrian.panic > 0.0 {
@@ -536,6 +555,9 @@ fn gawk(
             transform.rotation =
                 Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
         }
+        commands
+            .entity(entity)
+            .insert(super::figure::Attention::to(look.at, now, 0.6));
     }
 }
 
@@ -547,10 +569,11 @@ fn gawk(
 /// taunt, the neighbours catching it — falls out of the systems that already
 /// exist. Traffic is how the city keeps its ragemongers stocked with rage.
 fn sour_at_traffic(
+    mut commands: Commands,
     time: Res<Time>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut grouches: Query<
-        (&mut Transform, &mut Mood, &Archetype, &Pedestrian),
+        (Entity, &mut Transform, &mut Mood, &Archetype, &Pedestrian),
         (
             Without<crate::vehicle::spawn::Vehicle>,
             Without<Launched>,
@@ -568,7 +591,7 @@ fn sour_at_traffic(
         return;
     }
 
-    for (mut transform, mut mood, archetype, pedestrian) in &mut grouches {
+    for (entity, mut transform, mut mood, archetype, pedestrian) in &mut grouches {
         if *archetype != Archetype::Wutbuerger || pedestrian.panic > 0.0 {
             continue;
         }
@@ -585,6 +608,73 @@ fn sour_at_traffic(
             transform.rotation =
                 Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
         }
+        // And track it as it goes past, which is the whole of what glaring is.
+        commands.entity(entity).insert(super::figure::Attention::to(
+            *car,
+            time.elapsed_secs(),
+            0.5,
+        ));
+    }
+}
+
+/// How far away somebody is still worth turning your head for, and how long a
+/// look lasts before the next one is allowed.
+///
+/// A glance, not a stare: without the cooldown the whole street locks onto the
+/// player and tracks them like a field of sunflowers, which reads as menace
+/// rather than as a city noticing somebody.
+const NOTICE_RANGE: f32 = 11.0;
+const GLANCE: (f32, f32) = (0.7, 1.6);
+const GLANCE_AGAIN: (f32, f32) = (4.0, 13.0);
+
+/// When this citizen may next look up at the player.
+#[derive(Component, Default)]
+pub struct Glanced {
+    at: f32,
+}
+
+/// The street notices somebody walking down it.
+///
+/// The cheapest intelligence in the game and the most player-facing: heads
+/// turn, one at a time and at different moments, as you go past. Nothing else
+/// changes — nobody stops, nobody follows, no mood moves — and it is still the
+/// difference between walking through a crowd and walking through scenery.
+fn notice_the_player(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut rng: ResMut<AudioRng>,
+    players: Query<&Transform, (With<crate::player::on_foot::Player>, Without<Pedestrian>)>,
+    mut crowd: Query<
+        (Entity, &Transform, Option<&mut Glanced>),
+        (With<Pedestrian>, Without<Chatting>, Without<Launched>),
+    >,
+) {
+    let Ok(player) = players.single() else { return };
+    let now = time.elapsed_secs();
+    let at = player
+        .translation
+        .with_y(player.translation.y + LOOK_AT_FACE);
+
+    for (entity, transform, glanced) in &mut crowd {
+        if transform.translation.distance(at) > NOTICE_RANGE {
+            continue;
+        }
+        match glanced {
+            Some(glanced) if glanced.at > now => continue,
+            Some(mut glanced) => {
+                glanced.at = now + rng.random_range(GLANCE_AGAIN.0..GLANCE_AGAIN.1);
+            }
+            None => {
+                commands.entity(entity).insert(Glanced {
+                    at: now + rng.random_range(GLANCE_AGAIN.0..GLANCE_AGAIN.1),
+                });
+            }
+        }
+        commands.entity(entity).insert(super::figure::Attention::to(
+            at,
+            now,
+            rng.random_range(GLANCE.0..GLANCE.1),
+        ));
     }
 }
 

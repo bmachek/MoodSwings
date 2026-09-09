@@ -40,7 +40,6 @@ use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
 use crate::mood::feeling::CityMood;
-use crate::player::on_foot::Player;
 
 /// How many pitches are working at once near the player.
 ///
@@ -185,7 +184,7 @@ fn take_a_pitch(
     mut timer: ResMut<BuskerTimer>,
     kit: Res<BuskerKit>,
     mut rng: ResMut<BuskerRng>,
-    players: Query<&Transform, With<Player>>,
+    focus: Res<super::focus::SimFocus>,
     playing: Query<(Entity, &Transform), With<Busker>>,
     idle: Query<(Entity, &Transform), (With<Pedestrian>, Without<Busker>, Without<Listening>)>,
     guitars: Query<(Entity, &ChildOf), With<Guitar>>,
@@ -193,8 +192,7 @@ fn take_a_pitch(
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let Ok(player) = players.single() else { return };
-    let focus = player.translation.xz();
+    let focus = focus.ground();
 
     let mut working = 0usize;
     for (entity, transform) in &playing {
@@ -346,11 +344,17 @@ fn gather(
 /// walk itself, so a busker who stops being one simply carries on down the
 /// pavement from the next frame with nothing to undo.
 fn hold_still(
+    mut commands: Commands,
+    time: Res<Time>,
     mut playing: Query<
         (&Transform, &mut Bouncer, &mut WalkCycle),
         (With<Busker>, Without<Listening>),
     >,
-    mut standing: Query<(&Transform, &Listening, &mut Bouncer, &mut WalkCycle), Without<Busker>>,
+    mut standing: Query<
+        (Entity, &Transform, &Listening, &mut Bouncer, &mut WalkCycle),
+        Without<Busker>,
+    >,
+    pitches: Query<&Transform, With<Busker>>,
 ) {
     for (_, mut bouncer, mut cycle) in &mut playing {
         bouncer.desired = Vec2::ZERO;
@@ -361,7 +365,8 @@ fn hold_still(
         bouncer.hop_scale = 1.35;
     }
 
-    for (transform, listening, mut bouncer, mut cycle) in &mut standing {
+    let now = time.elapsed_secs();
+    for (entity, transform, listening, mut bouncer, mut cycle) in &mut standing {
         let here = transform.translation.xz();
         let to_spot = listening.stand - here;
         if to_spot.length() > 0.35 {
@@ -371,6 +376,16 @@ fn hold_still(
         } else {
             bouncer.desired = Vec2::ZERO;
             cycle.speed = 0.0;
+        }
+        // Watch the act. A ring of people standing in a circle facing
+        // nothing in particular is scenery; a ring of heads all turned the
+        // same way is an audience, and the difference costs one component.
+        if let Ok(pitch) = pitches.get(listening.to) {
+            commands.entity(entity).insert(super::figure::Attention::to(
+                pitch.translation,
+                now,
+                1.2,
+            ));
         }
     }
 }
