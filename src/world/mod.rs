@@ -12,6 +12,7 @@ pub mod gable;
 pub mod garage;
 pub mod ground;
 pub mod interior;
+pub mod layer;
 pub mod litter;
 pub mod lots;
 pub mod markings;

@@ -292,12 +292,10 @@ fn upright_face() -> Mesh {
 pub struct Ribbons {
     /// Indexed by `EdgeId`.
     roads: Vec<Handle<Mesh>>,
-    /// One shared square for a crossing. Small enough that a fixed tiling is
-    /// right whatever it is stretched over.
-    junction: Handle<Mesh>,
-    /// How wide that square has to be at each junction, indexed by `NodeId` —
-    /// see [`junction_reach`].
-    reach: Vec<f32>,
+    /// The paving of each crossing, indexed by `NodeId` and cut to the arms
+    /// that meet there — see [`plate`]. `None` at the nine nodes in ten that
+    /// are a bend in one street rather than a junction between two.
+    plates: Vec<Option<Handle<Mesh>>>,
     /// One material per [`super::atlas::Surface`], indexed by its own `index`.
     paving: [Handle<super::road::RoadMaterial>; 4],
     /// The two pavements of each street, indexed by `EdgeId` then by side —
@@ -556,59 +554,156 @@ fn wrap(angle: f32) -> f32 {
     }
 }
 
-/// How far a junction has to be paved, per node.
+/// The paving of one crossing, cut to the arms that actually meet there.
 ///
-/// The outer mitre of every corner is where that corner's two pavements meet
-/// at their backs, and it is the furthest any pavement stands from the node. A
-/// quad that reaches it covers everything the ribbons and the strips leave
-/// between them — which at a square crossing is what the old width-of-the-
-/// widest-arm square already covered, and at an oblique one is a good deal
-/// more.
+/// This used to be a square, sized off the outer mitres and centred on the
+/// node, laid *under* the arms' own ribbons to fill the diamond between them.
+/// Every part of that sentence turned out to be wrong, and the way it was
+/// wrong is the whole of the cobblestone fault:
 ///
-/// Capped, because a mitre is unbounded as the angle goes to nothing and a
-/// junction quad the size of a block would pave over the town.
-fn junction_reach(layout: &CityLayout, fans: &[Vec<Arm>]) -> Vec<f32> {
-    layout
-        .graph
-        .nodes()
-        .map(|(id, node)| {
-            let fan = &fans[id.0 as usize];
-            let widest = node
-                .edges
-                .iter()
-                .map(|&edge| layout.graph.edge(edge).width)
-                .fold(0.0f32, f32::max);
-            // The floor is the old answer: half the widest carriageway plus a
-            // pavement, which is what a square crossing needs and no more.
-            let mut out = widest * 0.5 + SIDEWALK_WIDTH;
-            for index in 0..fan.len() {
-                let next = &fan[(index + 1) % fan.len()];
-                let gap = wrap(next.bearing - fan[index].bearing);
-                // A reflex wedge is the outside of a bend, where the pavements
-                // run past the node rather than being cut back from it. There
-                // is nothing to pave there.
-                if fan.len() < 2 || gap >= std::f32::consts::PI {
-                    continue;
-                }
-                // The outer mitre as a distance from the node rather than as a
-                // distance along an arm: the arm distance and the offset across
-                // it are the two legs of a right angle.
-                let along = mitre(
-                    fan[index].half + SIDEWALK_WIDTH,
-                    next.half + SIDEWALK_WIDTH,
-                    gap,
-                );
-                let across = fan[index].half + SIDEWALK_WIDTH;
-                out = out.max(along.hypot(across));
-            }
-            // Doubled, because the quad is centred on the node, and capped.
-            (out * 2.0).min(widest * JUNCTION_CAP + SIDEWALK_WIDTH * 2.0)
-        })
-        .collect()
+///  - **Square.** A square is axis-aligned and a real town's streets are not,
+///    so its corners stood out past the pavement into the front gardens — a
+///    median of three metres and, at the worst node in Landshut, twenty-four.
+///  - **Sized off the mitres.** A mitre is `1/sin` of the crossing angle, so a
+///    shallow fork asked for a fifty-metre square, and the cap that stopped
+///    that still allowed twenty-five. Worse, a *bend* — two arms nearly in
+///    line — has no crossing angle at all, so the mitre came back unbuildable
+///    and every bend took the cap.
+///  - **At every node.** Nine nodes in ten here are not junctions at all; they
+///    are the polyline vertices of a curved OSM way, spaced about ten metres
+///    apart. So the squares overlapped into one continuous band of paving
+///    running the length of every curved street, three metres wider than the
+///    street on each side, exactly coplanar with each other, and painted with
+///    the *surface of the widest arm*. On the Altstadt that is Kopfsteinpflaster,
+///    which is how the Altstadt came to be a tarmac street with cobbles
+///    spilled along the pavement beside it.
+///
+/// So: no plate at a bend, because the two ribbons already overlap by a
+/// half-width there and there is nothing to fill; and where three or more
+/// streets do meet, the plate is the convex hull of the arms' mouths — each
+/// mouth being the width of its own carriageway, set back to where the two
+/// kerb lines beside it cross. At a square crossing that is the crossing
+/// square exactly; at a T it is the rectangle the through street makes with
+/// the arm; at a fork it is the wedge between them. Nothing of it lies outside
+/// the union of the corridors that meet there, which is the property the
+/// square never had.
+///
+/// Returns `None` where there is nothing to pave.
+fn plate(fan: &[Arm], at: Vec2) -> Option<Mesh> {
+    if fan.len() < 3 {
+        return None;
+    }
+    let mut mouth = Vec::with_capacity(fan.len() * 2);
+    for index in 0..fan.len() {
+        let mine = &fan[index];
+        let previous = &fan[(index + fan.len() - 1) % fan.len()];
+        let next = &fan[(index + 1) % fan.len()];
+        // How far back this arm's mouth is: the further of the two kerb
+        // crossings beside it, so the plate reaches whichever corner is
+        // deepest. Never behind the node — with three arms there is always a
+        // corner in front, and a mouth pulled backwards would only shrink the
+        // hull.
+        let reach = |other: &Arm, gap: f32| {
+            let cap = (mine.half + other.half) * PLATE_REACH;
+            mitre(mine.half, other.half, gap).clamp(0.0, cap)
+        };
+        let along = reach(next, wrap(next.bearing - mine.bearing))
+            .max(reach(previous, wrap(mine.bearing - previous.bearing)));
+        let direction = Vec2::from_angle(mine.bearing);
+        let across = Vec2::new(-direction.y, direction.x) * mine.half;
+        mouth.push(direction * along + across);
+        mouth.push(direction * along - across);
+    }
+    let outline = hull(&mouth);
+    if outline.len() < 3 {
+        return None;
+    }
+    Some(super::buildings::with_tangents(fan_plan(&outline, at)))
 }
 
-/// How much bigger than its widest arm a junction quad may be paved.
-const JUNCTION_CAP: f32 = 2.6;
+/// How far along its own arm a junction plate's mouth may be set back, against
+/// the two half-widths that decide it.
+///
+/// The mitre it is capping is unbounded as the crossing angle goes to nothing.
+/// Two streets forking at fifteen degrees genuinely do have kerb lines that
+/// cross forty metres away, and the paving between them genuinely is a long
+/// wedge — but the pavement is mitred out even further than the plate is, so
+/// what the cap gives up is covered by the pavement rather than left bare.
+const PLATE_REACH: f32 = 2.0;
+
+/// The convex hull of a handful of points, anticlockwise: Andrew's monotone
+/// chain.
+///
+/// A hull rather than the outline in bearing order, because the outline in
+/// bearing order is not always a simple polygon — a T-junction's through
+/// street has two arms in line, whose kerb lines never cross, and the corner
+/// between them is not a point but the whole width of the crossing.
+fn hull(points: &[Vec2]) -> Vec<Vec2> {
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    sorted.dedup_by(|a, b| a.distance_squared(*b) < 1.0e-6);
+    if sorted.len() < 3 {
+        return sorted;
+    }
+    let cross = |o: Vec2, a: Vec2, b: Vec2| (a - o).perp_dot(b - o);
+    let mut chain: Vec<Vec2> = Vec::with_capacity(sorted.len() * 2);
+    for pass in 0..2 {
+        let start = chain.len();
+        let walk: Box<dyn Iterator<Item = &Vec2>> = if pass == 0 {
+            Box::new(sorted.iter())
+        } else {
+            Box::new(sorted.iter().rev())
+        };
+        for &point in walk {
+            while chain.len() >= start + 2
+                && cross(chain[chain.len() - 2], chain[chain.len() - 1], point) <= 0.0
+            {
+                chain.pop();
+            }
+            chain.push(point);
+        }
+        chain.pop();
+    }
+    chain
+}
+
+/// A convex outline lying in XZ, as a fan of triangles from its own middle.
+///
+/// The UVs are the *world* position divided by the tiling, not the position
+/// within the plate: a junction and the streets running into it are then the
+/// same continuous paving rather than two patterns meeting at a seam.
+fn fan_plan(outline: &[Vec2], at: Vec2) -> Mesh {
+    let middle = outline.iter().copied().sum::<Vec2>() / outline.len() as f32;
+    let mut positions = Vec::with_capacity(outline.len() + 1);
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    for point in std::iter::once(middle).chain(outline.iter().copied()) {
+        positions.push([point.x, 0.0, point.y]);
+        let uv = (at + point) / TILE;
+        uvs.push([uv.x, uv.y]);
+    }
+    let mut indices = Vec::with_capacity(outline.len() * 3);
+    for index in 0..outline.len() {
+        let (a, b) = (1 + index as u32, 1 + ((index + 1) % outline.len()) as u32);
+        // Wound so the face is up. Which way round that is depends on the
+        // handedness of XZ, so it is measured rather than assumed — the same
+        // argument `plan` makes, for the same reason: a quad wound the wrong
+        // way is not dark, it is simply not there.
+        let (p, q) = (outline[index], outline[(index + 1) % outline.len()]);
+        if (p - middle).perp_dot(q - middle) < 0.0 {
+            indices.extend([0, a, b]);
+        } else {
+            indices.extend([0, b, a]);
+        }
+    }
+    Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; uvs.len()])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::render::mesh::Indices::U32(indices))
+}
 
 /// The two pavements of one street, cut to the joints at both of its ends.
 ///
@@ -738,17 +833,13 @@ pub fn build_ribbons(
     hedge: Handle<StandardMaterial>,
 ) -> Ribbons {
     let fans = fans(layout);
-    // How far the pavement's own corners stand from each junction.
-    //
-    // The junction quad used to be a square the width of the widest arm, on
-    // the argument that the arms' own ribbons cover everything but the diamond
-    // in the middle. That holds when the arms meet square and fails the moment
-    // they do not: the pavements are mitred outward by `1/sin` of the crossing
-    // angle, so at a forty-degree corner the paving they are cut back from is
-    // half as wide again as the square — and what shows in the gap is bare
-    // ground, at every oblique junction in the town. Sized off the mitres it
-    // is sized off the same numbers the pavements are.
-    let reach = junction_reach(layout, &fans);
+    // The paving of each crossing, cut to it — see [`plate`], which is where
+    // the square this replaced is argued with at length.
+    let plates = layout
+        .graph
+        .nodes()
+        .map(|(id, node)| plate(&fans[id.0 as usize], node.pos).map(|mesh| meshes.add(mesh)))
+        .collect();
     let strips = (0..layout.graph.edge_count())
         .map(|i| strips(layout, &fans, super::roadgraph::EdgeId(i as u32), meshes))
         .collect();
@@ -756,19 +847,28 @@ pub fn build_ribbons(
         .graph
         .edges()
         .map(|edge| {
-            // Wider than the carriageway by a pavement either side, and longer
-            // than the street by its own width.
+            // A hand's breadth wider than the carriageway, and longer than the
+            // street by its own width.
             //
-            // The length is so that ribbons overlap at every junction; without
-            // it a crossing shows four green wedges where they stop. The width
-            // is so the asphalt runs *under* the kerb, which is where a road
-            // bed actually goes: the pavement slab is an opaque box sitting on
-            // top of it, so none of the extra is ever seen, and any daylight
-            // between the two — from a width that rounds differently, from two
-            // streets a metre out of parallel — comes out as more road instead
-            // of as a green stripe down the gutter.
+            // The length is so that ribbons overlap at every bend; without it a
+            // kink in a street shows a green wedge on the outside of it. The
+            // width is so the asphalt runs *under* the kerb, which is where a
+            // road bed actually goes: any daylight between the two — from a
+            // width that rounds differently, from two streets a metre out of
+            // parallel — comes out as more road instead of as a green stripe
+            // down the gutter.
+            //
+            // It used to be a whole pavement wider on each side, on the
+            // argument that the pavement slab is an opaque box sitting over it
+            // so none of the extra is ever seen. That argument holds only while
+            // there *is* a pavement, and `strips` drops one on twelve edges in
+            // a hundred — nineteen in a hundred of the cobbled ones. What was
+            // seen there was three and a bit metres of carriageway lying at
+            // road level exactly where the pavement should have been, in
+            // whatever the street is paved with: on the Altstadt, a cobbled
+            // strip along the kerb.
             meshes.add(super::buildings::with_tangents(ribbon(
-                edge.width + SIDEWALK_WIDTH * 2.0,
+                edge.width + KERB_UNDERLAP * 2.0,
                 edge.length + edge.width,
                 TILE,
             )))
@@ -809,9 +909,8 @@ pub fn build_ribbons(
         })
         .collect();
     Ribbons {
-        reach,
         roads,
-        junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0, TILE))),
+        plates,
         paving,
         strips,
         slabs,
@@ -863,29 +962,16 @@ fn boundary_box(size: Vec3, tile: f32) -> Mesh {
 /// carriageways use, so a forecourt and a gravel lane are the same gravel.
 const GRIT_TILE: f32 = super::GRIT_TILE;
 
-/// The lowest a carriageway is laid, in metres above the ground, and how much
-/// height the widest street in the town is allowed to claim over the narrowest.
-const ROAD_BED: f32 = 0.008;
-const ROAD_RANK: f32 = 0.006;
-/// The width, in metres, at which a street has claimed all of it.
-const WIDEST_STREET: f32 = 18.0;
+/// How far a carriageway runs under the kerb beside it.
+///
+/// A hand's breadth, and no more — see the note in [`build_ribbons`] about
+/// what a whole pavement's worth of it did on a street with no pavement.
+const KERB_UNDERLAP: f32 = 0.45;
 
-/// How high one street's carriageway is laid.
-///
-/// Every ribbon used to sit at the same twelve millimetres, and every junction
-/// in a real town is two or three of them overlapping — a rectangle each, at
-/// arbitrary angles, all coplanar. What that gives is z-fighting where they
-/// cross and, where the depth test happens to settle, a hard straight edge of
-/// one street's surface cut across another's.
-///
-/// So width decides. The wider street's carriageway is laid over the narrower
-/// one's, which is not a trick to break the tie — it is what a resurfacing gang
-/// actually does: the main road runs through and the side road stops at it. The
-/// last fraction of a millimetre is the edge's own index, so two streets of
-/// exactly the same width still cannot fight.
+/// How high one street's carriageway is laid — see [`super::layer`], which
+/// owns the whole stack and argues the millimetres.
 fn carriageway_height(width: f32, id: super::roadgraph::EdgeId) -> f32 {
-    let rank = (width / WIDEST_STREET).clamp(0.0, 1.0);
-    ROAD_BED + rank * ROAD_RANK + (id.0 % 8) as f32 * 0.00005
+    super::layer::carriageway(width, id.0)
 }
 
 /// Lays the two pavements of one street.
@@ -953,10 +1039,19 @@ pub fn spawn_edge(
             ChunkOf(chunk),
             Mesh3d(strip.footway.clone()),
             MeshMaterial3d(ribbons.slabs.clone()),
-            // A few millimetres proud of the kerb, which settles the depth test
-            // without being visible from standing height.
-            Transform::from_xyz(middle.x, SIDEWALK_HEIGHT + 0.004, middle.y)
-                .with_rotation(Quat::from_rotation_y(yaw)),
+            // A few millimetres proud of the kerb, and a slot of its own on top
+            // of that. Two pavements really do overlap: on the outside of a
+            // bend both of them run *past* the node, so the wedge between them
+            // is covered twice, about two thousand times over in this town.
+            // Coplanar, that wedge was one of the surfaces the player watched
+            // flicker.
+            Transform::from_xyz(
+                middle.x,
+                super::layer::FOOTWAY
+                    + super::layer::slot(id.0 * 2 + index as u32, super::layer::FOOTWAY_SLOTS),
+                middle.y,
+            )
+            .with_rotation(Quat::from_rotation_y(yaw)),
             visibility.clone(),
         ));
 
@@ -1008,14 +1103,21 @@ pub fn spawn_edge(
 
 /// How high a forecourt is laid.
 ///
-/// *Under* the road bed, not over it. A gap is held nine metres clear of a
-/// crossing but only half a metre clear of a bend, and a ribbon runs half its
-/// own width past every node it ends at — so a forecourt beside a kink in a
-/// street can find itself under the neighbouring carriageway. Laid lower, the
-/// carriageway simply wins the depth test and the forecourt is not there;
-/// laid higher, the two would fight, and a shimmering rectangle of gravel over
-/// a road is a great deal more obvious than a missing yard.
-const COURT_HEIGHT: f32 = 0.004;
+/// *Under* the road bed, not over it — see [`super::layer`]. A gap is held nine
+/// metres clear of a crossing but only half a metre clear of a bend, and a
+/// ribbon runs half its own width past every node it ends at, so a forecourt
+/// beside a kink in a street can find itself under the neighbouring
+/// carriageway. Laid lower, the carriageway simply wins the depth test and the
+/// forecourt is not there; laid higher, the two would fight, and a shimmering
+/// rectangle of gravel over a road is a great deal more obvious than a missing
+/// yard.
+///
+/// The slot is because two forecourts overlap too, wherever the frontage runs
+/// of two streets cross behind a corner building.
+fn court_height(id: super::roadgraph::EdgeId, index: usize) -> f32 {
+    super::layer::FORECOURT
+        + super::layer::slot(id.0 * 3 + index as u32, super::layer::FORECOURT_SLOTS)
+}
 
 /// Fills the holes the marcher left in one street's frontage.
 ///
@@ -1034,7 +1136,7 @@ fn fill_gaps(
     let Some(courts) = ribbons.courts.get(id.0 as usize) else {
         return;
     };
-    for court in courts {
+    for (index, court) in courts.iter().enumerate() {
         let gap = &court.gap;
         let turn = Quat::from_rotation_y(gap.yaw);
         // The quad runs back from the building line, away from the street. Its
@@ -1045,7 +1147,7 @@ fn fill_gaps(
             ChunkOf(chunk),
             Mesh3d(court.ground.clone()),
             MeshMaterial3d(ribbons.court.clone()),
-            Transform::from_xyz(middle.x, COURT_HEIGHT, middle.y).with_rotation(turn),
+            Transform::from_xyz(middle.x, court_height(id, index), middle.y).with_rotation(turn),
             visibility.clone(),
         ));
 
@@ -1076,39 +1178,36 @@ fn fill_gaps(
     }
 }
 
-/// Paves a crossing, so the ribbons meeting there do not leave a hole.
+/// Paves a crossing — see [`plate`], which cuts it.
+///
+/// Nothing at all at a bend, which is nine nodes in ten: two ribbons meeting
+/// nearly in line already overlap by a half-width there, and what the square
+/// this replaced was doing was paving the verge on both sides of every curved
+/// street in the town.
 pub fn spawn_junction(
     commands: &mut Commands,
     ribbons: &Ribbons,
     node: super::roadgraph::NodeId,
     at: Vec2,
-    widest: f32,
     surface: super::atlas::Surface,
     chunk: IVec2,
 ) {
-    // A square reaching the outermost corner of the pavements that meet here —
-    // see [`junction_reach`]. Square rather than fitted to the arms, because a
-    // junction is covered by the ribbons of its own arms except for the wedges
-    // between them, and a square covers those whatever angle the arms arrive
-    // at. What it is *sized* by is the mitre rather than the widest street: at
-    // an oblique corner the pavements are cut back half as far again as a
-    // width-sized square reaches, and what showed in the gap was bare ground.
-    let side = ribbons
-        .reach
-        .get(node.0 as usize)
-        .copied()
-        .unwrap_or(widest + SIDEWALK_WIDTH * 2.0);
+    let Some(Some(mesh)) = ribbons.plates.get(node.0 as usize) else {
+        return;
+    };
     commands.spawn((
         ChunkOf(chunk),
-        Mesh3d(ribbons.junction.clone()),
+        Mesh3d(mesh.clone()),
         // Paved as the widest arm is. A junction between a cobbled square and
         // a tarmac street is one or the other, and the bigger road is the one
         // whose surfacing gang got there.
         MeshMaterial3d(ribbons.material(surface)),
-        // Under every arm's own ribbon, so what shows in the middle of a
-        // junction is the ribbons themselves and this is only what fills the
-        // diamond none of them covers.
-        Transform::from_xyz(at.x, ROAD_BED - 0.002, at.y).with_scale(Vec3::new(side, 1.0, side)),
+        // *Over* every arm's own ribbon, which is the one thing here that runs
+        // the other way round from before. The plate is cut to the crossing
+        // now, so what a junction shows is one surface laid by one gang, and
+        // not four rectangles overlapping at angles with a different paving on
+        // each and a millimetre between them.
+        Transform::from_xyz(at.x, super::layer::JUNCTION, at.y),
     ));
 }
 
@@ -1510,6 +1609,142 @@ fn kind_for(rng: &mut ChaCha8Rng, district: District, arterial: bool) -> Buildin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fan of arms leaving one node, sorted the way [`fans`] sorts them.
+    fn fan_of(arms: &[(f32, f32)]) -> Vec<Arm> {
+        let mut fan: Vec<Arm> = arms
+            .iter()
+            .enumerate()
+            .map(|(index, &(degrees, width))| Arm {
+                bearing: degrees.to_radians(),
+                half: width * 0.5,
+                edge: super::super::roadgraph::EdgeId(index as u32),
+            })
+            .collect();
+        fan.sort_by(|a, b| a.bearing.total_cmp(&b.bearing));
+        fan
+    }
+
+    /// The corners of the plate, in the node's own frame.
+    fn plate_outline(arms: &[(f32, f32)]) -> Vec<Vec2> {
+        let fan = fan_of(arms);
+        let mesh = plate(&fan, Vec2::ZERO).expect("a junction of three arms is paved");
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|values| values.as_float3())
+            .expect("a plate has positions");
+        // The first vertex is the middle of the fan; the rest are the outline.
+        positions[1..]
+            .iter()
+            .map(|p| Vec2::new(p[0], p[2]))
+            .collect()
+    }
+
+    /// The fault the player actually reported: cobbles on the pavement.
+    ///
+    /// Nine nodes in ten in a town read off a map are a bend in one street, not
+    /// a junction between two — a curved OSM way arrives as a dozen segments
+    /// with a node at every vertex. The square this replaced was laid at every
+    /// one of them, at a median of fourteen metres a side, so the paving of the
+    /// widest arm ran the whole length of every curved street and out over both
+    /// verges. On the Altstadt that paving is Kopfsteinpflaster.
+    #[test]
+    fn a_bend_in_a_street_is_not_paved_as_a_junction() {
+        // Two arms leaving nearly in line: a kink, not a crossing.
+        assert!(plate(&fan_of(&[(0.0, 7.5), (172.0, 7.5)]), Vec2::ZERO).is_none());
+        // And a dead end.
+        assert!(plate(&fan_of(&[(0.0, 7.5)]), Vec2::ZERO).is_none());
+        // Three arms is a junction and is paved.
+        assert!(
+            plate(
+                &fan_of(&[(0.0, 7.5), (90.0, 7.5), (180.0, 7.5)]),
+                Vec2::ZERO
+            )
+            .is_some()
+        );
+    }
+
+    /// And the other half of it: whatever the plate covers, it may not stand
+    /// out past the kerb lines of the streets that meet there. Past them is
+    /// where the pavement is.
+    #[test]
+    fn no_part_of_a_junction_plate_lies_outside_the_streets_that_meet_there() {
+        for arms in [
+            vec![(0.0, 9.5), (90.0, 7.5), (180.0, 9.5), (270.0, 7.5)],
+            vec![(0.0, 13.1), (90.0, 6.0), (180.0, 13.1)],
+            vec![(10.0, 7.8), (140.0, 6.0), (255.0, 7.5)],
+            vec![(0.0, 6.0), (35.0, 6.0), (200.0, 7.5)],
+        ] {
+            let fan = fan_of(&arms);
+            let reach = arms
+                .iter()
+                .map(|&(_, width)| width * 0.5)
+                .fold(0.0f32, f32::max);
+            for corner in plate_outline(&arms) {
+                // Inside at least one arm's corridor, or within the round
+                // patch every corridor covers at the node itself.
+                let covered = corner.length() <= reach + 0.05
+                    || fan.iter().any(|arm| {
+                        let direction = Vec2::from_angle(arm.bearing);
+                        let across = corner.perp_dot(direction).abs();
+                        corner.dot(direction) > -0.05 && across <= arm.half + 0.05
+                    });
+                assert!(
+                    covered,
+                    "{arms:?}: a plate corner at {corner} is outside every carriageway"
+                );
+            }
+        }
+    }
+
+    /// A square crossing is paved as a square: the rectangle the two corridors
+    /// share, and not a metre more.
+    #[test]
+    fn a_square_crossing_is_paved_as_the_square_it_is() {
+        let outline = plate_outline(&[(0.0, 9.0), (90.0, 6.0), (180.0, 9.0), (270.0, 6.0)]);
+        let (mut wide, mut deep) = (0.0f32, 0.0f32);
+        for corner in &outline {
+            wide = wide.max(corner.x.abs());
+            deep = deep.max(corner.y.abs());
+        }
+        // The east-west street is 9 m wide, so the crossing is 9 m deep; the
+        // north-south one is 6 m, so it is 6 m across.
+        assert!(
+            (wide * 2.0 - 6.0).abs() < 0.1 && (deep * 2.0 - 9.0).abs() < 0.1,
+            "a 9m by 6m crossing came out {} by {}",
+            wide * 2.0,
+            deep * 2.0
+        );
+    }
+
+    /// A T is the rectangle the through street makes with its arm, which the
+    /// mitres alone cannot say: the two arms in line have kerb lines that never
+    /// cross, so the corner between them is not a point. That is why the
+    /// outline is a hull rather than the mitres in bearing order.
+    #[test]
+    fn a_tee_is_paved_across_its_whole_through_street() {
+        let outline = plate_outline(&[(0.0, 8.0), (90.0, 5.0), (180.0, 8.0)]);
+        let south = outline
+            .iter()
+            .map(|corner| corner.y)
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            (south + 4.0).abs() < 0.1,
+            "the far kerb of the through street is at {south}, not -4"
+        );
+    }
+
+    /// The cap that stops a shallow fork asking for a plate the size of a
+    /// block.
+    #[test]
+    fn a_shallow_fork_does_not_pave_the_town() {
+        for corner in plate_outline(&[(0.0, 7.5), (8.0, 7.5), (190.0, 7.5)]) {
+            assert!(
+                corner.length() < 7.5 * PLATE_REACH + 8.0,
+                "a fork at eight degrees paved out to {corner}"
+            );
+        }
+    }
 
     /// Where two kerbs cross, at the one angle everybody agrees about.
     #[test]

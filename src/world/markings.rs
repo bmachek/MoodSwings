@@ -18,12 +18,17 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 
+use super::atlas::Surface;
 use super::buildings::{ChunkOf, with_tangents};
-use super::roadgraph::RoadEdge;
+use super::roadgraph::{EdgeId, RoadEdge};
 use super::texture::{byte, fbm, painted};
 
-/// How high the paint floats above the asphalt.
-const PAINT_HEIGHT: f32 = 0.015;
+/// How high the paint floats above the asphalt — see `world::layer`, which
+/// owns the whole stack. It is four millimetres over the junction plate and
+/// six to nineteen over a carriageway, which is not depth margin: the buffer
+/// would cope with a hundredth of it. It is so the line stays visible from a
+/// driver's eye height, where the asphalt's own normal-mapped grain would
+/// otherwise chew into it at grazing angles.
 /// Width of a centre line, in metres.
 const LINE_WIDTH: f32 = 0.16;
 /// Metres of road per dash, gap included.
@@ -133,18 +138,32 @@ fn along(direction: Vec2) -> f32 {
 }
 
 /// Paints one street: a centre line down it, and a crossing at each end.
+///
+/// Nothing at all on a street that is not asphalt. A market street laid in
+/// granite setts since it was a market has no dashed centre line down it and
+/// never had one — and the town this matters to is the one whose Altstadt is
+/// cobbled, where the paint was the loudest thing saying "arterial road" about
+/// a medieval square.
 pub fn spawn_edge(
     commands: &mut Commands,
     assets: &MarkingAssets,
+    id: EdgeId,
     edge: &RoadEdge,
     from: Vec2,
     to: Vec2,
     chunk: IVec2,
 ) {
+    if edge.surface != Surface::Asphalt {
+        return;
+    }
     let Ok(direction) = Dir2::new(to - from) else {
         return;
     };
     let yaw = along(*direction);
+    // Two arms of one junction lay their crossings within a metre of each
+    // other, and two segments of one street lay dashes that overlap where the
+    // ribbons do. A slot each, so no two of them are ever coplanar.
+    let height = super::layer::PAINT + super::layer::slot(id.0, super::layer::PAINT_SLOTS);
 
     // One quad per dash. Spacing a pattern by placing geometry rather than by
     // tiling a texture is what keeps the dashes the same length on a short
@@ -158,7 +177,7 @@ pub fn spawn_edge(
             ChunkOf(chunk),
             Mesh3d(assets.quad.clone()),
             MeshMaterial3d(assets.centre_line.clone()),
-            Transform::from_xyz(at.x, PAINT_HEIGHT, at.y)
+            Transform::from_xyz(at.x, height, at.y)
                 .with_rotation(Quat::from_rotation_y(yaw))
                 .with_scale(Vec3::new(LINE_WIDTH, 1.0, DASH_LENGTH.min(period * 0.6))),
         ));
@@ -174,7 +193,7 @@ pub fn spawn_edge(
             ChunkOf(chunk),
             Mesh3d(assets.quad.clone()),
             MeshMaterial3d(assets.crossing.clone()),
-            Transform::from_xyz(end.x, PAINT_HEIGHT, end.y)
+            Transform::from_xyz(end.x, height, end.y)
                 .with_rotation(Quat::from_rotation_y(yaw))
                 .with_scale(Vec3::new(edge.width * 0.92, 1.0, CROSSING_DEPTH)),
         ));

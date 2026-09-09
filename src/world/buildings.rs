@@ -923,7 +923,7 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
         let surface = (
             ChunkOf(chunk),
             Mesh3d(assets.unit_quad.clone()),
-            Transform::from_xyz(center.x, SIDEWALK_HEIGHT + 0.004, center.y)
+            Transform::from_xyz(center.x, super::layer::FOOTWAY, center.y)
                 .with_scale(Vec3::new(size.x, 1.0, size.y)),
         );
         // Two spawns rather than one with the material chosen inside it: lawn
@@ -953,6 +953,9 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     if !block.paved {
         for building in &block.buildings {
             let site = site_in(block, building);
+            // One number for both the apron's depth slot and what the yard
+            // behind it is made of, so a building's ground is decided once.
+            let seed = rooftop::seed_for(ctx.seed, building.footprint);
             // The apron: the step the house stands on, cut to the house and
             // turned onto the house's own street. This is the block slab's job
             // done per building, and it is the only shape that can do it here —
@@ -985,9 +988,17 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                 ChunkOf(chunk),
                 Mesh3d(assets.unit_quad.clone()),
                 MeshMaterial3d(assets.paving(site.span.x)),
-                Transform::from_xyz(site.centre.x, SIDEWALK_HEIGHT + 0.004, site.centre.y)
-                    .with_rotation(Quat::from_rotation_y(site.yaw))
-                    .with_scale(Vec3::new(slab.x, 1.0, slab.z)),
+                Transform::from_xyz(
+                    site.centre.x,
+                    // A slot of its own: an apron is seven tenths of a metre
+                    // proud all round, so in a terrace every one of them
+                    // overlaps both of its neighbours.
+                    super::layer::FOOTWAY
+                        + super::layer::slot(seed as u32, super::layer::FOOTWAY_SLOTS),
+                    site.centre.y,
+                )
+                .with_rotation(Quat::from_rotation_y(site.yaw))
+                .with_scale(Vec3::new(slab.x, 1.0, slab.z)),
                 NotShadowCaster,
             ));
             // Shorter than a block is wide on purpose. A yard deep enough to
@@ -999,17 +1010,22 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
             let behind = site.centre - site.outward() * (site.span.y * 0.5 + YARD * 0.5);
             // Grass or paving, per building: an old town's back land is both,
             // and one material across the whole of it reads as a golf course.
-            let seed = rooftop::seed_for(ctx.seed, building.footprint);
             let yard = (
                 ChunkOf(chunk),
                 Mesh3d(assets.unit_quad.clone()),
-                // Under the road, not over it. The order off the ground is
-                // yard, then carriageway, then paint, then kerb — so wherever
-                // a yard and a street want the same square metre the street
-                // wins, which is the way round that cannot look like a bug.
-                Transform::from_xyz(behind.x, 0.006, behind.y)
-                    .with_rotation(Quat::from_rotation_y(site.yaw))
-                    .with_scale(Vec3::new(site.span.x + 3.0, 1.0, YARD)),
+                // Under the road, not over it — see `world::layer`, which
+                // owns the order. Wherever a yard and a street want the same
+                // square metre the street wins, which is the way round that
+                // cannot look like a bug. The slot is because a yard thirteen
+                // metres deep overlaps the yard behind it as often as not.
+                Transform::from_xyz(
+                    behind.x,
+                    super::layer::YARD
+                        + super::layer::slot((seed >> 32) as u32, super::layer::YARD_SLOTS),
+                    behind.y,
+                )
+                .with_rotation(Quat::from_rotation_y(site.yaw))
+                .with_scale(Vec3::new(site.span.x + 3.0, 1.0, YARD)),
                 NotShadowCaster,
             );
             if seed & 1 == 0 {

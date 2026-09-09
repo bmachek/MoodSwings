@@ -306,7 +306,7 @@ pub fn update_streaming(
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
-                spawn_edge(&mut commands, &street.paint, edge, from, to, chunk);
+                spawn_edge(&mut commands, &street.paint, id, edge, from, to, chunk);
                 super::props::spawn_edge(
                     &mut commands,
                     &street.props,
@@ -462,7 +462,6 @@ pub fn update_streaming(
                 if let Some(ribbons) = street.ribbons.as_deref()
                     && streetside
                 {
-                    let widest = arms.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
                     // Read off the graph rather than off `arms`, which several
                     // other spawners share and none of them wants widened.
                     let paved = node
@@ -477,7 +476,6 @@ pub fn update_streaming(
                         ribbons,
                         id,
                         node.pos,
-                        widest,
                         paved,
                         chunk,
                     );
