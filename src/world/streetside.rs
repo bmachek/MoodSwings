@@ -534,6 +534,48 @@ pub fn mitre(mine: f32, theirs: f32, gap: f32) -> f32 {
 /// A mitre no street can honour. Whatever asks for it goes unpaved.
 const UNBUILDABLE: f32 = 1.0e6;
 
+/// The shortest run of pavement worth laying, in metres.
+const SHORTEST_PAVEMENT: f32 = 0.6;
+
+/// Two cuts taken from opposite ends of one street that together want more of
+/// it than there is.
+///
+/// This is what used to delete the pavement, and it deleted a lot of it: 361
+/// of Landshut's 4574 pavement sides, 2.7 km of kerb, including 36 m of the
+/// Altstadt and a 51 m run of Podewilsstraße — and 57% of the town's real
+/// junctions had at least one arm arriving with no pavement on it. A hole in a
+/// pavement is the one thing the module's own doc says a town never has.
+///
+/// The old rule was all-or-nothing because the two cuts were believed
+/// absolutely. They should not be: a mitre says where two kerb lines *would*
+/// cross, and on a short block between two wide junctions they cross past the
+/// far end of the street. What is actually there is not nothing. It is a
+/// pavement that both ends have eaten into, and the honest answer is to let
+/// each end keep its share of what there is.
+///
+/// So: only the parts of the two cuts that reach *into* the street compete —
+/// a negative cut runs out past its own node and costs the other end nothing —
+/// and when the two together overrun, both are scaled down by the same factor.
+/// Each end still gives way in proportion to how much it asked for, which is
+/// what keeps a wide arterial taking more of the corner than the lane beside
+/// it, and the pavement stops short of both crossings instead of vanishing.
+///
+/// `keep` is what must be left over. On the kerb line that is a real minimum;
+/// on the back line it is zero, because a back line collapsing to a point is
+/// not a failure — it is a wedge, which is exactly what a pavement is on a
+/// short block between two junctions.
+fn share(a: f32, b: f32, length: f32, keep: f32) -> (f32, f32) {
+    let (into_a, into_b) = (a.max(0.0), b.max(0.0));
+    // Whatever the two cuts spend outside the street is not the street's to
+    // give, so it comes off the length before the two are asked to share it.
+    let room = length - keep - (a - into_a) - (b - into_b);
+    if into_a + into_b <= room || into_a + into_b <= 0.0 {
+        return (a, b);
+    }
+    let scale = room.max(0.0) / (into_a + into_b);
+    (a - into_a + into_a * scale, b - into_b + into_b * scale)
+}
+
 /// One street leaving a junction: which way, how wide, and which edge it is.
 struct Arm {
     bearing: f32,
@@ -790,11 +832,24 @@ fn strips(
         let left = side > 0.0;
         let (a_kerb, a_back) = joint(&fans[edge.a.0 as usize], edge_id, left);
         let (b_kerb, b_back) = joint(&fans[edge.b.0 as usize], edge_id, !left);
+        // A mitre either end cannot honour is not a mitre, it is two ways of
+        // the extract lying on top of each other. Those stay unpaved.
+        if [a_kerb, b_kerb, a_back, b_back]
+            .iter()
+            .any(|cut| *cut >= UNBUILDABLE * 0.5)
+        {
+            continue;
+        }
+        // Where the two ends want more street than there is, they share it —
+        // see [`share`]. The back line is allowed all the way down to a point,
+        // because a pavement that has collapsed to a wedge is still a
+        // pavement, and 186 of this town's sides are exactly that.
+        let (a_kerb, b_kerb) = share(a_kerb, b_kerb, length, SHORTEST_PAVEMENT);
+        let (a_back, b_back) = share(a_back, b_back, length, 0.0);
 
-        // Both cuts have to leave something between them, on both lines.
         let kerb_run = length - a_kerb - b_kerb;
-        let back_run = length - a_back - b_back;
-        if kerb_run < 0.6 || back_run < 0.6 {
+        let back_run = (length - a_back - b_back).max(0.0);
+        if kerb_run < SHORTEST_PAVEMENT {
             continue;
         }
 
