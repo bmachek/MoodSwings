@@ -148,14 +148,26 @@ impl Species {
     /// poplar. This is the entire difference between the species as far as
     /// anyone standing on the pavement can tell.
     fn crown(self) -> &'static [(Vec3, f32)] {
-        const PLANE: [(Vec3, f32); 3] = [
-            (Vec3::new(0.0, 1.9, 0.0), 2.5),
-            (Vec3::new(-1.5, 1.1, 0.7), 1.7),
-            (Vec3::new(1.4, 1.3, -0.8), 1.8),
+        // Six rather than three, and the three extra are all small and all at
+        // the edge. A crown is read at fifty metres by its *outline*, and an
+        // outline made of three big arcs is three big arcs however lumpy each
+        // of them is — the noise in `ball` works on a scale of a metre and the
+        // thing that was wrong was on a scale of five. What breaks a silhouette
+        // is a limb sticking out where the next one does not.
+        const PLANE: [(Vec3, f32); 6] = [
+            (Vec3::new(0.0, 2.0, 0.0), 2.4),
+            (Vec3::new(-1.7, 1.3, 0.6), 1.8),
+            (Vec3::new(1.5, 1.5, -0.9), 1.9),
+            (Vec3::new(0.4, 2.9, 1.3), 1.35),
+            (Vec3::new(-1.1, 2.6, -1.4), 1.25),
+            (Vec3::new(2.2, 0.7, 0.9), 1.10),
         ];
-        const LIME: [(Vec3, f32); 2] = [
-            (Vec3::new(0.0, 1.7, 0.0), 2.1),
-            (Vec3::new(0.5, 0.6, 0.4), 1.5),
+        const LIME: [(Vec3, f32); 5] = [
+            (Vec3::new(0.0, 1.8, 0.0), 2.0),
+            (Vec3::new(0.6, 0.7, 0.5), 1.5),
+            (Vec3::new(-0.9, 1.2, -0.6), 1.4),
+            (Vec3::new(0.2, 2.7, -0.5), 1.15),
+            (Vec3::new(-1.4, 2.0, 0.9), 1.00),
         ];
         // The columnar one needs more blobs than the rest and closer
         // together, because a stack is only read as one crown while the necks
@@ -169,9 +181,11 @@ impl Species {
             (Vec3::new(0.0, 3.55, 0.0), 0.95),
             (Vec3::new(0.0, 4.40, 0.0), 0.72),
         ];
-        const CHERRY: [(Vec3, f32); 2] = [
-            (Vec3::new(0.0, 1.0, 0.0), 1.4),
-            (Vec3::new(-0.6, 0.5, 0.3), 1.0),
+        const CHERRY: [(Vec3, f32); 4] = [
+            (Vec3::new(0.0, 1.1, 0.0), 1.35),
+            (Vec3::new(-0.7, 0.55, 0.35), 1.05),
+            (Vec3::new(0.8, 0.8, -0.4), 0.95),
+            (Vec3::new(0.1, 1.8, 0.3), 0.80),
         ];
 
         match self {
@@ -180,6 +194,14 @@ impl Species {
             Species::Poplar => &POPLAR,
             Species::Cherry => &CHERRY,
         }
+    }
+
+    /// Whether this crown is a stack rather than a cluster.
+    ///
+    /// The one thing that decides how much waist a crown may have between its
+    /// blobs — see `a_crown_is_one_shape_rather_than_a_stack_of_balls`.
+    fn columnar(self) -> bool {
+        matches!(self, Species::Poplar)
     }
 
     /// How far a full gale lays it over, as a fraction of [`LEAN`].
@@ -924,22 +946,32 @@ mod tests {
     }
 
     /// A crown is one merged mesh, and two blobs joined by a thin neck are two
-    /// blobs however much they overlap. The columnar species is where this
-    /// goes wrong — its crown is a stack rather than a cluster, so every waist
-    /// in it is a waist you can see, and the tree reads as a snowman.
+    /// blobs however much they overlap.
+    ///
+    /// How thin a neck may be is a question about the *shape of the species*,
+    /// which is why the threshold is one. A columnar tree's crown is a stack,
+    /// and every waist in a stack is a waist you can see straight through — get
+    /// it wrong and the tree reads as a snowman, which is what the poplar did.
+    /// A broadleaf's crown is a cluster of limbs and is *supposed* to be lobed:
+    /// the outline is what a tree is read by at fifty metres, and an outline
+    /// made of three big arcs is three big arcs however lumpy each of them is.
+    /// A limb that sticks out far enough to break the arc necessarily narrows
+    /// where it leaves the crown.
     #[test]
     fn a_crown_is_one_shape_rather_than_a_stack_of_balls() {
         for species in Species::ALL {
             let blobs = species.crown();
+            // A stack has to hold together; a cluster is allowed its lobes.
+            let floor = if species.columnar() { 0.9 } else { 0.6 };
             for (i, &blob) in blobs.iter().enumerate().skip(1) {
                 // Every blob has to join at least one of the ones before it
-                // through a neck nearly as wide as the blob itself.
+                // through a neck that is not a stalk.
                 let widest = blobs[..i]
                     .iter()
                     .map(|&other| waist(blob, other))
                     .fold(0.0, f32::max);
                 assert!(
-                    widest > 0.9,
+                    widest > floor,
                     "{species:?} blob {i} at {} joins the rest of its crown \
                      through a neck {:.0}% of its width",
                     blob.0,
