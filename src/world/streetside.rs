@@ -108,6 +108,29 @@ const BOUNDARY_THICK: f32 = 0.34;
 /// bare meadow this replaced: at least meadow admits you can walk through it.
 const OPENING: f32 = 0.32;
 
+/// How far behind the building in front the back land starts, and how much
+/// space is left between one outbuilding and the next.
+const BACKYARD: (f32, f32) = (4.5, 13.0);
+
+/// How many the marcher will try to put behind one frontage, and how often it
+/// carries on to the next.
+///
+/// Three, falling off: a deep block gets a workshop and a garage behind the
+/// house and then stops, which is what the back of a town looks like. Carrying
+/// on further would build a second street with no street on it.
+const OUTBUILDINGS: usize = 3;
+const BACK_BUILT: f32 = 0.62;
+
+/// An outbuilding's size against the frontage it stands behind, its own depth,
+/// and how tall it is.
+///
+/// Small and low, and both matter. A back building the size of the house in
+/// front of it is a second house, and a town of them reads as a housing estate
+/// rather than as an old town with sheds behind it.
+const BACK_SPAN: (f32, f32) = (0.45, 1.05);
+const BACK_DEPTH: (f32, f32) = (4.0, 11.0);
+const BACK_HEIGHT: (f32, f32) = (3.0, 7.5);
+
 /// Cell of the occupancy grid, in metres. About the size of one building, so a
 /// candidate only ever has to look at nine cells.
 const CELL: f32 = 20.0;
@@ -1288,6 +1311,81 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Fr
                     arterial: [edge.arterial; 4],
                     quarter: None,
                 });
+
+                // And what is behind it.
+                //
+                // A town built only along its frontages is a town with a hole
+                // in the middle of every block, and the holes are enormous: the
+                // gap between two streets in Landshut is about a hundred and
+                // fifty metres and a plot is twenty deep, so four fifths of the
+                // ground inside a block had nothing on it at all. The shading
+                // makes it read as a yard rather than as a meadow now, but a
+                // yard a hundred metres across with nothing standing on it is
+                // still not a town — it is a car park nobody painted.
+                //
+                // What is actually back there is the back of the town: a
+                // workshop, a coach house, a garage block, a lock-up, an
+                // extension somebody built in the sixties. Low, small, turned
+                // to the same street as the house in front, and placed by
+                // exactly the machinery the frontage is — the same clash grid
+                // and the same corridor test — so a back building can no more
+                // stand in a road than a front one can.
+                let mut back = line + depth + yards.random_range(BACKYARD.0..BACKYARD.1);
+                for _ in 0..OUTBUILDINGS {
+                    if yards.random_range(0.0..1.0) > BACK_BUILT {
+                        break;
+                    }
+                    let across = frontage * yards.random_range(BACK_SPAN.0..BACK_SPAN.1);
+                    let deep = yards.random_range(BACK_DEPTH.0..BACK_DEPTH.1);
+                    let at = a
+                        + *direction
+                            * (along - frontage * 0.5
+                                + across * 0.5
+                                + yards.random_range(-2.0..2.0))
+                        + normal * (side * (back + deep * 0.5));
+                    let reach = Vec2::new(across, deep).length() * 0.5;
+                    let cell = ((at.x / CELL).floor() as i32, (at.y / CELL).floor() as i32);
+                    let clash = (-1..=1).any(|dx| {
+                        (-1..=1).any(|dz| {
+                            taken
+                                .get(&(cell.0 + dx, cell.1 + dz))
+                                .is_some_and(|others| {
+                                    others.iter().any(|(other, other_radius)| {
+                                        at.distance(*other) < (reach + other_radius) * CLEARANCE
+                                    })
+                                })
+                        })
+                    });
+                    let shape = Oblong {
+                        centre: at,
+                        axis: *direction,
+                        half: Vec2::new(across, deep) * 0.5,
+                    };
+                    back += deep + yards.random_range(BACKYARD.0..BACKYARD.1);
+                    if clash || in_a_road(&roads, &shape) {
+                        continue;
+                    }
+                    taken.entry(cell).or_default().push((at, reach));
+
+                    let half = Vec2::new(across, deep) * 0.5;
+                    blocks.push(Block {
+                        area: Rect::new(at - Vec2::splat(reach), at + Vec2::splat(reach)),
+                        paved: false,
+                        district,
+                        buildings: vec![Building {
+                            footprint: Rect::new(at - half, at + half),
+                            facing: Some(yaw),
+                            // One or two storeys, whatever the street in front
+                            // is: this is a shed, not a second house.
+                            height: yards.random_range(BACK_HEIGHT.0..BACK_HEIGHT.1),
+                            palette: yards.random_range(0..PALETTE_SIZE),
+                            kind: BuildingKind::Apartments,
+                        }],
+                        vacants: Vec::new(),
+                        arterial: [false; 4],
+                        quarter: None,
+                    });
+                }
             }
         }
     }

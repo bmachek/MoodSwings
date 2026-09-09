@@ -321,6 +321,9 @@ pub fn update_streaming(
                     &street.foliage,
                     &mut planting,
                     edge,
+                    // Which named street this is, so a whole street is an
+                    // avenue rather than four segments of one.
+                    street.signs.per_edge.get(id.0 as usize).copied().flatten(),
                     from,
                     to,
                     chunk,

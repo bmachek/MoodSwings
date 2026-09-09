@@ -170,7 +170,7 @@ fn manhole() -> Image {
         // A ring where the cover meets its frame, always full of grit.
         let seam = smoothstep01((0.045 - (radius - 0.86).abs()) / 0.03);
 
-        let iron = 0.16 + waffle * cover * 0.09 - seam * 0.07;
+        let iron = 0.30 + waffle * cover * 0.13 - seam * 0.10;
         // Rust does not cover a cover evenly; it starts at the seam.
         let rust = fbm(u, v, 7, 3, 3) * (0.35 + seam * 0.6);
         let value = iron * (1.0 + rust * 0.25);
@@ -201,7 +201,7 @@ fn gully() -> Image {
         let slot = smoothstep01((0.30 - (bar - 0.5).abs()) / 0.12)
             * smoothstep01((0.38 - (u - 0.5).abs()) / 0.04);
 
-        let value = 0.17 - slot * 0.15;
+        let value = 0.31 - slot * 0.24;
         let c = byte(value);
         [c, c, byte(value * 0.96), byte(frame)]
     })
@@ -219,11 +219,19 @@ fn patch() -> Image {
             * smoothstep01((0.455 - (v - 0.5).abs() + ragged) / 0.04);
 
         let grit = fbm(u, v, 22, 3, 19);
-        // Blacker than the road, and by a long way. A repair is asphalt that
-        // has not had ten years of tyres polishing the aggregate pale, and at
-        // the value the road itself is painted it is a rectangle nobody can
-        // see. The tar seam around it is blacker still.
-        let value = 0.145 + grit * 0.055 - (seal - inside) * 0.075;
+        // Blacker than the road, but not by the factor this used to be. A
+        // repair is asphalt that has not had ten years of tyres polishing the
+        // aggregate pale, which is perhaps a third darker — and it was written
+        // down as an *absolute* value against an assumption about how the road
+        // renders, which is exactly the assumption that stopped holding when
+        // the lighting was rebuilt. Measured off a frame rather than reasoned
+        // about: at 0.145 a patch came back at 23/255 against a carriageway at
+        // 107, which is not a repair, it is a hole in the road. A forward decal
+        // is lit in the forward pass while everything under it shades through
+        // the g-buffer, and the two do not arrive at the same number for the
+        // same albedo — so these are calibrated against a screenshot and there
+        // is no arguing them from first principles.
+        let value = 0.34 + grit * 0.09 - (seal - inside) * 0.10;
         let c = byte(value);
         [c, c, byte(value * 1.02), byte(seal * margin(u, v))]
     })
@@ -240,8 +248,8 @@ fn oil() -> Image {
         // Not black, and not opaque. From above, a near-black stain at full
         // alpha is a hole in the road: no grain shows through it and its edge
         // is a silhouette. What it wants to be is dark asphalt with the road's
-        // own texture still under it.
-        let value = 0.055 + (1.0 - core) * 0.05;
+        // own texture still under it. Calibrated with the patch — see there.
+        let value = 0.15 + (1.0 - core) * 0.10;
         [
             byte(value * 1.15),
             byte(value),
@@ -265,7 +273,7 @@ fn crack() -> Image {
 
         let line = main.max(branch) * margin(u, v);
         // Not black: a crack is a shadow with grit in the bottom of it.
-        [byte(0.06), byte(0.06), byte(0.065), byte(line * 0.85)]
+        [byte(0.17), byte(0.17), byte(0.18), byte(line * 0.8)]
     })
 }
 
@@ -279,12 +287,17 @@ fn skid() -> Image {
         // Tread: rubber comes off in ribs, not as a sheet.
         let ribs = 0.62 + fbm(u * 5.0, v * 0.7, 16, 3, 29) * 0.7;
 
-        let value = 0.085;
+        // Rubber on asphalt is a shade darker than the asphalt, not a black
+        // stripe: at the value this started at a street with three skids on it
+        // read as a street somebody had drawn on with a marker pen. Alpha down
+        // with it, because a skid is a *stain* and the road's own grain has to
+        // come through it.
+        let value = 0.20;
         [
             byte(value),
             byte(value),
             byte(value * 1.05),
-            byte(band * along * ribs * 0.8 * margin(u, v)),
+            byte(band * along * ribs * 0.55 * margin(u, v)),
         ]
     })
 }

@@ -50,6 +50,31 @@ const AVENUE: f32 = 0.42;
 /// How much likelier an arterial road is to be an avenue.
 const AVENUE_ARTERIAL: f32 = 1.7;
 
+/// Is this street an avenue?
+///
+/// Decided from the street's *name* where the extract gave one, and only from
+/// the segment where it did not. The distinction is the difference between a
+/// row of trees and a row of gaps: a curved Altstadt street arrives as a dozen
+/// segments, and rolling per segment plants trees down four of them and leaves
+/// eight bare, which reads as an avenue somebody has been cutting down. One
+/// council plants one street.
+fn avenue(edge: &RoadEdge, street: Option<usize>, rng: &mut ChaCha8Rng) -> bool {
+    let chance = AVENUE * if edge.arterial { AVENUE_ARTERIAL } else { 1.0 };
+    match street {
+        // Hashed rather than drawn: every segment of one street has to reach
+        // the same answer, and they are visited in whatever order the chunks
+        // arrive in. The draw is still taken, because the streams downstream
+        // of it must not shift depending on which streets have names.
+        Some(name) => {
+            let _ = rng.random_range(0.0..1.0);
+            let mut key = (name as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            key ^= key >> 29;
+            (key % 1000) as f32 / 1000.0 < chance
+        }
+        None => rng.random_range(0.0..1.0) < chance,
+    }
+}
+
 /// Metres between trees in a park, before jitter.
 const PARK_SPACING: f32 = 11.0;
 /// How far inside a park's edge planting starts.
@@ -587,18 +612,21 @@ fn plant(
 }
 
 /// Plants both kerbs of one street, if this street is an avenue at all.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_edge(
     commands: &mut Commands,
     kit: &FoliageKit,
     rng: &mut ChaCha8Rng,
     edge: &RoadEdge,
+    // Which named street this segment belongs to, if the extract said. A whole
+    // street is an avenue or it is not — see [`avenue`].
+    street: Option<usize>,
     from: Vec2,
     to: Vec2,
     chunk: IVec2,
     range: f32,
 ) {
-    let chance = AVENUE * if edge.arterial { AVENUE_ARTERIAL } else { 1.0 };
-    if rng.random_range(0.0..1.0) > chance {
+    if !avenue(edge, street, rng) {
         return;
     }
 
@@ -612,15 +640,24 @@ pub fn spawn_edge(
     // council, from one nursery; mixing them per tree is the tell.
     let species = Species::pick(&Species::on_streets(), rng);
 
-    let slots = (edge.length / SPACING).floor() as i32;
-    for i in 1..slots {
+    // Walked along the segment rather than counted in whole slots of it.
+    //
+    // `length / SPACING` floored, iterated from one, is what this was, and on a
+    // grid — sixty to a hundred metres between junctions — it plants three or
+    // four trees. A town read off a map is a *polyline*: Landshut's median
+    // segment is thirteen and a half metres against a seventeen-metre spacing,
+    // so the count came out at zero, the loop `1..0` ran not at all, and four
+    // streets in ten were avenues with no trees on them. The whole Altstadt was
+    // bare and nothing said so.
+    let mut along = (edge.length.min(SPACING) * 0.5).max(2.0);
+    while along < edge.length - 1.5 {
         for side in [-1.0f32, 1.0] {
             // A gap where a crossing or a driveway would be.
             if rng.random_range(0.0..1.0) > 0.86 {
                 continue;
             }
             let jitter = rng.random_range(-1.1..1.1);
-            let at = from + *direction * (i as f32 * SPACING + jitter) + normal * offset * side;
+            let at = from + *direction * (along + jitter) + normal * offset * side;
             plant(
                 commands,
                 kit,
@@ -632,6 +669,7 @@ pub fn spawn_edge(
                 range,
             );
         }
+        along += SPACING;
     }
 }
 

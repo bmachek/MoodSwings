@@ -51,13 +51,21 @@ const PAVEMENT_OFFSET: f32 = 1.9;
 const OUT_OF_A_DOOR: f32 = 0.4;
 const DOORWAY_REACH: f32 = 18.0;
 
-/// How many citizens may arrive on one refill tick.
+/// How many citizens may arrive on one refill tick, at most and at least.
 ///
 /// The refill used to drain the whole deficit at once, which on a jump — a
 /// chunk reload, a fast camera move, the first frame of a capture — is the
-/// entire population spawned in a single frame, fully dressed. Spread over a
-/// couple of seconds it is a street filling up rather than a hitch.
-const ARRIVALS_PER_TICK: usize = 5;
+/// entire population spawned in a single frame, fully dressed.
+///
+/// A flat five was the first answer and it was the wrong one at the other end:
+/// eight arrivals a second against a hundred and sixty means twenty seconds
+/// before a street is a street, and a screenshot is taken after ninety frames.
+/// Every capture came back with an empty pavement, which is a change to the
+/// crowd that cannot be seen in the one instrument that judges it.
+///
+/// So it scales with how empty the ring is: a quarter of the deficit, which
+/// fills an empty city in four ticks and settles to a trickle once it is full.
+const ARRIVALS: (usize, usize) = (3, 22);
 /// The capsule a citizen is.
 ///
 /// Public because anything that spawns a figure has to build the same one — a
@@ -414,8 +422,9 @@ fn maintain_population(
     // And filled a few at a time. Draining the whole deficit on one tick is a
     // couple of dozen fully dressed figures in a single frame, which is a
     // visible hitch every time a chunk reloads or the camera jumps.
+    let budget = ((population - alive) / 4).clamp(ARRIVALS.0, ARRIVALS.1);
     let mut arriving = 0usize;
-    while alive < population && arriving < ARRIVALS_PER_TICK {
+    while alive < population && arriving < budget {
         arriving += 1;
         let mut ticket = rng.0.random_range(0.0..total);
         let edge = candidates

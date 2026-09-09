@@ -155,6 +155,13 @@ const GRIT_TINT: vec3<f32> = vec3(0.20, 0.185, 0.165);
 // coordinates every cell, and a surface sampled in them would carry the seam.
 const YARD_TILE: f32 = 2.1;
 
+// What one field is against the next: a little greener, or a little more gone
+// over. Multipliers rather than targets, so whatever the ground already is
+// stays recognisably itself — this is the difference between two fields of the
+// same crop, not between a field and a quarry.
+const CROP_LUSH: vec3<f32> = vec3(0.86, 1.10, 0.80);
+const CROP_PALE: vec3<f32> = vec3(1.14, 1.02, 0.78);
+
 fn vary(input: PbrInput) -> PbrInput {
     var pbr_input = input;
     let here = pbr_input.world_position.xz;
@@ -176,6 +183,20 @@ fn vary(input: PbrInput) -> PbrInput {
     // And anywhere at all inside the built-up envelope, which is where the
     // block interiors are.
     let inside = mask.g * ground.urban;
+    // How hard the ground is worked, which is *not* the same as being inside
+    // the town.
+    //
+    // The envelope reaches a hundred and forty metres from a street, and the
+    // gap between two of Landshut's is about a hundred and fifty — so the
+    // middle of a big block reads as fully inside the town while being two
+    // hundred metres from anything. Shaded as courtyard it came back as one
+    // flat brown expanse, which is the largest surface in an aerial and is not
+    // a courtyard, it is a field with a town round it. What is actually in the
+    // middle of a European block is gardens.
+    //
+    // So the *hard* ground follows the back land — the strip behind a pavement
+    // — and the envelope only leans on it. Inside stays green.
+    let hard = clamp(backland * 0.85 + inside * 0.22, 0.0, 1.0);
 
     var color = pbr_input.material.base_color.rgb;
 
@@ -191,21 +212,39 @@ fn vary(input: PbrInput) -> PbrInput {
     // country ground for the ordinary reason: it is walked on, parked on and
     // covered in the dust off a road.
     let luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-    color = mix(vec3(luma), color, ground.saturation * mix(1.0, 0.66, inside));
+    // Town ground is greyer than country ground for the ordinary reason: it is
+    // walked on, parked on and covered in the dust off a road. Open country
+    // keeps rather more of its own green than the first pass left it — at 0.58
+    // everywhere, the fields two hundred metres out came back at sRGB
+    // (79, 78, 67), which is not a field, it is mud, and it is the largest
+    // surface in an aerial.
+    color = mix(vec3(luma), color, ground.saturation * mix(1.30, 0.66, hard));
 
     // The high ground goes off. Towards straw, not towards `color * 1.42`:
     // grass that has dried is not brighter grass, it is a different and much
     // duller colour, and multiplying an albedo that was already too high is
     // exactly how the plain acquired its chartreuse patches.
-    let parched = smoothstep(0.50, 0.76, broad) * ground.dry;
+    // Patchy rather than general. A wide smoothstep browns *most* of the plain
+    // by some amount, which is a plain that is uniformly half straw; a narrow
+    // one gives fields, some cut and some not, which is what farmland is. The
+    // town keeps the wider one, because a yard really is uniformly worn.
+    let edge = mix(0.16, 0.06, hard);
+    let parched = smoothstep(0.62 - edge, 0.62 + edge, broad) * ground.dry;
     color = mix(color, STRAW, parched);
+
+    // And one field is not the next. A slow hue swing at the field scale, off
+    // its own offset so it does not follow the drying: some are in crop, some
+    // are cut, some are pasture. Held to the town's own share of it, where a
+    // yard has no crop in it to vary.
+    let crop = fbm(here / (ground.tile * 1.7) + vec2(-113.0, 61.0));
+    color = mix(color, color * mix(CROP_LUSH, CROP_PALE, crop), 1.0 - hard);
 
     // Bare earth, at a third of the field's scale and offset off it, so soil
     // shows through where the cover happens to be thin rather than along the
     // same contours the drying follows. More of it inside the town, where the
     // ground is walked over.
     let thin = fbm(here / (ground.tile * 0.31) + vec2(37.0, -19.0));
-    let bare = smoothstep(0.58, 0.86, thin) * clamp(ground.dirt * mix(1.0, 2.6, inside), 0.0, 0.9);
+    let bare = smoothstep(0.58, 0.86, thin) * clamp(ground.dirt * mix(1.0, 2.6, hard), 0.0, 0.9);
     color = mix(color, EARTH, bare);
 
     // And the town's own floor. A yard, a forecourt, the gravel behind a row of
@@ -234,7 +273,7 @@ fn vary(input: PbrInput) -> PbrInput {
     // Held well under one on top of that, so weeds still come through a yard
     // and the ground under the town never becomes a second carriageway.
     let worn = clamp(
-        (smoothstep(0.10, 0.85, backland) * 0.72 + smoothstep(0.30, 1.0, inside) * 0.20)
+        (smoothstep(0.10, 0.85, backland) * 0.72 + smoothstep(0.55, 1.0, inside) * 0.14)
             * mix(0.28, 1.0, kept),
         0.0,
         0.82,
