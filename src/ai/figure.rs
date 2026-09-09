@@ -220,6 +220,34 @@ pub fn seated_angle(limb: Limb) -> f32 {
     }
 }
 
+/// Where a figure stops being worth its trimmings, in metres.
+///
+/// A citizen is nineteen meshes: torso, head, hair, four limb joints with a
+/// limb and a hand or a shoe hanging off each, and whatever the archetype is
+/// carrying. At a hundred and sixty of them that is three thousand entities,
+/// and most of them are somewhere down the street where a hand is under two
+/// pixels across.
+///
+/// So the trimmings carry a range and the silhouette does not — the same trade
+/// `vehicle::spawn` makes with a car's fittings, and for the same reason: what
+/// survives to any distance is the shape, and the shape is all that is left of
+/// a person at forty metres anyway. Hands, shoes, hair and the archetype's
+/// props go; the torso, the head and the four limbs stay, because a figure
+/// without them is not a figure.
+const TRIMMINGS: f32 = 42.0;
+
+/// The range every trimming carries.
+///
+/// A tenth of the distance is the crossfade, which at this range is a couple
+/// of frames of dither on something a few pixels wide.
+fn trimmings_range() -> bevy::camera::visibility::VisibilityRange {
+    bevy::camera::visibility::VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: TRIMMINGS..(TRIMMINGS * 1.12),
+        use_aabb: false,
+    }
+}
+
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
 /// The speed is written by whoever owns the figure — the pedestrian AI for a
@@ -875,6 +903,7 @@ pub fn dress(
                         Mesh3d(assets.hand.clone()),
                         MeshMaterial3d(worn.bare.clone()),
                         Transform::from_xyz(0.0, -body::ARM_LENGTH, 0.0),
+                        trimmings_range(),
                     ));
                 });
         }
@@ -906,6 +935,7 @@ pub fn dress(
                             -body::LEG_LENGTH + body::SHOE_HEIGHT * 0.5,
                             -body::SHOE_LENGTH * 0.22,
                         ),
+                        trimmings_range(),
                     ));
                 });
         }

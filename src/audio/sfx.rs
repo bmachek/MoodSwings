@@ -335,6 +335,7 @@ impl Plugin for SfxPlugin {
                 (
                     play_impacts,
                     play_honks,
+                    play_impatience,
                     play_wheees,
                     play_sproings,
                     voice_geysers,
@@ -472,6 +473,31 @@ fn play_honks(
             spatial_once(effect_gain(&config, gain::HONK), 20.0)
                 // Every car has its own voice, near enough.
                 .with_speed(0.85 + rng.random::<f32>() * 0.35),
+        );
+    }
+}
+
+/// The horn of somebody who has been sitting behind something for five
+/// seconds.
+///
+/// A different noise from `play_honks`, which answers a crash. This one is the
+/// city's oldest joke and it is free: the traffic already knows when it is
+/// stuck, and a horn going off two streets away is one of the strongest cues
+/// there is that a city carries on when nobody is watching it.
+fn play_impatience(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut rng: ResMut<AudioRng>,
+    mut horns: MessageReader<crate::ai::traffic::Impatient>,
+) {
+    for horn in horns.read() {
+        at(
+            &mut commands,
+            bank.honk.clone(),
+            horn.at,
+            spatial_once(effect_gain(&config, gain::HONK * 0.8), 26.0)
+                .with_speed(0.82 + rng.random::<f32>() * 0.4),
         );
     }
 }

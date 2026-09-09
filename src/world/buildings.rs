@@ -1258,23 +1258,6 @@ fn spawn_building(
         chunk,
     );
 
-    // And whether anybody has a fire going. On the roof rather than in front
-    // of the building, so it is `plume`'s business and not the frontage's, but
-    // spawned from the same place for the same reason: this is where a
-    // building's own seed, height and footprint are all in scope at once.
-    super::plume::maybe_chimney(
-        commands,
-        ctx.plumes,
-        ctx.seed,
-        building,
-        class,
-        center,
-        size,
-        yaw,
-        chunk,
-        &super::plume::draw_range(ctx.lod_scale),
-    );
-
     // Every box this building is made of stands on one frame: centred on the
     // site, and turned onto the street if it has one to be turned onto.
     //
@@ -1418,7 +1401,7 @@ fn spawn_building(
     let gabled = ctx.style.gables() > 0.0
         && matches!(class, FacadeClass::House | FacadeClass::Lowrise)
         && (seed >> 31) as f32 / u32::MAX as f32 % 1.0 < ctx.style.gables();
-    if gabled {
+    let ridge = gabled.then(|| {
         super::gable::spawn(
             commands,
             ctx.gables,
@@ -1432,8 +1415,33 @@ fn spawn_building(
             yaw,
             chunk,
             ctx.lod_scale,
-        );
-    }
+        )
+    });
+
+    // And whether anybody has a fire going. On the roof rather than in front
+    // of the building, so it is `plume`'s business and not the frontage's, but
+    // spawned from the same place for the same reason: this is where a
+    // building's own seed, height and footprint are all in scope at once.
+    //
+    // After the roof rather than before it, which is a fix and not a tidy-up.
+    // A stack was being stood on the top of the *wall*, and on a pitched roof
+    // the wall top is the eaves — so every chimney in the Altstadt was buried
+    // in the tiles it was supposed to be coming out of. It needs to know how
+    // far the ridge stands above that, and the only thing that knows is the
+    // roof, which is drawn from the building's own seed.
+    super::plume::maybe_chimney(
+        commands,
+        ctx.plumes,
+        ctx.seed,
+        building,
+        class,
+        center,
+        size,
+        yaw,
+        ridge,
+        chunk,
+        &super::plume::draw_range(ctx.lod_scale),
+    );
 
     // A capping slab, slightly oversailing the walls. It hides the windowed top
     // face of the cube, and the overhang reads as a parapet from street level —

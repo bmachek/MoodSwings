@@ -28,11 +28,9 @@ use crate::mood::voice::Voicebox;
 use crate::world::City;
 use crate::world::roadgraph::NodeId;
 
-/// How many are riding around the player.
-const POPULATION: usize = 6;
-const SPAWN_MIN: f32 = 40.0;
-const SPAWN_MAX: f32 = 130.0;
-const DESPAWN: f32 = 190.0;
+// How many are riding, and how far out, is `GameConfig::traffic` now — see
+// there. A bike is traffic as far as "how busy is this city" is concerned, and
+// the two numbers were being turned up in different places.
 
 /// Cruising speed, in m/s. Under the traffic, over any walk.
 const PACE: f32 = 5.2;
@@ -116,6 +114,7 @@ fn setup(
 fn maintain_cyclists(
     mut commands: Commands,
     time: Res<Time>,
+    config: Res<GameConfig>,
     mut timer: ResMut<CyclistTimer>,
     city: Res<City>,
     kit: Res<BikeKit>,
@@ -135,13 +134,13 @@ fn maintain_cyclists(
 
     let mut riding = 0usize;
     for (entity, transform) in &cyclists {
-        if transform.translation.xz().distance(focus) > DESPAWN {
+        if transform.translation.xz().distance(focus) > config.traffic.despawn {
             commands.entity(entity).despawn();
         } else {
             riding += 1;
         }
     }
-    if riding >= POPULATION {
+    if riding >= config.traffic.cyclists {
         return;
     }
 
@@ -154,14 +153,14 @@ fn maintain_cyclists(
                 .node(edge.a)
                 .pos
                 .midpoint(city.graph.node(edge.b).pos);
-            (SPAWN_MIN..SPAWN_MAX).contains(&midpoint.distance(focus))
+            (config.traffic.spawn_min..config.traffic.spawn_max).contains(&midpoint.distance(focus))
         })
         .collect();
     if candidates.is_empty() {
         return;
     }
 
-    while riding < POPULATION {
+    while riding < config.traffic.cyclists {
         let edge = candidates[rng.0.random_range(0..candidates.len())];
         let (from, to) = if rng.0.random_range(0.0..1.0) < 0.5 {
             (edge.a, edge.b)

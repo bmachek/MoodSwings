@@ -23,13 +23,9 @@ use crate::vehicle::spec::VehicleClass;
 use crate::world::City;
 use crate::world::roadgraph::NodeId;
 
-/// How many traffic cars to keep alive around the player.
-const TRAFFIC_POPULATION: usize = 20;
-/// New traffic appears between these distances — far enough not to pop in view.
-const SPAWN_MIN: f32 = 70.0;
-const SPAWN_MAX: f32 = 145.0;
-/// Beyond this it is recycled.
-const DESPAWN: f32 = 210.0;
+// How many cars, and how far out they come and go, is
+// `GameConfig::traffic` now: "how alive is this city" is a thing the player
+// turns up, and half of it used to be a `const` nothing could reach.
 /// Distance to a junction at which the next road is chosen.
 ///
 /// Capped against the segment being driven — see [`arrival_radius`]. A real
@@ -67,6 +63,19 @@ pub struct TrafficDriver {
     pub lane_width: f32,
     /// Target cruising speed in m/s.
     pub cruise_speed: f32,
+    /// Seconds spent going nowhere, and whether the horn has gone yet.
+    pub stuck: f32,
+    pub honked: bool,
+}
+
+/// A driver who has been sitting still long enough to lean on the horn.
+///
+/// Its own message rather than a `VehicleImpact` with no impact in it: the
+/// crash honk means "you hit me" and this one means "move", and the audio
+/// side gets to answer them differently. Read by `audio::sfx`.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct Impatient {
+    pub at: Vec3,
 }
 
 #[derive(Resource)]
@@ -144,6 +153,7 @@ fn width_between(city: &City, from: NodeId, to: NodeId) -> Option<f32> {
 fn maintain_population(
     mut commands: Commands,
     time: Res<Time>,
+    config: Res<GameConfig>,
     mut timer: ResMut<TrafficTimer>,
     city: Res<City>,
     assets: Res<VehicleAssets>,
@@ -165,14 +175,14 @@ fn maintain_population(
 
     let mut alive = 0usize;
     for (entity, transform) in &traffic {
-        if transform.translation.xz().distance(focus) > DESPAWN {
+        if transform.translation.xz().distance(focus) > config.traffic.despawn {
             commands.entity(entity).despawn();
         } else {
             alive += 1;
         }
     }
 
-    if alive >= TRAFFIC_POPULATION {
+    if alive >= config.traffic.population {
         return;
     }
 
@@ -189,7 +199,7 @@ fn maintain_population(
                 .node(edge.a)
                 .pos
                 .midpoint(city.graph.node(edge.b).pos);
-            (SPAWN_MIN..SPAWN_MAX).contains(&midpoint.distance(focus))
+            (config.traffic.spawn_min..config.traffic.spawn_max).contains(&midpoint.distance(focus))
         })
         .collect();
     if candidates.is_empty() {
@@ -197,7 +207,7 @@ fn maintain_population(
     }
 
     let mut attempts = 0;
-    while alive < TRAFFIC_POPULATION && attempts < 60 {
+    while alive < config.traffic.population && attempts < 60 {
         attempts += 1;
         let edge = candidates[rng.0.random_range(0..candidates.len())];
         let a = city.graph.node(edge.a).pos;
@@ -244,6 +254,8 @@ fn maintain_population(
                 after: choose_exit(&city, from, to, &mut rng.0),
                 lane_width: edge.width,
                 cruise_speed: cruise,
+                stuck: 0.0,
+                honked: false,
             },
             AlwaysSimulated,
         ));
@@ -252,15 +264,19 @@ fn maintain_population(
     }
 
     debug!(
-        "traffic: {alive}/{TRAFFIC_POPULATION} alive, {} candidate segments, {attempts} attempts",
+        "traffic: {alive}/{} alive, {} candidate segments, {attempts} attempts",
+        config.traffic.population,
         candidates.len()
     );
 }
 
 fn drive_traffic(
+    mut commands: Commands,
+    time: Res<Time>,
     city: Res<City>,
     spatial: SpatialQuery,
     mut rng: ResMut<TrafficRng>,
+    mut horns: MessageWriter<Impatient>,
     mut cars: Query<(
         Entity,
         &mut TrafficDriver,
@@ -269,6 +285,7 @@ fn drive_traffic(
         &mut VehicleInput,
     )>,
 ) {
+    let dt = time.delta_secs();
     for (entity, mut driver, transform, state, mut input) in &mut cars {
         let position = transform.translation.xz();
         let start = city.graph.node(driver.from).pos;
@@ -315,23 +332,90 @@ fn drive_traffic(
         let (forward, right) = ground_axes(transform);
         input.steer = steer_towards(forward, right, target - position);
 
-        // Ease off through corners, and stop for whatever is in the way.
+        // Ease off through corners.
         let cornering = 1.0 - input.steer.abs() * 0.55;
-        let desired = driver.cruise_speed * cornering;
+        let mut desired = driver.cruise_speed * cornering;
 
-        let stopping = 5.0 + state.forward_speed.abs() * 1.4;
-        let nose = transform.translation + *transform.forward() * 2.6 + Vec3::Y * 0.2;
+        // And keep a gap to whatever is in front. The ray used to be a yes/no
+        // question — anything within five metres plus a second and a bit of
+        // travel and the answer was full reverse — which had two consequences
+        // and both were visible from the pavement. Cars alternately charged
+        // and slammed instead of forming a queue, because the throttle had
+        // exactly two settings; and a *stopped* car kept asking for negative
+        // throttle, which below walking pace is not braking, it is reverse
+        // gear. What that produced is the permanent scrum the delivery module
+        // already carries a header about.
+        //
+        // The ray now answers *how far*, and how far decides a speed: the
+        // fastest this car could be going and still stop in the gap it has,
+        // with a couple of metres left over. Which is what following distance
+        // is, and it queues without anybody being told to queue.
+        let look = STOPPING_ROOM + state.forward_speed.abs() * HEADWAY;
+        let nose = transform.translation + *transform.forward() * NOSE + Vec3::Y * 0.2;
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-        let blocked = Dir3::new(*transform.forward())
+        let ahead = Dir3::new(*transform.forward())
             .ok()
-            .and_then(|d| spatial.cast_ray(nose, d, stopping, true, &filter))
-            .is_some();
+            .and_then(|d| spatial.cast_ray(nose, d, look, true, &filter))
+            .map(|hit| hit.distance);
+        if let Some(gap) = ahead {
+            desired = desired.min(following_speed(gap));
+        }
 
-        input.throttle = if blocked {
-            -1.0
-        } else {
-            throttle_for_speed(state.forward_speed, desired)
-        };
+        // Never reverse into the street behind. `longitudinal_force` reads a
+        // negative throttle as braking only while the car is actually moving
+        // forwards; under half a metre a second it is the reverse gear, and a
+        // car that has stopped behind an obstruction it cannot pass would back
+        // out of the queue for ever.
+        input.throttle = throttle_for_speed(state.forward_speed, desired);
+        if desired < 0.2 && state.forward_speed < 0.5 {
+            input.throttle = 0.0;
+        }
         input.handbrake = false;
+
+        // Somebody who has been stopped a long time is stuck rather than
+        // waiting. A horn first, because that is what a real one does and it
+        // is free comedy; then, well past the point where it could be traffic,
+        // the car is given up on and recycled — otherwise a wedged or
+        // overturned traffic car lies in the road being scenery until the
+        // player walks two hundred metres away from it.
+        if state.forward_speed.abs() < 0.3 {
+            driver.stuck += dt;
+            if driver.stuck > HONK_AFTER && !driver.honked {
+                driver.honked = true;
+                horns.write(Impatient {
+                    at: transform.translation,
+                });
+            }
+            if driver.stuck > GIVE_UP {
+                commands.entity(entity).despawn();
+            }
+        } else {
+            driver.stuck = 0.0;
+            driver.honked = false;
+        }
     }
+}
+
+/// How far in front of the body the obstacle ray starts, and how much room a
+/// car wants at rest and per metre a second of speed.
+const NOSE: f32 = 2.6;
+const STOPPING_ROOM: f32 = 6.0;
+const HEADWAY: f32 = 1.6;
+
+/// How long a stopped car waits before it leans on the horn, and before it is
+/// given up on entirely.
+const HONK_AFTER: f32 = 5.0;
+const GIVE_UP: f32 = 26.0;
+
+/// The fastest a car may be going with `gap` metres of clear road in front.
+///
+/// A braking law rather than a rule of thumb: `v = sqrt(2·a·s)` is the speed
+/// something can shed over a distance at a given deceleration, and what is left
+/// after the buffer is the distance this car actually has. Below the buffer it
+/// asks for zero and the throttle goes to a hold rather than to reverse.
+fn following_speed(gap: f32) -> f32 {
+    const BUFFER: f32 = 3.2;
+    const BRAKING: f32 = 3.4;
+    let room = (gap - BUFFER).max(0.0);
+    (2.0 * BRAKING * room).sqrt()
 }

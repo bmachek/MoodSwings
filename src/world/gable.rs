@@ -81,9 +81,69 @@ const THICK: f32 = 0.32;
 /// `atan(2 * PITCH)`, which is a shade over forty degrees and is a roof.
 const PITCH: f32 = 0.42;
 
+/// How far the tiles carry on past the wall they are resting on.
+///
+/// The single most load-bearing number in this module, and for a long time it
+/// was zero. A roof whose covering stops dead on the plane of the wall is not
+/// a roof — it is a lid — and a street of lids is a street of extruded boxes,
+/// which is exactly what an aerial of this town looked like. What an eaves
+/// overhang buys is a *shadow*: a dark line the width of a hand under the
+/// tiles, running the whole length of every house, which is the thing that
+/// separates the roof from the wall at any distance at all.
+///
+/// Four hundred millimetres at the eaves, which is a modest Bavarian one, and
+/// three at the verge, where the gable screen is standing in front of it
+/// anyway.
+const EAVES_OVERHANG: f32 = 0.40;
+const VERGE_OVERHANG: f32 = 0.30;
+
+/// The board closing the ends of the rafters, and the gutter hung on it.
+///
+/// A fascia is what you actually see of an overhang from underneath: a pale
+/// vertical strip under the tile edge. The gutter in front of it is the one
+/// horizontal line on a house that is neither wall nor roof, and it catches the
+/// sun along its whole length, which is why it reads from a street away.
+const FASCIA_DROP: f32 = 0.20;
+const FASCIA_THICK: f32 = 0.05;
+const GUTTER_RADIUS: f32 = 0.065;
+
+/// The capping along the ridge. A half-round in life, and a half-round here.
+const RIDGE_RADIUS: f32 = 0.11;
+
+/// A dormer's proportions, in metres: how far along the roof it stands, how
+/// wide across the slope it is, and how far it rises out of the tiles.
+///
+/// It is the defining feature of a Landshut roofscape and there was not one in
+/// the game. They sit on the *flanks*, which on a `Giebelhaus` is the side
+/// facing the neighbour rather than the street — so they are worth almost
+/// nothing from a pavement and a great deal from anywhere above one, which is
+/// where a roofscape is looked at.
+const DORMER: (f32, f32, f32) = (1.35, 1.05, 0.95);
+
+/// How far up the slope from the eaves a dormer sits, as a fraction of the
+/// horizontal run. Low: a dormer high on a slope is a skylight.
+const DORMER_UP: f32 = 0.34;
+
+/// Roofs shallower than this in their run carry no dormers — there is nothing
+/// to put one in.
+const DORMER_MIN_RUN: f32 = 4.2;
+
+/// And how far they are drawn. Nearer than the roof itself: a dormer is a
+/// metre across and four of them on a skyline are four pixels.
+const DORMER_RANGE: f32 = 320.0;
+
 #[derive(Resource)]
 pub struct GableKit {
     cube: Handle<Mesh>,
+    /// A unit cylinder lying on its own Y. Scaled into the gutter along the
+    /// eaves and the capping along the ridge — both are half-rounds in life,
+    /// and a box reads as neither.
+    round: Handle<Mesh>,
+    /// Zinc: the gutter, and the flashing round a dormer.
+    metal: Handle<StandardMaterial>,
+    /// What a dormer's cheeks are rendered in, and the dark of its glazing.
+    dormer: Handle<StandardMaterial>,
+    glass: Handle<StandardMaterial>,
     /// The screen wears the building's own wall material, which this module
     /// does not own — so what is kept here is only what a roof is made of.
     ///
@@ -139,6 +199,32 @@ pub fn build_assets(
         cube: meshes.add(super::buildings::with_tangents(
             Cuboid::new(1.0, 1.0, 1.0).mesh().build(),
         )),
+        // Eight sides rather than a smooth tube. A gutter is sixty-five
+        // millimetres of radius seen from twenty metres, and every extra
+        // segment is a segment on every eaves of every house in the town.
+        round: meshes.add(super::buildings::with_tangents(
+            Cylinder::new(1.0, 1.0).mesh().resolution(8).build(),
+        )),
+        metal: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.52, 0.53, 0.55),
+            perceptual_roughness: 0.42,
+            metallic: 0.85,
+            ..default()
+        }),
+        dormer: materials.add(StandardMaterial {
+            // Rendered, and paler than any wall in the palette: a dormer cheek
+            // catches the sky and is the brightest thing on a roof.
+            base_color: Color::srgb(0.74, 0.72, 0.68),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
+        glass: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.06, 0.07, 0.09),
+            perceptual_roughness: 0.12,
+            metallic: 0.0,
+            reflectance: 0.6,
+            ..default()
+        }),
         tile: ages.map(|age| {
             materials.add(StandardMaterial {
                 // Old clay, not the grey felt the flat roofs are covered in.
@@ -183,6 +269,13 @@ fn step(index: u32, steps: u32) -> (f32, f32) {
 }
 
 /// Raises a stepped gable on one building's front, and pitches its roof.
+///
+/// Returns how far the ridge stands above the eaves, which is the one thing
+/// about this roof that anybody outside the module needs and cannot work out:
+/// the rise is drawn from the building's own seed here, so recomputing it
+/// anywhere else would mean replaying the same draws in the same order for
+/// ever. `world::plume` wants it to stand a chimney on the tiles rather than
+/// inside them.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     commands: &mut Commands,
@@ -200,7 +293,7 @@ pub fn spawn(
     yaw: f32,
     chunk: IVec2,
     lod_scale: f32,
-) {
+) -> f32 {
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x6AB1_E501);
     let steps = rng.random_range(STEPS.0..=STEPS.1);
     // Off the frontage, and then held to the house. The width is what sets the
@@ -264,19 +357,30 @@ pub fn spawn(
         ));
     }
 
-    // And the roof behind it: two slabs leaning on a ridge that runs back from
-    // the screen. Almost nobody ever sees this — the screen is taller than the
-    // ridge, which is the entire purpose of a screen — so it is two meshes and
-    // no further argument.
+    // And the roof behind it. The screen hides most of it from a pavement —
+    // that is what a screen is for — but the flanks and the whole of every
+    // aerial are this, and until it grew an overhang it was two lids.
+    //
     // When this roof was last done. From the building's own seed like
     // everything else about it.
     let age = rng.random_range(0..kit.tile.len());
     let slope = (ridge / (frontage * 0.5)).atan();
-    let leaf = (frontage * 0.5) / slope.cos();
+    // The tiles carry on past the wall. Everything below is measured off `run`
+    // — the horizontal half-span from ridge to tile edge — rather than off the
+    // frontage, so the overhang moves the eaves, the fascia, the gutter and
+    // the dormers together and cannot be added to one of them and forgotten on
+    // the next.
+    let run = frontage * 0.5 + EAVES_OVERHANG;
+    let leaf = run / slope.cos();
+    let depth = throat + VERGE_OVERHANG * 2.0;
+    // How far the tile edge hangs below the top of the wall.
+    let drop = EAVES_OVERHANG * slope.tan();
+    let along = Vec2::new(outward.y, -outward.x);
+
     for side in [-1.0f32, 1.0] {
-        // Each leaf is centred half way up its own slope, offset to its side.
-        let across = Vec2::new(outward.y, -outward.x) * (side * frontage * 0.25);
-        let at = center + across;
+        // Each leaf is centred half way along its own slope, which the
+        // overhang has moved outward and down.
+        let at = center + along * (side * run * 0.5);
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(kit.cube.clone()),
@@ -287,9 +391,163 @@ pub fn spawn(
             // there — so `side * slope` raises both outer edges and drops the
             // middle, and every house in the town wears a trough. The eaves go
             // down and the ridge goes up.
-            Transform::from_xyz(at.x, eaves + ridge * 0.5, at.y)
+            Transform::from_xyz(at.x, eaves + (ridge - drop) * 0.5, at.y)
                 .with_rotation(turn * Quat::from_rotation_z(-side * slope))
-                .with_scale(Vec3::new(leaf, 0.14, throat * 1.04)),
+                .with_scale(Vec3::new(leaf, 0.14, depth)),
+            range.clone(),
+        ));
+
+        // The fascia closing the rafter ends, and the gutter hung on it. Both
+        // sit at the tile edge — out past the wall by the overhang and down by
+        // what the pitch does over that distance — and both run the full depth
+        // of the roof, which is what makes them a *line* rather than a detail.
+        let edge = center + along * (side * run);
+        let lip = eaves - drop;
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.cap.clone()),
+            Transform::from_xyz(edge.x, lip - FASCIA_DROP * 0.5, edge.y)
+                .with_rotation(turn)
+                .with_scale(Vec3::new(FASCIA_THICK, FASCIA_DROP, depth)),
+            close.clone(),
+        ));
+        let hang = center + along * (side * (run + GUTTER_RADIUS * 0.6));
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.round.clone()),
+            MeshMaterial3d(kit.metal.clone()),
+            // A cylinder stands on its own Y; the gutter lies along the depth,
+            // which is the roof's local Z.
+            Transform::from_xyz(hang.x, lip - FASCIA_DROP * 0.55, hang.y)
+                .with_rotation(turn * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::new(GUTTER_RADIUS, depth, GUTTER_RADIUS)),
+            close.clone(),
+        ));
+
+        dormers(
+            commands,
+            kit,
+            seed,
+            center,
+            along,
+            outward,
+            side,
+            run,
+            slope,
+            eaves + ridge,
+            turn,
+            chunk,
+            lod_scale,
+        );
+    }
+
+    // And the capping along the ridge, which is the one line on a pitched roof
+    // that is lit from both sides at once.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.round.clone()),
+        MeshMaterial3d(kit.tile[age].clone()),
+        Transform::from_xyz(center.x, eaves + ridge + RIDGE_RADIUS * 0.4, center.y)
+            .with_rotation(turn * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+            .with_scale(Vec3::new(RIDGE_RADIUS, depth, RIDGE_RADIUS)),
+        range.clone(),
+    ));
+
+    ridge
+}
+
+/// Puts one or two dormers on a roof leaf.
+///
+/// Three boxes each: the cheeks, the glazing set into the front of them, and a
+/// small flat lid with a zinc edge. Not a pitched dormer roof, which would be
+/// four more meshes for a shape that is one pixel tall from anywhere the
+/// dormer is visible at all — what reads is the *interruption* in the slope
+/// and the dark rectangle in it.
+#[allow(clippy::too_many_arguments)]
+fn dormers(
+    commands: &mut Commands,
+    kit: &GableKit,
+    seed: u64,
+    center: Vec2,
+    // `along` is across the frontage, which is the way the roof falls;
+    // `outward` is down the depth, which is the way the ridge runs.
+    along: Vec2,
+    outward: Vec2,
+    side: f32,
+    run: f32,
+    slope: f32,
+    ridge_top: f32,
+    turn: Quat,
+    chunk: IVec2,
+    lod_scale: f32,
+) {
+    if run < DORMER_MIN_RUN {
+        return;
+    }
+    // Its own stream off the building's seed, mixed differently from the one
+    // the screen draws from: how many dormers a house has must not move which
+    // roof it wears or how many steps its gable has.
+    let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x0D0F_3E12 ^ if side > 0.0 { 1 } else { 0 });
+    let count = match rng.random_range(0.0..1.0) {
+        roll if roll < 0.34 => 0,
+        roll if roll < 0.80 => 1,
+        _ => 2,
+    };
+    if count == 0 {
+        return;
+    }
+
+    let end = (DORMER_RANGE * lod_scale).min(700.0);
+    let range = VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: end..(end * 1.1),
+        use_aabb: false,
+    };
+    // Where on the slope: `DORMER_UP` of the way from the tile edge to the
+    // ridge, measured horizontally. The roof surface at that point is what the
+    // dormer stands on.
+    let across = run * (1.0 - DORMER_UP);
+    let base = ridge_top - across * slope.tan();
+    let at = center + along * (side * across);
+    // Spaced down the depth of the roof, so two of them are a pair of dormers
+    // rather than a pair of ears.
+    let spacing = DORMER.0 * 2.4;
+
+    for index in 0..count {
+        let offset = (index as f32 - (count as f32 - 1.0) * 0.5) * spacing;
+        let stand = at + outward * offset;
+
+        // The cheeks. Set *into* the slope by a little, so the box does not
+        // float on top of the tiles at the low end of it.
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.dormer.clone()),
+            Transform::from_xyz(stand.x, base + DORMER.2 * 0.5 - 0.12, stand.y)
+                .with_rotation(turn)
+                .with_scale(Vec3::new(DORMER.1, DORMER.2, DORMER.0)),
+            range.clone(),
+        ));
+        // The glazing, standing a few centimetres proud of the outward cheek.
+        let face = stand + along * (side * (DORMER.1 * 0.5 + 0.02));
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.glass.clone()),
+            Transform::from_xyz(face.x, base + DORMER.2 * 0.52 - 0.06, face.y)
+                .with_rotation(turn)
+                .with_scale(Vec3::new(0.05, DORMER.2 * 0.55, DORMER.0 * 0.72)),
+            range.clone(),
+        ));
+        // And the lid, oversailing on all four sides with a zinc edge.
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.metal.clone()),
+            Transform::from_xyz(stand.x, base + DORMER.2 - 0.06, stand.y)
+                .with_rotation(turn)
+                .with_scale(Vec3::new(DORMER.1 + 0.22, 0.08, DORMER.0 + 0.22)),
             range.clone(),
         ));
     }

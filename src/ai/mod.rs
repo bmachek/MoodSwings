@@ -6,6 +6,7 @@ pub mod archetype;
 pub mod brolly;
 pub mod busker;
 pub mod captain;
+pub mod crossing;
 pub mod cyclist;
 pub mod errands;
 pub mod figure;
@@ -22,12 +23,13 @@ pub struct AiPlugin;
 
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
+        app.add_message::<traffic::Impatient>().add_plugins((
             focus::FocusPlugin,
             traffic::TrafficPlugin,
             pedestrian::PedestrianPlugin,
             social::SocialPlugin,
             errands::ErrandPlugin,
+            crossing::CrossingPlugin,
             captain::CaptainPlugin,
             cyclist::CyclistPlugin,
             animal::AnimalPlugin,

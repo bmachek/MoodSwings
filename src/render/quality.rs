@@ -125,7 +125,18 @@ pub enum Upscaling {
 }
 
 /// The resolved settings. Everything in `render` reads this and nothing else.
+///
+/// `#[serde(default)]` on the whole block, and it is load-bearing rather than
+/// tidy. This is written into `saves/options.ron` in full, and the loader's
+/// answer to a file it cannot parse is to throw the whole thing away and start
+/// again — so a *single* field added here without a default silently resets
+/// the player's city, costume and keybindings the first time they run the new
+/// build. That is not hypothetical: it happened between one commit and the
+/// next when `contact_shadow_length` and `sharpening` arrived, and the warning
+/// line it printed was the only sign. Per-field defaults would have to be
+/// remembered every time; this cannot be forgotten.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GraphicsSettings {
     /// What was asked for. Kept after downgrading so the UI can say "Ultra
     /// (raytracing unavailable)" rather than silently claiming to be High.

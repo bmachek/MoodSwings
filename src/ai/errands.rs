@@ -79,6 +79,10 @@ pub struct Browsing {
     pub until: f32,
 }
 
+/// The errand overrides, as a set, so the crossing can order itself after them.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Errands;
+
 pub struct ErrandPlugin;
 
 impl Plugin for ErrandPlugin {
@@ -87,8 +91,16 @@ impl Plugin for ErrandPlugin {
             Update,
             (set_out, run_errands, hold_browse)
                 .chain()
+                .in_set(Errands)
                 .in_set(GameSet::Ai)
-                .after(Walking),
+                // Three sets now write `Bouncer::desired` over the walking
+                // intent, and "whatever runs later wins" is only a rule if the
+                // order is stated: Walking, then Socialising, then this.
+                // Unordered, a citizen who was both chatting and shopping got
+                // whichever answer the scheduler happened to run second, which
+                // is a different answer on a different machine.
+                .after(Walking)
+                .after(super::social::Socialising),
         );
     }
 }

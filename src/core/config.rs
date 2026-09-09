@@ -23,6 +23,10 @@ pub struct GameConfig {
     /// dials still parses instead of resetting everything else in it.
     #[serde(default)]
     pub crowd: CrowdConfig,
+    /// How busy the roads are. `#[serde(default)]` so an options file written
+    /// before the roads had dials still parses.
+    #[serde(default)]
+    pub traffic: TrafficConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
@@ -603,6 +607,44 @@ impl Default for CrowdConfig {
     }
 }
 
+/// How busy the roads are.
+///
+/// Its own block for the same reason the crowd has one: "how alive is this
+/// city" is a thing a player turns up, and until now half of it was a `const`
+/// in `ai::traffic` that nothing could reach. A street the player is standing
+/// on could stay empty for a minute with twenty cars spread over a two hundred
+/// metre disc, and no slider in the game would have changed it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrafficConfig {
+    /// Moving cars kept alive around the camera.
+    pub population: usize,
+    /// And cyclists.
+    pub cyclists: usize,
+    /// New traffic appears between these distances — far enough not to pop in
+    /// view, near enough to arrive on screen within a street or two.
+    pub spawn_min: f32,
+    pub spawn_max: f32,
+    /// Beyond this it is recycled.
+    pub despawn: f32,
+}
+
+impl Default for TrafficConfig {
+    fn default() -> Self {
+        Self {
+            // Fifty against the twenty this was a `const` at. Twenty over a
+            // two-hundred-metre disc is one car per five hundred metres of
+            // street, which is a Sunday morning in a village; the city is
+            // meant to read as a city at half past nine on a Tuesday.
+            population: 50,
+            cyclists: 14,
+            spawn_min: 60.0,
+            spawn_max: 150.0,
+            despawn: 230.0,
+        }
+    }
+}
+
 /// The mixer. Three numbers rather than one, because the background bed and
 /// the things that happen in front of it want independent control.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -672,6 +714,7 @@ impl Default for GameConfig {
                 player_hop_scale: 0.6,
                 npc_spring_max: 1.5,
             },
+            traffic: TrafficConfig::default(),
             crowd: CrowdConfig {
                 // A hundred and sixty, against the forty-five this was.
                 //
@@ -793,6 +836,50 @@ mod tests {
             parsed.crowd.population,
             GameConfig::default().crowd.population
         );
+    }
+
+    /// Every field of the graphics block carries a serde default.
+    ///
+    /// The block is serialised into `saves/options.ron` in full, and the
+    /// loader's answer to a file it cannot parse is to throw the whole thing
+    /// away and start again — which loses the player's city, costume and
+    /// keybindings, silently, with one warning line. So a field added to
+    /// `GraphicsSettings` without a default is a change that quietly resets
+    /// everybody's options the first time they run the new build, and that is
+    /// exactly what happened between one commit and the next when contact
+    /// shadow length and sharpening arrived.
+    ///
+    /// Tested by deleting one field at a time from a freshly written file,
+    /// which is what an *older* file is: a file written before that field
+    /// existed.
+    #[test]
+    fn an_options_file_missing_any_one_graphics_field_still_parses() {
+        let text = ron::ser::to_string(&GameConfig::default()).unwrap();
+        let start = text.find("graphics:(").unwrap() + "graphics:(".len();
+        let end = start + text[start..].find(')').unwrap();
+        let block = &text[start..end];
+
+        for field in block.split(',') {
+            let Some(name) = field.split(':').next() else {
+                continue;
+            };
+            // `ssao:Some(High)` splits across the comma-free `Some(...)`, so
+            // only whole `name:value` pairs are candidates.
+            if name.is_empty() || !field.contains(':') {
+                continue;
+            }
+            let without = text.replacen(&format!("{field},"), "", 1);
+            if without == text {
+                continue;
+            }
+            let parsed: Result<GameConfig, _> = ron::from_str(&without);
+            assert!(
+                parsed.is_ok(),
+                "an options file written before `{name}` existed is rejected, \
+                 which resets the player's whole options file: {:?}",
+                parsed.err()
+            );
+        }
     }
 
     #[test]

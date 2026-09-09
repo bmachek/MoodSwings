@@ -203,6 +203,14 @@ pub fn draw_range(lod_scale: f32) -> VisibilityRange {
 /// going on rather than a skyline on fire.
 const CHIMNEYS: f32 = 0.06;
 
+/// And how often a *pitched* one does.
+///
+/// Six times as often. A flat deck's stack is one of several things `rooftop`
+/// puts up there and it competes with plant and tanks; a pitched roof has
+/// nothing on it but chimneys, and an Altstadt where one house in sixteen has
+/// one is an Altstadt with a bare skyline.
+const GABLED_FIRES: f32 = 0.38;
+
 /// This building's own plume stream, keyed on its footprint the way its roof
 /// and its frontage are — so a chunk walked back into lights the same fires.
 pub fn stream_for_building(world_seed: u64, footprint: super::citygen::Rect) -> ChaCha8Rng {
@@ -227,6 +235,12 @@ pub fn maybe_chimney(
     footprint_centre: Vec2,
     size: Vec2,
     yaw: f32,
+    // How far this building's ridge stands above its eaves, if it has one.
+    // `None` is a flat roof, where the deck *is* the top of the wall and a
+    // stack stands straight on it. On a pitched one the top of the wall is the
+    // eaves, and a chimney stood there is a chimney inside a roof — which is
+    // what every chimney in the Altstadt was.
+    ridge: Option<f32>,
     chunk: IVec2,
     range: &VisibilityRange,
 ) {
@@ -234,7 +248,17 @@ pub fn maybe_chimney(
         return;
     }
     let mut rng = stream_for_building(world_seed, building.footprint);
-    if rng.random_range(0.0..1.0) > CHIMNEYS {
+    // A pitched roof carries far more of them: an Altstadt roofscape is
+    // chimneys, and one house in sixteen having one is a roofscape with
+    // nothing on it. A flat deck keeps the old rate — a plant room and a
+    // ventilation stack are what a flat roof puts up there, and `rooftop`
+    // already does those.
+    let lit = if ridge.is_some() {
+        GABLED_FIRES
+    } else {
+        CHIMNEYS
+    };
+    if rng.random_range(0.0..1.0) > lit {
         return;
     }
     // Back from the front edge and over to one side, which is where a stack
@@ -245,15 +269,27 @@ pub fn maybe_chimney(
     // the same yaw the stack itself is. Added straight to the centre it was in
     // map axes while the numbers it scaled were not, which on a town read off a
     // map put chimneys out over the eaves and off the roof entirely.
-    let across = rng.random_range(-0.34..0.34) * size.x;
+    // Near the ridge on a pitched roof, because that is where a flue comes out
+    // and because a stack halfway down a slope has to be built twice as tall
+    // on its downhill side to stand up straight.
+    let spread = if ridge.is_some() { 0.16 } else { 0.34 };
+    let across = rng.random_range(-spread..spread) * size.x;
     let back = rng.random_range(0.08..0.34) * size.y;
     let offset = Quat::from_rotation_y(yaw) * Vec3::new(across, 0.0, back);
     let at = footprint_centre + offset.xz();
+    // The roof surface under the stack. A `Giebelhaus` falls to its two side
+    // walls, so the surface at `across` from the ridge is the ridge less what
+    // the pitch does over that distance — and the pitch is the ridge over the
+    // half-frontage, which is all this needs to know about it.
+    let standing = match ridge {
+        Some(ridge) => ridge * (1.0 - across.abs() / (size.x * 0.5).max(0.1)).max(0.0),
+        None => 0.0,
+    };
     chimney(
         commands,
         kit,
         at,
-        super::buildings::SIDEWALK_HEIGHT + building.height,
+        super::buildings::SIDEWALK_HEIGHT + building.height + standing,
         yaw,
         chunk,
         range,
