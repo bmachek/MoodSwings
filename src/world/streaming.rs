@@ -389,34 +389,12 @@ pub fn update_streaming(
                 if let Some(ribbons) = street.ribbons.as_deref()
                     && streetside
                 {
-                    // How far each end of this street's pavements has to give
-                    // way to whatever crosses there. Read off the graph rather
-                    // than passed down, because "the widest *other* street at
-                    // this node" is a question about the network and the
-                    // paving code has only ever been handed one edge.
-                    let setback = |at: super::roadgraph::NodeId, away: Vec2| {
-                        let node = city.graph.node(at);
-                        let mine = (away - node.pos).normalize_or_zero();
-                        let mut widest = 0.0f32;
-                        // The *shallowest* crossing, not the average: one
-                        // street coming in at twenty degrees is what decides
-                        // how far back this pavement has to stop, however
-                        // square the others are.
-                        let mut crossing = 1.0f32;
-                        for &other in &node.edges {
-                            if other == id {
-                                continue;
-                            }
-                            let edge = city.graph.edge(other);
-                            widest = widest.max(edge.width);
-                            let far = if edge.a == at { edge.b } else { edge.a };
-                            let theirs = (city.graph.node(far).pos - node.pos).normalize_or_zero();
-                            // |sin| between the two, from the 2D cross product.
-                            let sine = (mine.x * theirs.y - mine.y * theirs.x).abs();
-                            crossing = crossing.min(sine.max(1e-3));
-                        }
-                        super::streetside::pavement_trim(widest, node.edges.len(), crossing)
-                    };
+                    // Where each of the four ends of this street's two
+                    // pavements stops was worked out once, at startup, from the
+                    // angles the streets actually meet at — see
+                    // `streetside::mitre`. It is a fact about the network
+                    // rather than about the chunk, and it was being recomputed
+                    // here every time a chunk came back.
                     super::streetside::spawn_edge(
                         &mut commands,
                         &street.kerbs,
@@ -426,7 +404,6 @@ pub fn update_streaming(
                         edge,
                         from,
                         to,
-                        (setback(edge.a, to), setback(edge.b, from)),
                         chunk,
                         kerb_range,
                     );
@@ -500,18 +477,13 @@ pub fn update_streaming(
                         paved,
                         chunk,
                     );
-                    // And the pavement round the outside of it, which is what
-                    // the strips give up when they stop short of the crossing.
-                    super::streetside::spawn_corner(
-                        &mut commands,
-                        &street.kerbs,
-                        ribbons,
-                        &kits.assets.concrete(),
-                        node.pos,
-                        &arms,
-                        chunk,
-                        kerb_range,
-                    );
+                    // No corner pads. A junction used to be four square slabs
+                    // dropped on the bisectors to fill the wedges the strips
+                    // gave up, and a square on a bisector has two corners of
+                    // its own to stick into two carriageways. The strips carry
+                    // their corners themselves now: each is cut along the joint
+                    // it shares with the next street round, so the band turns
+                    // the corner and there is nothing left to fill.
                 }
                 super::props::spawn_junction(
                     &mut commands,
