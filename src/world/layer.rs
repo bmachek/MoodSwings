@@ -66,6 +66,23 @@ pub const STEP: f32 = 0.001;
 /// integers rather than about how two floats round.
 pub const GROUND: f32 = 0.0;
 
+/// A river, and the bank beside it.
+///
+/// The lowest thing in the stack, one step off the grass, and that is the whole
+/// trick that makes a bridge free. A road bed is at fourteen steps, so every
+/// street that crosses the water is already drawn *over* it: nothing has to
+/// find the crossings, cut the water into segments between them, or ramp
+/// anything up — which is exactly what the canal in a grid has to do, because a
+/// grid's canal is a street and this is a river that goes where it goes.
+///
+/// It buys that at the price of a river with no depth. The ground under this
+/// town is one plane with 14 m quads and a level field that is pinned *exactly*
+/// flat for 28 m either side of every kerb, and better than half of the Kleine
+/// Isar runs inside that corridor — so there is no channel to be cut here
+/// without rebuilding both, and a bank wall is what stands in for one.
+const WATER_STEP: u32 = 1;
+pub const WATER_SLOTS: u32 = 2;
+
 /// A gravelled forecourt in a hole in the frontage, and how many slots it has.
 const FORECOURT_STEP: u32 = 3;
 pub const FORECOURT_SLOTS: u32 = 5;
@@ -103,6 +120,7 @@ pub const PAINT_SLOTS: u32 = 5;
 const FOOTWAY_STEP: u32 = 4;
 pub const FOOTWAY_SLOTS: u32 = 6;
 
+pub const WATER: f32 = WATER_STEP as f32 * STEP;
 pub const FORECOURT: f32 = FORECOURT_STEP as f32 * STEP;
 pub const YARD: f32 = YARD_STEP as f32 * STEP;
 pub const ROAD_BED: f32 = ROAD_STEP as f32 * STEP;
@@ -147,6 +165,7 @@ pub fn carriageway_ceiling() -> f32 {
 // The order the layers stack in, checked where it is written down rather than
 // in a test: every one of these is a constant, and a constant that is wrong
 // should not compile.
+const _: () = assert!(WATER_STEP + WATER_SLOTS <= FORECOURT_STEP);
 const _: () = assert!(FORECOURT_STEP + FORECOURT_SLOTS <= YARD_STEP);
 const _: () = assert!(YARD_STEP + YARD_SLOTS <= ROAD_STEP);
 const _: () = assert!(ROAD_STEP + (ROAD_BANDS - 1) * ROAD_BAND + ROAD_SLOTS <= JUNCTION_STEP);
@@ -166,6 +185,7 @@ mod tests {
     /// Every height this module can hand out, in whatever order.
     fn every_height() -> Vec<f32> {
         let mut heights = vec![GROUND, JUNCTION];
+        heights.extend((0..WATER_SLOTS).map(|i| WATER + slot(i, WATER_SLOTS)));
         heights.extend((0..FORECOURT_SLOTS).map(|i| FORECOURT + slot(i, FORECOURT_SLOTS)));
         heights.extend((0..YARD_SLOTS).map(|i| YARD + slot(i, YARD_SLOTS)));
         heights.extend((0..PAINT_SLOTS).map(|i| PAINT + slot(i, PAINT_SLOTS)));
@@ -183,6 +203,16 @@ mod tests {
     /// covers a road.
     #[test]
     fn the_stack_is_laid_from_the_ground_up() {
+        let water_top = WATER + slot(WATER_SLOTS - 1, WATER_SLOTS);
+        assert!(
+            GROUND < WATER && water_top < FORECOURT,
+            "the water at {WATER} is not between the grass and the forecourts"
+        );
+        // And under every carriageway, which is what makes a bridge free.
+        assert!(
+            water_top < ROAD_BED,
+            "a river at {water_top} would be drawn over the streets that cross it"
+        );
         let forecourt_top = FORECOURT + slot(FORECOURT_SLOTS - 1, FORECOURT_SLOTS);
         let yard_top = YARD + slot(YARD_SLOTS - 1, YARD_SLOTS);
         assert!(

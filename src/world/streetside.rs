@@ -1594,6 +1594,27 @@ pub fn lots(
     let roads = corridors(layout);
     let scale = style.lot_scale();
 
+    // The river goes in first, as the thing nothing may be built on. It is
+    // filed into the same grid the buildings are, so a footprint in the Isar
+    // and a terrace in the Isar are rejected by the test that already exists
+    // rather than by a second one written for water.
+    for arm in &layout.waters {
+        for pair in arm.points.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            let Ok(axis) = Dir2::new(to - from) else {
+                continue;
+            };
+            file(
+                &mut taken,
+                Oblong {
+                    centre: from.midpoint(to),
+                    axis: *axis,
+                    half: Vec2::new(from.distance(to), arm.width) * 0.5,
+                },
+            );
+        }
+    }
+
     let mut mapped = 0usize;
     let mut in_the_way = 0usize;
     for block in real {
@@ -2712,6 +2733,7 @@ mod tests {
         );
 
         let layout = CityLayout {
+            waters: Vec::new(),
             seed: 1,
             half_extent: 400.0,
             x_streets: Vec::new(),

@@ -315,6 +315,22 @@ pub struct CityLayout {
     pub graph: RoadGraph,
     /// The one street surrendered to water, if the grid had a spare.
     pub canal: Option<Canal>,
+    /// Real water, read off a map: a river with arms, a mill race, a stream.
+    ///
+    /// Beside `canal` rather than instead of it, because the two are different
+    /// things and the comment that used to sit on Landshut's `canal: None` said
+    /// so — a canal here is one street of a grid surrendered to water, straight
+    /// and axis-aligned, and the Isar is a braided river that goes where it
+    /// goes. The generator keeps its canal; a town read off a map gets these.
+    pub waters: Vec<Waterway>,
+}
+
+/// One arm of a river, as a polyline with a width.
+#[derive(Debug, Clone)]
+pub struct Waterway {
+    pub name: String,
+    pub width: f32,
+    pub points: Vec<Vec2>,
 }
 
 impl CityLayout {
@@ -373,6 +389,7 @@ pub fn generate(seed: u64, half_extent: f32, style: CityStyle) -> CityLayout {
     zone_civics(seed, &mut blocks, style);
 
     CityLayout {
+        waters: Vec::new(),
         seed,
         half_extent,
         x_streets,

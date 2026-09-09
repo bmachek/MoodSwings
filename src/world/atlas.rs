@@ -236,6 +236,41 @@ pub struct Signposts {
 ///
 /// The blocks come out empty and that is not an oversight — see
 /// `frontage_lots`, which is what fills a real city instead.
+/// The town's water, clipped to the square the game builds.
+///
+/// Clipped the way a street is — an arm that leaves and comes back is two
+/// runs, not one bridged across the outside — because the alternative is a
+/// river drawn straight through a kilometre of town it never touches.
+fn waters(atlas: &Atlas, half_extent: f32) -> Vec<super::citygen::Waterway> {
+    let mut out = Vec::new();
+    for water in &atlas.waters {
+        let mut run: Vec<Vec2> = Vec::new();
+        for &(x, z) in &water.points {
+            if x.abs() > half_extent || z.abs() > half_extent {
+                if run.len() >= 2 {
+                    out.push(super::citygen::Waterway {
+                        name: water.name.clone(),
+                        width: water.width,
+                        points: std::mem::take(&mut run),
+                    });
+                } else {
+                    run.clear();
+                }
+                continue;
+            }
+            run.push(Vec2::new(x, z));
+        }
+        if run.len() >= 2 {
+            out.push(super::citygen::Waterway {
+                name: water.name.clone(),
+                width: water.width,
+                points: run,
+            });
+        }
+    }
+    out
+}
+
 /// The town's real buildings, turned into the layout's own blocks.
 ///
 /// One block per building, which is what `streetside` already produces for an
@@ -364,10 +399,14 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
             z_streets: Vec::new(),
             blocks: Vec::new(),
             graph,
-            // The Isar is a river and this is a canal dug through a grid. Landshut
-            // deserves better than the wrong water in the wrong place, so until
-            // there is a real one there is none.
+            // A canal here is one street of a grid surrendered to water:
+            // straight, axis-aligned, and found by walking two street lists a
+            // town read off a map does not have. The Isar is a braided river
+            // that goes where it goes, so it is not one of these and never
+            // could have been — it is a `waters` entry, below, and the reason
+            // this said `None` with an apology attached for as long as it did.
             canal: None,
+            waters: waters(atlas, half_extent),
         },
         signs,
     )

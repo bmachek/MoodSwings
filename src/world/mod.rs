@@ -183,6 +183,7 @@ fn generate_city(
     commands.insert_resource(signs);
 
     river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
+    river::spawn_waters(&mut commands, &layout, &mut meshes, &mut materials);
 
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
