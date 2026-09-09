@@ -208,6 +208,63 @@ const NECK_SLEW: f32 = 7.0;
 #[derive(Component)]
 pub struct Seated;
 
+/// A figure on a bicycle.
+///
+/// Underneath a [`Posture`] for the same reason [`Seated`] is: riding a bike is
+/// who this citizen is this afternoon, not something they are doing for a
+/// moment, and a cyclist grabbed by the collar must still flail.
+///
+/// `crank` is where the pedals are, in radians, and it is advanced from ground
+/// covered rather than from wall time — so a rider freewheeling to a halt stops
+/// pedalling, and the feet cannot drift out of step with the wheels.
+#[derive(Component)]
+pub struct Riding {
+    pub crank: f32,
+}
+
+/// Where a rider holds a limb.
+///
+/// The arms are easy: a constant reach to the bars, no phase. The legs are the
+/// interesting half, because a flummi leg is one rigid segment with no knee and
+/// a 0.755 m leg cannot reach a crank circle 0.44 m below the hip. So it is
+/// solved in the plane and allowed to *foreshorten* — the foot is put on the
+/// crank circle, the leg points at it, and [`riding_stretch`] shortens the limb
+/// to reach. Everything in this city is made of rubber; a leg that telescopes
+/// is on-brand, and it is the only honest answer for a limb with no knee.
+pub fn riding_angle(limb: Limb, crank: f32) -> f32 {
+    match limb {
+        Limb::LeftArm | Limb::RightArm => body::BARS_REACH,
+        leg => {
+            let (foot, _) = pedal(leg, crank);
+            // Positive X rotation tips a hanging limb toward -Z, which is the
+            // way the shoes point.
+            (-foot.x).atan2(-foot.y)
+        }
+    }
+}
+
+/// How much of its own length a rider's leg is using.
+pub fn riding_stretch(limb: Limb, crank: f32) -> f32 {
+    match limb {
+        Limb::LeftArm | Limb::RightArm => 1.0,
+        leg => {
+            let (_, reach) = pedal(leg, crank);
+            (reach / body::LEG_LENGTH).clamp(0.35, 1.0)
+        }
+    }
+}
+
+/// Where one foot is, measured from the hip, in the body's own (z, y) plane.
+fn pedal(limb: Limb, crank: f32) -> (Vec2, f32) {
+    // The two feet are half a turn apart, which is what `phase_offset` already
+    // says for the legs — reused rather than written out a second time.
+    let angle = crank + limb.phase_offset();
+    let axle = Vec2::new(body::BOTTOM_BRACKET.x, body::BOTTOM_BRACKET.y);
+    let foot = axle + Vec2::new(-angle.sin(), -angle.cos()) * body::CRANK_ARM;
+    let from_hip = foot - Vec2::new(0.0, body::HIP);
+    (from_hip, from_hip.length())
+}
+
 /// Where a seated figure holds a limb.
 ///
 /// The legs are swung forward off the hip, since there is no knee to bend;
@@ -360,6 +417,16 @@ pub mod body {
     /// between a thigh (horizontal) and a shin (vertical); anything more
     /// puts the feet out past the castors.
     pub const SEATED_LEG: f32 = 0.92;
+
+    /// How far forward a rider reaches for the handlebars, in radians off
+    /// vertical. At `SHOULDER` 0.34 and `ARM_LENGTH` 0.60 this puts the hands
+    /// at z = -0.47, which is where the bars already are.
+    pub const BARS_REACH: f32 = 0.90;
+    /// The crank axle, in the body's own (z, y) frame: a little forward of the
+    /// hip and half a metre below it, which is where a bottom bracket is.
+    pub const BOTTOM_BRACKET: bevy::math::Vec2 = bevy::math::Vec2::new(-0.05, -0.53);
+    /// And how long a crank arm is. A real one is 17 cm.
+    pub const CRANK_ARM: f32 = 0.16;
 }
 
 /// Half the collider capsule's height, which is what the figure has to fit in.
@@ -1068,6 +1135,7 @@ pub fn animate(
         Option<&Stature>,
         Option<&Posture>,
         Option<&Seated>,
+        Option<&Riding>,
         Option<&Attention>,
         &GlobalTransform,
         &Children,
@@ -1076,7 +1144,9 @@ pub fn animate(
 ) {
     let dt = time.delta_secs();
     let elapsed = time.elapsed_secs();
-    for (mut cycle, bouncer, stature, posture, seated, attention, placed, children) in figures {
+    for (mut cycle, bouncer, stature, posture, seated, riding, attention, placed, children) in
+        figures
+    {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
@@ -1104,7 +1174,14 @@ pub fn animate(
         // squashed evenly, every frame, which is also exactly what a rubber
         // city would say about children.
         let size = stature.map_or(1.0, |stature| stature.0);
-        let pose = Vec3::new(horizontal, vertical, horizontal) * size;
+        // A rider does not hop, so there is no landing to squash from — and
+        // holding the squash forever is what left every cyclist permanently
+        // flattened. Their own scale, evenly.
+        let pose = if riding.is_some() {
+            Vec3::splat(size)
+        } else {
+            Vec3::new(horizontal, vertical, horizontal) * size
+        };
 
         // Where the neck wants to be, in the body's own frame. `None` while
         // there is nothing worth looking at, which is when the head goes back
@@ -1122,14 +1199,19 @@ pub fn animate(
             transform.translation = rest.at * pose;
             transform.scale = rest.scale * pose;
             if let Some(limb) = limb {
-                let angle = match (posture, seated) {
+                let angle = match (posture, riding, seated) {
                     // A posture is the loudest thing on the body and wins
-                    // over both of the others.
-                    (Some(posture), _) => posture.limb_angle(*limb, elapsed),
-                    (None, Some(_)) => seated_angle(*limb),
-                    (None, None) => limb_angle(*limb, cycle.phase),
+                    // over all of the others.
+                    (Some(posture), _, _) => posture.limb_angle(*limb, elapsed),
+                    (None, Some(riding), _) => riding_angle(*limb, riding.crank),
+                    (None, None, Some(_)) => seated_angle(*limb),
+                    (None, None, None) => limb_angle(*limb, cycle.phase),
                 };
                 transform.rotation = Quat::from_rotation_x(angle);
+                // A leg with no knee cannot reach a pedal, so it telescopes.
+                if let Some(riding) = riding {
+                    transform.scale.y *= riding_stretch(*limb, riding.crank);
+                }
             } else if head.is_some() {
                 // Slewed rather than set: a head that snaps onto its target is
                 // a turret. Six or seven radians a second is a glance.
@@ -1181,7 +1263,7 @@ const STANDING_STILL: f32 = 0.22;
 const SETTLE_RATE: f32 = 7.0;
 
 /// The shorter way round from one phase to another.
-fn shortest_turn(from: f32, to: f32) -> f32 {
+pub(crate) fn shortest_turn(from: f32, to: f32) -> f32 {
     let delta = (to - from).rem_euclid(TAU_F32);
     if delta > TAU_F32 * 0.5 {
         delta - TAU_F32

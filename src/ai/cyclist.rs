@@ -50,7 +50,36 @@ const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
 pub struct Cyclist {
     from: NodeId,
     to: NodeId,
+    /// Which way the bike was pointing last tick, so a turn can be leaned into.
+    heading: f32,
 }
+
+/// A wheel, so it can be turned. Deliberately not a [`super::figure::Limb`]:
+/// `figure::animate` writes a rotation for every limb it finds and would take
+/// the wheel over.
+#[derive(Component)]
+struct Wheel;
+
+/// How far a bike goes for one turn of the pedals, in metres.
+///
+/// A town bike in a middle gear: 42 by 18 on 700c is about 4.9 m. Anything
+/// much shorter and the rider looks like they are running away from something.
+const METRES_PER_CRANK: f32 = 4.6;
+
+/// The rolling radius of the wheel the bike is drawn with.
+const WHEEL_RADIUS: f32 = 0.29;
+
+/// How far a rider may lean into a turn, in radians.
+///
+/// Small, and hard-clamped. The target point is recomputed off the road graph
+/// every tick and the raw derivative of the heading is noisy; a rider who
+/// flicks fifteen degrees for one frame reads as a glitch rather than as a
+/// corner. The collider is `LockedAxes::ROTATION_LOCKED`, so a lean written
+/// straight into the transform sticks, but it does turn the capsule — at more
+/// than this a leaning rider clips the parked cars they are riding inside of.
+const LEAN_LIMIT: f32 = 0.26;
+/// How fast the lean follows the turn. Low-passed for the same reason.
+const LEAN_SLEW: f32 = 5.0;
 
 #[derive(Resource)]
 struct CyclistRng(ChaCha8Rng);
@@ -190,7 +219,11 @@ fn maintain_cyclists(
 
         let mut rider = commands.spawn((
             Name::new("Cyclist"),
-            Cyclist { from, to },
+            Cyclist {
+                from,
+                to,
+                heading: 0.0,
+            },
             Transform::from_xyz(position.x, STAND_HEIGHT, position.y),
             RigidBody::Dynamic,
             Collider::capsule(RADIUS, HEIGHT),
@@ -202,6 +235,7 @@ fn maintain_cyclists(
             Voicebox::new(pitch),
             Provoker::default(),
             Archetype::Everyday,
+            super::figure::Riding { crank: 0.0 },
             Visibility::default(),
         ));
         super::figure::dress(
@@ -219,6 +253,7 @@ fn maintain_cyclists(
                 let hub = Vec3::new(0.0, -STAND_HEIGHT + 0.29, z);
                 bike.spawn((
                     Rest::at(hub),
+                    Wheel,
                     Mesh3d(kit.wheel.clone()),
                     MeshMaterial3d(kit.steel.clone()),
                     Transform::from_translation(hub).with_rotation(wheel_upright()),
@@ -265,6 +300,7 @@ fn kerbside_point(a: Vec2, b: Vec2, width: f32, t: f32) -> Vec2 {
 }
 
 fn ride(
+    time: Res<Time>,
     city: Res<City>,
     mut rng: ResMut<CyclistRng>,
     mut cyclists: Query<
@@ -273,11 +309,16 @@ fn ride(
             &mut Bouncer,
             &mut Transform,
             &mut super::figure::WalkCycle,
+            &mut super::figure::Riding,
+            &Children,
         ),
         Without<Launched>,
     >,
+    mut wheels: Query<&mut Transform, (With<Wheel>, Without<Cyclist>)>,
 ) {
-    for (mut cyclist, mut bouncer, mut transform, mut cycle) in &mut cyclists {
+    let dt = time.delta_secs();
+    for (mut cyclist, mut bouncer, mut transform, mut cycle, mut riding, children) in &mut cyclists
+    {
         let position = transform.translation.xz();
         let b = city.graph.node(cyclist.to).pos;
 
@@ -309,20 +350,134 @@ fn ride(
 
         let heading = (target - position).normalize_or_zero();
         bouncer.desired = heading * PACE;
-        // Zero hop: a glide. The legs still pump, because the walk cycle
-        // does not know it has become a drivetrain.
+        // Zero hop: a glide.
         bouncer.hop_scale = 0.0;
-        cycle.speed = PACE * 0.45;
+        // And no stride at all. This used to be `PACE * 0.45`, with a comment
+        // admitting the joke — "the legs still pump, because the walk cycle
+        // does not know it has become a drivetrain" — and what it drew was a
+        // citizen walking briskly on top of a stationary bicycle. The legs are
+        // on the pedals now (`figure::Riding`), so the walk cycle has nothing
+        // left to say; zeroed rather than left running, because anything that
+        // later pins a footstep or a gait sound to it must not fire on a rider.
+        cycle.speed = 0.0;
+
+        // The crank turns with the ground covered, not with the clock, so a
+        // rider slowing for a junction slows their pedalling with it and the
+        // feet can never drift out of step with the wheels.
+        let turned = PACE * dt / METRES_PER_CRANK * std::f32::consts::TAU;
+        riding.crank = (riding.crank + turned).rem_euclid(std::f32::consts::TAU);
+
+        // The wheels off the same distance, for the same reason.
+        let spin = PACE * dt / WHEEL_RADIUS;
+        for &child in children {
+            if let Ok(mut wheel) = wheels.get_mut(child) {
+                // Post-multiplied, so the turn is about the torus's own hole
+                // axis — which after `wheel_upright` is the axle. The sign is
+                // pinned by a test: the first one drawn here rolled the bike
+                // backwards, which is exactly the class of thing that does not
+                // show in a still.
+                wheel.rotation *= Quat::from_rotation_y(spin);
+            }
+        }
 
         if heading != Vec2::ZERO {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(heading));
+            let yaw = crate::vehicle::spawn::heading_towards(heading);
+            // How hard this is turning, low-passed. A bike leans into a corner
+            // by about atan(v * omega / g); at 5.2 m/s a brisk turn is a few
+            // degrees, and the clamp is what stops the noise in the target
+            // point becoming a twitch.
+            let turn = super::figure::shortest_turn(cyclist.heading, yaw) / dt.max(1e-3);
+            let wanted = (-turn * PACE / 9.81).atan().clamp(-LEAN_LIMIT, LEAN_LIMIT);
+            let lean = transform.rotation.to_euler(EulerRot::YXZ).2;
+            let eased = lean + (wanted - lean) * (LEAN_SLEW * dt).min(1.0);
+            cyclist.heading = yaw;
+            transform.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(eased);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// A cyclist who is pedalling is not a cyclist who is walking.
+    #[test]
+    fn a_rider_puts_their_feet_on_the_pedals_and_not_on_the_road() {
+        use crate::ai::figure::{Limb, riding_angle, riding_stretch};
+        use std::f32::consts::TAU;
+
+        // Over a whole turn of the cranks, both feet stay on a circle about
+        // the bottom bracket and the two are always half a turn apart.
+        let mut lowest = f32::MAX;
+        let mut highest = f32::MIN;
+        for step in 0..48 {
+            let crank = step as f32 / 48.0 * TAU;
+            for leg in [Limb::LeftLeg, Limb::RightLeg] {
+                let angle = riding_angle(leg, crank);
+                let stretch = riding_stretch(leg, crank);
+                assert!(
+                    (0.35..=1.0).contains(&stretch),
+                    "a leg at {stretch} of its length"
+                );
+                // The foot, back in the body's frame: down the leg, foreshortened.
+                let reach = crate::ai::figure::body::LEG_LENGTH * stretch;
+                let y = crate::ai::figure::body::HIP - reach * angle.cos();
+                lowest = lowest.min(y);
+                highest = highest.max(y);
+            }
+        }
+        // The pedals go round: the foot rises and falls by about two crank
+        // arms over a turn, and never drops through the bottom of the capsule.
+        let swing = highest - lowest;
+        assert!(
+            swing > 0.2,
+            "the feet only move {swing} m over a whole turn of the cranks"
+        );
+        assert!(
+            lowest > crate::ai::figure::body::FEET - 0.02,
+            "a foot reached {lowest}, below the bottom of the collider"
+        );
+
+        // And the two feet are never in the same place, which is what a walk
+        // cycle on a bike looked like.
+        for step in 0..24 {
+            let crank = step as f32 / 24.0 * TAU;
+            let left = riding_angle(Limb::LeftLeg, crank);
+            let right = riding_angle(Limb::RightLeg, crank);
+            assert!(
+                (left - right).abs() > 0.05,
+                "both feet at {left} with the cranks at {crank}"
+            );
+        }
+
+        // The arms reach forward for the bars and stay there.
+        for step in 0..8 {
+            let crank = step as f32 / 8.0 * TAU;
+            assert_eq!(riding_angle(Limb::LeftArm, crank), crate::ai::figure::body::BARS_REACH);
+            assert_eq!(riding_stretch(Limb::RightArm, crank), 1.0);
+        }
+    }
+
+    /// The top of a rolling wheel goes the way the bike is going.
+    #[test]
+    fn the_wheels_turn_the_way_the_bike_is_travelling() {
+        // `wheel_upright` is a quarter turn about Z, which sends the torus's
+        // local +X to +Y — so the top of the wheel is local +X, and its hole
+        // axis (local +Y) has become the axle across the bike.
+        // Forward is -Z. The top of a rolling wheel must go that way.
+        let rim = Vec3::new(WHEEL_RADIUS, 0.0, 0.0);
+        let before = wheel_upright() * Quat::from_rotation_y(0.0) * rim;
+        let after = wheel_upright() * Quat::from_rotation_y(0.05) * rim;
+        assert!(
+            before.y > 0.0 && after.y > 0.0,
+            "the sample point is not at the top of the wheel"
+        );
+        assert!(
+            after.z < before.z,
+            "the top of the wheel went from {} to {}, which is backwards",
+            before.z,
+            after.z
+        );
+    }
+
     use super::*;
 
     #[test]
