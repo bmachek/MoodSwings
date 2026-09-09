@@ -32,13 +32,39 @@ const SPAWN_MAX: f32 = 145.0;
 /// Beyond this it is recycled.
 const DESPAWN: f32 = 210.0;
 /// Distance to a junction at which the next road is chosen.
+///
+/// Capped against the segment being driven — see [`arrival_radius`]. A real
+/// town's streets arrive as polylines and a third of Landshut's segments are
+/// shorter than this, so a fixed radius handed the car straight past its own
+/// bend and drove it across the pavement into the frontages.
 const JUNCTION_RADIUS: f32 = 9.0;
+
+/// How much room a new traffic car needs around it before it is spawned.
+const CLEAR_SPAWN: f32 = 6.5;
+
+/// How close to the far node this car has to be before it picks the next road.
+///
+/// Never more than a third of the segment, so a chain of five-metre Altstadt
+/// segments is steered down rather than skipped.
+fn arrival_radius(length: f32) -> f32 {
+    JUNCTION_RADIUS.min(length * 0.34).max(2.0)
+}
 
 #[derive(Component)]
 pub struct TrafficDriver {
     /// The segment currently being driven, as a pair of intersections.
     pub from: NodeId,
     pub to: NodeId,
+    /// And the one after it.
+    ///
+    /// A driver has to know one junction ahead or it cannot aim past the one
+    /// it is arriving at, and a car that aims *at* a junction node steers for
+    /// the middle of the crossing and then snaps onto the next street. On a
+    /// grid that reads as a slightly wide turn. On a town read off a map,
+    /// where a curved street is a dozen segments of five metres, the aim point
+    /// is at the end of the segment for the whole of it and the car chords
+    /// across every bend — over the kerb and into the frontages.
+    pub after: NodeId,
     pub lane_width: f32,
     /// Target cruising speed in m/s.
     pub cruise_speed: f32,
@@ -108,6 +134,14 @@ fn choose_exit(city: &City, from: NodeId, at: NodeId, rng: &mut ChaCha8Rng) -> N
     }
 }
 
+/// How wide the street between two junctions is, if they are joined at all.
+fn width_between(city: &City, from: NodeId, to: NodeId) -> Option<f32> {
+    city.graph
+        .neighbors(from)
+        .find(|(node, _)| *node == to)
+        .map(|(_, edge)| city.graph.edge(edge).width)
+}
+
 fn maintain_population(
     mut commands: Commands,
     time: Res<Time>,
@@ -118,6 +152,12 @@ fn maintain_population(
     mut rng: ResMut<TrafficRng>,
     players: Query<&Transform, With<Player>>,
     traffic: Query<(Entity, &Transform), With<TrafficDriver>>,
+    // Every car in the city, parked or moving. Startup-resident, so this is
+    // the complete list and a candidate can be rejected before it is spawned
+    // rather than ejected afterwards — a dynamic body appearing inside a
+    // static one is the launch the parked-car spawner already carries a
+    // comment about, and traffic was reintroducing it from the other side.
+    parked: Query<&Transform, With<crate::vehicle::spawn::Vehicle>>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -177,6 +217,16 @@ fn maintain_population(
 
         let t: f32 = rng.0.random_range(0.15..0.85);
         let position = lane_point(start, end, edge.width, t);
+        // Is anything already standing here? Circles rather than boxes: the
+        // point is to keep a car's length of daylight round a spawn, and a
+        // near miss that costs one of sixty attempts is cheaper than the
+        // solver's opinion about two overlapping cars.
+        if parked
+            .iter()
+            .any(|other| other.translation.xz().distance_squared(position) < CLEAR_SPAWN.powi(2))
+        {
+            continue;
+        }
         let class = VehicleClass::CIVILIAN[rng.0.random_range(0..VehicleClass::CIVILIAN.len())];
         let mut spec = class.spec();
         (spec.body_color, spec.body_metallic, spec.body_age) =
@@ -193,6 +243,7 @@ fn maintain_population(
             TrafficDriver {
                 from,
                 to,
+                after: choose_exit(&city, from, to, &mut rng.0),
                 lane_width: edge.width,
                 cruise_speed: cruise,
             },
@@ -225,20 +276,21 @@ fn drive_traffic(
         let start = city.graph.node(driver.from).pos;
         let end = city.graph.node(driver.to).pos;
 
-        // Hand over to the next segment on arrival at the junction.
-        if position.distance(end) < JUNCTION_RADIUS {
-            let next = choose_exit(&city, driver.from, driver.to, &mut rng.0);
+        // Hand over to the next segment on arrival at the junction, and carry
+        // straight on into the steering below rather than skipping a frame.
+        // A third of Landshut's segments are shorter than the old fixed
+        // radius, so the handover fired on the frame the car entered them and
+        // the whole segment was driven on the last frame's steering.
+        let mut start = start;
+        let mut end = end;
+        if position.distance(end) < arrival_radius(start.distance(end)) {
             driver.from = driver.to;
-            driver.to = next;
-            if let Some(edge) = city
-                .graph
-                .neighbors(driver.from)
-                .find(|(node, _)| *node == next)
-                .map(|(_, edge)| city.graph.edge(edge).width)
-            {
-                driver.lane_width = edge;
-            }
-            continue;
+            driver.to = driver.after;
+            driver.after = choose_exit(&city, driver.from, driver.to, &mut rng.0);
+            driver.lane_width =
+                width_between(&city, driver.from, driver.to).unwrap_or(driver.lane_width);
+            start = city.graph.node(driver.from).pos;
+            end = city.graph.node(driver.to).pos;
         }
 
         // Pure pursuit: aim at a point further along the lane the faster we go,
@@ -247,8 +299,20 @@ fn drive_traffic(
         let length = segment.length().max(1.0);
         let travelled = ((position - start).dot(segment) / (length * length)).clamp(0.0, 1.0);
         let lookahead = 7.0 + state.forward_speed.abs() * 0.85;
-        let target_t = (travelled + lookahead / length).min(1.0);
-        let target = lane_point(start, end, driver.lane_width, target_t);
+        let reach = travelled * length + lookahead;
+        let target = if reach <= length {
+            lane_point(start, end, driver.lane_width, reach / length)
+        } else {
+            // Past the end of this segment: the aim point walks onto the next
+            // one. This is what turns a chain of short segments into a curve
+            // the car follows instead of a sequence of nodes it lunges at.
+            let over = reach - length;
+            let ahead = city.graph.node(driver.after).pos;
+            let next_length = end.distance(ahead).max(1.0);
+            let next_width =
+                width_between(&city, driver.to, driver.after).unwrap_or(driver.lane_width);
+            lane_point(end, ahead, next_width, (over / next_length).min(1.0))
+        };
 
         let (forward, right) = ground_axes(transform);
         input.steer = steer_towards(forward, right, target - position);

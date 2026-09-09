@@ -44,6 +44,26 @@ pub struct WheelState {
     pub load: f32,
 }
 
+impl WheelState {
+    /// What a wheel reads once the car has settled on it.
+    ///
+    /// `Default` is not this and cannot be: a defaulted `WheelState` has a ray
+    /// length of zero, which is a suspension compressed past the wheel's own
+    /// radius and is drawn as a wheel hovering a radius above its anchor. Every
+    /// car in the city spawns parked and static, and only the ones within a
+    /// hundred and forty metres ever have their suspension run — so until this
+    /// existed, most of the city's wheels were never anywhere near the road.
+    pub fn at_rest(spec: &VehicleSpec) -> Self {
+        let compression = spec.rest_compression();
+        Self {
+            grounded: true,
+            compression,
+            ray_length: spec.max_ray_length() - compression,
+            load: spec.wheel_mass_share() * 9.81,
+        }
+    }
+}
+
 #[derive(Component, Debug, Default)]
 pub struct VehicleState {
     pub wheels: [WheelState; WHEEL_COUNT],

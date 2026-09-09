@@ -464,16 +464,22 @@ pub fn tyre_mesh(width: f32) -> Mesh {
 
 /// A wheel face: the dish the spokes are painted onto, plus the barrel behind
 /// it so the wheel is not hollow when seen from an angle.
+/// The profile runs from the back of the barrel out to the dish apex, and the
+/// direction matters: [`revolve`] only winds outward for a profile whose `x`
+/// advances. Written the other way round — apex first, which is how it reads —
+/// every rim in the city was inside out, so back-face culling removed the near
+/// half of each wheel and left a black ring you could see the road through.
+/// That is most of why the wheels looked detached from the cars.
 pub fn rim_mesh(width: f32) -> Mesh {
     let outer = width * 0.5 * 0.98;
     revolve(
         &[
-            (outer - width * 0.34, 0.0),
-            (outer - width * 0.30, 0.30),
-            (outer - width * 0.16, 0.58),
-            (outer - width * 0.02, 0.68),
-            (outer, 0.72),
             (-outer, 0.72),
+            (outer, 0.72),
+            (outer - width * 0.02, 0.68),
+            (outer - width * 0.16, 0.58),
+            (outer - width * 0.30, 0.30),
+            (outer - width * 0.34, 0.0),
         ],
         24,
         1.0,
@@ -1325,5 +1331,81 @@ mod tests {
             crown > shoulder * 1.1,
             "tread {crown:.3} should stand proud of sidewall {shoulder:.3}"
         );
+    }
+
+    /// Every revolved surface faces outwards.
+    ///
+    /// The rim did not. `revolve` winds a quad assuming the profile's `x`
+    /// advances, and the rim's was written apex-first, so back-face culling
+    /// removed the near half of every wheel in the city and left a ring with
+    /// the road showing through it. It is invisible in a unit test that only
+    /// measures radii, and it is one number in the signed volume: a closed
+    /// surface wound outwards encloses a positive volume, and one wound
+    /// inwards encloses the same volume negated.
+    #[test]
+    fn a_wheel_is_not_turned_inside_out() {
+        for (name, mesh) in [("tyre", tyre_mesh(0.3)), ("rim", rim_mesh(0.3))] {
+            let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+                Some(bevy::render::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
+                _ => panic!("{name} has no positions"),
+            };
+            let indices: Vec<u32> = match mesh.indices() {
+                Some(Indices::U32(i)) => i.clone(),
+                _ => panic!("{name} has no indices"),
+            };
+            let volume: f32 = indices
+                .chunks(3)
+                .map(|t| {
+                    let p = |i: u32| Vec3::from_array(positions[i as usize]);
+                    p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0
+                })
+                .sum();
+            assert!(
+                volume > 0.0,
+                "the {name} encloses {volume:.4} — it is wound inside out"
+            );
+        }
+    }
+
+    /// The wheel arch sits on the tyre.
+    ///
+    /// The one invariant tying `vehicle::spec`'s suspension numbers to this
+    /// module's body profiles, and it did not exist: the two tables drifted
+    /// until every car in the game hung a quarter of a metre of daylight
+    /// between the top of each tyre and the arch over it, which is exactly
+    /// what "the cars float" looks like. The arch has to come down far enough
+    /// to cap the tyre and not so far that the tyre is buried in the wing.
+    #[test]
+    fn the_arch_sits_on_the_tyre() {
+        for class in VehicleClass::ALL {
+            let spec = class.spec();
+            let shape = profile(class);
+            // The arch is the raised section of the shell loft over the front
+            // axle: the highest floor anywhere in that band.
+            let arch = shape
+                .shell
+                .iter()
+                .filter(|s| (0.13..=0.28).contains(&s.at))
+                .map(|s| s.bottom)
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(arch.is_finite(), "{} has no wheel arch", spec.display_name);
+
+            let arch_height = spec.resting_height() + arch * spec.half_extents.y;
+            let tyre_top = spec.wheel_radius * 2.0;
+            assert!(
+                arch_height <= tyre_top,
+                "{}: the arch is {:.3}m up and the tyre only reaches {:.3}m — the car floats",
+                spec.display_name,
+                arch_height,
+                tyre_top
+            );
+            assert!(
+                arch_height >= tyre_top - 0.12,
+                "{}: the arch at {:.3}m is buried in a tyre reaching {:.3}m",
+                spec.display_name,
+                arch_height,
+                tyre_top
+            );
+        }
     }
 }

@@ -17,7 +17,6 @@ use rand_chacha::ChaCha8Rng;
 
 use super::archetype::Archetype;
 use super::figure::Rest;
-use super::steering::right_of;
 use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
@@ -38,8 +37,10 @@ const DESPAWN: f32 = 190.0;
 
 /// Cruising speed, in m/s. Under the traffic, over any walk.
 const PACE: f32 = 5.2;
-/// How far inside the kerb line the bike rides.
-const KERBSIDE: f32 = 1.2;
+// How far inside the kerb line a bike rides is `steering::cycle_offset` now.
+// A fixed 1.2 m put every cyclist in Landshut's narrow streets straight
+// through the parked cars: on a five-metre lane the parked row is centred at
+// 1.16 m and the bike rode at 1.30.
 /// Close enough to a junction to pick the next street.
 const ARRIVED: f32 = 6.0;
 
@@ -258,11 +259,12 @@ fn wheel_upright() -> Quat {
 }
 
 /// A point riding the kerb side of the correct lane.
+///
+/// Which is not the kerb: on a street with parking there is a row of cars
+/// between the two, and a bike goes inside them.
 fn kerbside_point(a: Vec2, b: Vec2, width: f32, t: f32) -> Vec2 {
-    let Ok(direction) = Dir2::new(b - a) else {
-        return a;
-    };
-    a.lerp(b, t) + right_of(*direction) * (width * 0.5 - KERBSIDE)
+    let parked = super::steering::parked_on_the_right(a, b, width);
+    super::steering::offset_point(a, b, super::steering::cycle_offset(width, parked), t)
 }
 
 fn ride(
@@ -356,8 +358,17 @@ mod tests {
             "riding the pavement is the crowd's job: {at:?}"
         );
         assert!(
-            at.x.abs() > width * 0.25,
+            at.x.abs() > crate::ai::steering::lane_offset(width, true),
             "the middle of the lane belongs to the cars: {at:?}"
+        );
+        // And inside whatever is parked at that kerb, which on a ten-metre
+        // street is a row of cars two and a half metres deep. Riding at a flat
+        // 1.2 m off the kerb line, which is what this used to do, put every
+        // cyclist in the town through the parked cars.
+        let parked = width * 0.5 - crate::ai::steering::parked_depth(width);
+        assert!(
+            at.x.abs() < parked,
+            "the bike is riding through the parked cars: {at:?}"
         );
     }
 }

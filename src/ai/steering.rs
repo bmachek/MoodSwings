@@ -19,16 +19,163 @@ pub fn right_of(direction: Vec2) -> Vec2 {
     Vec2::new(-direction.y, direction.x)
 }
 
+/// How much of a kerb a parked row takes out of a carriageway.
+///
+/// Nothing about the *travel* lane can be worked out without this, which is
+/// exactly the mistake this replaces: the lane was a quarter of the width, the
+/// parked row was measured from the kerb inwards, and the two were never
+/// compared. On Landshut's median street — seven and a half metres, and 82% of
+/// the town is exactly that — they overlapped by more than a metre for the
+/// whole length of every street, so the traffic drove down the middle of the
+/// parked cars, the cyclists rode through them, and every traffic car that
+/// spawned inside one was fired out of it by the solver.
+///
+/// Two depths, because there are two kinds of street. On a wide one anything
+/// parks and the row is as deep as the widest thing in the city; on a narrow
+/// one only the saloons fit and the row is shallower.
+pub const PARKED_ROW_WIDE: f32 = 2.50;
+pub const PARKED_ROW_NARROW: f32 = 2.25;
+
+/// The widest half-width allowed to park on a one-sided street.
+pub const NARROW_STREET_HALF_WIDTH: f32 = 0.95;
+
+/// And the widest half-width of anything that *drives*, which is what a travel
+/// lane has to leave room for.
+const LANE_CAR_HALF: f32 = 1.05;
+
+/// Where a street of a given width parks.
+///
+/// The thresholds are arithmetic rather than taste. Two parked rows and two
+/// lanes need about ten metres; one row and two lanes need about seven. Under
+/// that a street is an alley and nobody parks in it — which the game used to do
+/// anyway, on carriageways with no room, putting the parked row past its own
+/// centreline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Parking {
+    None,
+    /// One kerb only, and which one is a property of the street — see
+    /// [`parked_kerb`]. This is what makes a real old town work: 82% of
+    /// Landshut is 7.5 m across, which is one parked row and two tight lanes,
+    /// and treating those streets as unparkable emptied the whole Altstadt of
+    /// cars.
+    OneSide,
+    BothSides,
+}
+
+pub const ONE_SIDE_WIDTH: f32 = 6.9;
+pub const BOTH_SIDES_WIDTH: f32 = 9.6;
+
+pub fn parking_for(width: f32) -> Parking {
+    if width >= BOTH_SIDES_WIDTH {
+        Parking::BothSides
+    } else if width >= ONE_SIDE_WIDTH {
+        Parking::OneSide
+    } else {
+        Parking::None
+    }
+}
+
+/// How deep the parked row on this street is.
+pub fn parked_depth(width: f32) -> f32 {
+    match parking_for(width) {
+        Parking::None => 0.0,
+        Parking::OneSide => PARKED_ROW_NARROW,
+        Parking::BothSides => PARKED_ROW_WIDE,
+    }
+}
+
+/// The world-space normal pointing at the kerb a one-sided row stands on.
+///
+/// A property of the *street*, not of the direction it is being driven, so it
+/// has to give the same answer to the spawner that parks the cars, to the
+/// traffic deciding which half of the road is left, and to the cyclist tucking
+/// in beside them. Hence a hash of where the street is rather than a draw from
+/// an RNG stream: none of the three visits the streets in the same order, and
+/// a stream would hand them three different answers.
+pub fn parked_kerb(a: Vec2, b: Vec2) -> Vec2 {
+    // Canonical end first, so reversing the street cannot flip the kerb.
+    let (p, q) = if (a.x, a.y) <= (b.x, b.y) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let Ok(direction) = Dir2::new(q - p) else {
+        return Vec2::ZERO;
+    };
+    let mid = p.midpoint(q);
+    let mut key = ((mid.x * 10.0) as i64).wrapping_mul(73_856_093)
+        ^ ((mid.y * 10.0) as i64).wrapping_mul(19_349_663);
+    key ^= key >> 17;
+    key = key.wrapping_mul(0x9E37_79B9_7F4A_7C15u64 as i64);
+    key ^= key >> 31;
+    right_of(*direction) * if key & 1 == 0 { 1.0 } else { -1.0 }
+}
+
+/// How far from the centreline the travel lane runs.
+///
+/// `parked_beside` says whether the row is on *this* driver's side. It matters:
+/// on a one-sided street the half with the parked cars has barely a lane left
+/// and the other half has a wide one, so both drivers shift away from the row
+/// together and the road still holds two directions.
+pub fn lane_offset(width: f32, parked_beside: bool) -> f32 {
+    let row = parked_depth(width);
+    let (mine, theirs) = match parking_for(width) {
+        Parking::None => (0.0, 0.0),
+        Parking::BothSides => (row, row),
+        Parking::OneSide if parked_beside => (row, 0.0),
+        Parking::OneSide => (0.0, row),
+    };
+    // What is left of the carriageway once both rows have taken their share,
+    // and where the middle of it has moved to.
+    let free = (width - mine - theirs).max(0.0);
+    let centre = (theirs - mine) * 0.5;
+    let ideal = centre + free * 0.25;
+    // Never so far out that the car's own flank reaches the row it is passing.
+    let limit = width * 0.5 - mine - LANE_CAR_HALF;
+    ideal.min(limit).max(0.0)
+}
+
+/// And how far out a bicycle rides: the kerb side of the same lane, tucked
+/// just inside whatever is parked there.
+pub fn cycle_offset(width: f32, parked_beside: bool) -> f32 {
+    // A street parked on both kerbs has a row beside every rider, whatever the
+    // caller thought. Deciding that here rather than trusting three call sites
+    // to agree is the same reasoning `parked_kerb` is written for.
+    let beside = parked_beside || parking_for(width) == Parking::BothSides;
+    let row = if beside { parked_depth(width) } else { 0.6 };
+    (width * 0.5 - row - 0.55).max(lane_offset(width, beside))
+}
+
+/// Is the parked row on the right of somebody travelling `a -> b`?
+///
+/// Always, on a street parked both sides; never, on one parked on neither.
+pub fn parked_on_the_right(a: Vec2, b: Vec2, width: f32) -> bool {
+    match parking_for(width) {
+        Parking::None => false,
+        Parking::BothSides => true,
+        Parking::OneSide => match Dir2::new(b - a) {
+            Ok(direction) => parked_kerb(a, b).dot(right_of(*direction)) > 0.0,
+            Err(_) => false,
+        },
+    }
+}
+
 /// A point in the correct travel lane along the segment `a -> b`.
 ///
 /// `t` runs 0..1 along the segment; the result is offset sideways so vehicles
 /// keep to their own half of the carriageway rather than driving the centreline
-/// head-on into oncoming traffic.
+/// head-on into oncoming traffic — and clear of whatever is parked there.
 pub fn lane_point(a: Vec2, b: Vec2, width: f32, t: f32) -> Vec2 {
+    let offset = lane_offset(width, parked_on_the_right(a, b, width));
+    offset_point(a, b, offset, t)
+}
+
+/// A point at a given offset to the correct side of the segment `a -> b`.
+pub fn offset_point(a: Vec2, b: Vec2, offset: f32, t: f32) -> Vec2 {
     let Ok(direction) = Dir2::new(b - a) else {
         return a;
     };
-    let side = right_of(*direction) * (width * 0.25);
+    let side = right_of(*direction) * offset;
     let centre = a.lerp(b, t);
     if RIGHT_HAND_TRAFFIC {
         centre + side
@@ -123,9 +270,15 @@ mod tests {
         // Travelling +Z, "right" is -X.
         assert!(point.x < 0.0, "lane point {point:?} is on the wrong side");
         assert!((point.y - 50.0).abs() < 1e-4);
+        // Not a quarter of the width any more: a ten-metre street is parked
+        // on, and the lane is the middle of what the parked row leaves.
         assert!(
-            (point.x.abs() - 2.5).abs() < 1e-4,
-            "offset should be width/4"
+            (point.x.abs() - lane_offset(10.0, true)).abs() < 1e-4,
+            "lane point {point:?} does not sit in the lane"
+        );
+        assert!(
+            point.x.abs() < 2.5,
+            "the lane is still where it was before the parked row was accounted for"
         );
     }
 
@@ -220,5 +373,107 @@ mod tests {
         assert!(throttle_for_speed(20.0, 12.0) < 0.0, "should back off");
         assert_eq!(throttle_for_speed(12.0, 12.0), 0.0, "cruise is hands-off");
         assert!(throttle_for_speed(11.8, 12.0).abs() < 1e-6, "deadband");
+    }
+
+    /// Nothing that moves drives through what is parked.
+    ///
+    /// The lane used to be a quarter of the carriageway and the parked row was
+    /// measured inwards from the kerb, and the two were never compared. On the
+    /// widths a real town actually has — 82% of Landshut is exactly seven and
+    /// a half metres — they overlapped by more than a metre for the whole
+    /// length of every street, so the ambient traffic drove down the middle of
+    /// the parked cars and the cyclists rode through them.
+    #[test]
+    fn a_moving_car_never_shares_ground_with_a_parked_one() {
+        // The widths the game actually builds: Landshut's narrowest, the one
+        // four streets in five are, its main roads, and the generator's table.
+        for width in [4.8f32, 6.0, 7.5, 9.5, 12.0, 13.9, 17.0] {
+            let row = parked_depth(width);
+            for parked_beside in [false, true] {
+                if parking_for(width) == Parking::OneSide && !parked_beside {
+                    // The far half of a one-sided street has no row in it, so
+                    // there is nothing to clash with; it only has to stay on
+                    // the carriageway.
+                    assert!(
+                        lane_offset(width, false) + LANE_CAR_HALF <= width * 0.5 + 1e-3,
+                        "a {width}m street ran its clear lane onto the pavement"
+                    );
+                    continue;
+                }
+                if row == 0.0 {
+                    assert!(
+                        lane_offset(width, parked_beside) > 0.0,
+                        "a {width}m street put its lane on the centreline"
+                    );
+                    continue;
+                }
+                // Where the row's inner flank is, from the centreline. Measured
+                // against the widest thing allowed to stand in it.
+                let widest = match parking_for(width) {
+                    Parking::OneSide => NARROW_STREET_HALF_WIDTH,
+                    _ => 1.05,
+                };
+                let flank = width * 0.5 - 2.0 * widest - 0.34;
+                let lane = lane_offset(width, parked_beside) + LANE_CAR_HALF;
+                assert!(
+                    lane <= flank + 1e-3,
+                    "on a {width}m street traffic reaches {lane:.2}m and the parked row starts at {flank:.2}m"
+                );
+                let bike = cycle_offset(width, parked_beside) + 0.4;
+                assert!(
+                    bike <= flank + 1e-3,
+                    "on a {width}m street a bike reaches {bike:.2}m into a row starting at {flank:.2}m"
+                );
+            }
+        }
+    }
+
+    /// A bike rides nearer the kerb than the cars do.
+    #[test]
+    fn a_bike_keeps_out_of_the_middle_of_the_lane() {
+        for width in [4.8f32, 7.5, 9.5, 13.9, 17.0] {
+            for beside in [false, true] {
+                assert!(
+                    cycle_offset(width, beside) >= lane_offset(width, beside),
+                    "a bike on a {width}m street rides inside the traffic"
+                );
+                assert!(
+                    cycle_offset(width, beside) < width * 0.5,
+                    "a bike on a {width}m street rides on the pavement"
+                );
+            }
+        }
+    }
+
+    /// Which kerb a one-sided street parks on is a fact about the street.
+    ///
+    /// Three separate systems ask it — the spawner that parks the cars, the
+    /// traffic working out which half of the road is left, and the cyclist
+    /// tucking in beside them — and two of them see the street the other way
+    /// round. Any disagreement puts moving cars through parked ones on half
+    /// the streets in the town, which is the failure this whole model exists
+    /// to close.
+    #[test]
+    fn a_street_parks_on_the_same_kerb_whichever_way_it_is_driven() {
+        for (a, b) in [
+            (Vec2::new(-40.0, 12.0), Vec2::new(35.0, -8.0)),
+            (Vec2::new(3.0, 0.0), Vec2::new(3.0, 90.0)),
+            (Vec2::new(-120.5, -60.25), Vec2::new(-60.0, -61.0)),
+        ] {
+            let there = parked_kerb(a, b);
+            let back = parked_kerb(b, a);
+            assert!(
+                there.distance(back) < 1e-4,
+                "the row moved kerbs when the street was driven the other way: {there:?} / {back:?}"
+            );
+            // And the two directions of travel disagree about whether it is on
+            // *their* right, which is the whole point of asking.
+            let width = 7.5;
+            assert_ne!(
+                parked_on_the_right(a, b, width),
+                parked_on_the_right(b, a, width),
+                "both directions think the parked row is on their right"
+            );
+        }
     }
 }

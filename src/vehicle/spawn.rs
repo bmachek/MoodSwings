@@ -365,7 +365,10 @@ pub fn spawn_vehicle(
     spec: VehicleSpec,
     transform: Transform,
 ) -> Entity {
-    let size = spec.half_extents * 2.0;
+    // The box the car is felt as: fitted between a kerb and the roof rather
+    // than centred on the body origin — see `VehicleSpec::collider_half_extents`.
+    let box_half = spec.collider_half_extents();
+    let box_at = spec.collider_offset();
     // Off the shelf where the colour is one this city stocks, which it almost
     // always is; a fresh material only for a car somebody tinted by hand.
     let paint = match assets.stock_paint(spec.body_color, spec.body_metallic, spec.body_age) {
@@ -396,12 +399,25 @@ pub fn spawn_vehicle(
         Visibility::default(),
         // Parked cars start static; `activate_nearby_vehicles` promotes them.
         RigidBody::Static,
-        Collider::cuboid(size.x, size.y, size.z),
+        Collider::compound(vec![(
+            Vec3::Y * box_at,
+            Quat::IDENTITY,
+            Collider::cuboid(box_half.x * 2.0, box_half.y * 2.0, box_half.z * 2.0),
+        )]),
         Mass(spec.mass),
         // Lowering the centre of mass is what stops it rolling over in corners.
         CenterOfMass(spec.center_of_mass),
         VehicleInput::default(),
-        VehicleState::default(),
+        // Seeded at rest rather than defaulted. A defaulted `WheelState` has a
+        // ray length of zero, and `update_wheel_visuals` reads that as a
+        // suspension compressed past its own wheel — so it drew the wheel a
+        // whole radius *above* its anchor, up inside the bonnet. Every parked
+        // car the player had not yet walked near, which is most of the city,
+        // was standing on four wheels that were not under it.
+        VehicleState {
+            wheels: std::array::from_fn(|_| super::controller::WheelState::at_rest(&spec)),
+            ..default()
+        },
         super::impact::PreviousVelocity::default(),
         super::impact::Unsettled::default(),
         spec,
@@ -517,9 +533,7 @@ pub fn heading_towards(direction: Vec2) -> f32 {
 /// Spawning at exactly this height means a car promoted from static to dynamic
 /// neither drops nor pops.
 pub fn resting_height(spec: &VehicleSpec) -> f32 {
-    let load_per_wheel = spec.mass * 9.81 / WHEEL_COUNT as f32;
-    let compression = load_per_wheel / spec.spring_strength;
-    (spec.max_ray_length() - compression) - spec.axle_height
+    spec.resting_height()
 }
 
 /// Promotes nearby vehicles to dynamic and demotes distant ones.
@@ -564,6 +578,11 @@ pub fn activate_nearby_vehicles(
 }
 
 /// Positions each wheel mesh from its suspension state.
+///
+/// Every vehicle, not only the active ones — a parked car is still looked at.
+/// What makes that safe is that the state is seeded at rest when the car is
+/// spawned, so a car whose suspension has never run still reads a ray length
+/// that puts its wheels on the road rather than the zero a `Default` gives.
 pub fn update_wheel_visuals(
     time: Res<Time>,
     vehicles: Query<(&VehicleState, &VehicleSpec, &Children)>,
@@ -613,6 +632,18 @@ pub fn update_wheel_visuals(
 /// a body already overlapping one is ejected rather than nudged.
 const KERB_CLEARANCE: f32 = 0.34;
 
+/// One parking bay, and how far a row keeps clear of each junction.
+///
+/// A bay is a long car plus the shunting room a real one takes. The clearance
+/// is what stops a row running into a crossing: the pavement mitres back at
+/// every junction (see `world::streetside`), and a car parked on the corner
+/// would be standing on it.
+const BAY_LENGTH: f32 = 6.4;
+const BAY_END_CLEAR: f32 = 9.0;
+/// And how far it keeps clear of a plain bend, which is almost nothing: a bend
+/// is a kink in one street, and a kerb runs straight through it.
+const BAY_BEND_CLEAR: f32 = 0.8;
+
 /// Scatters parked cars along the kerbs so there is always something to steal.
 pub fn spawn_parked_vehicles(
     mut commands: Commands,
@@ -625,10 +656,16 @@ pub fn spawn_parked_vehicles(
     let mut spawned = 0;
 
     for edge in city.graph.edges() {
-        // Not every segment, or the city reads as a car park — but often
-        // enough that there is always one within a short walk, because a crime
-        // sandbox where you cannot find a car is not much of a sandbox.
-        if rng.random_range(0.0..1.0) > 0.62 {
+        use crate::ai::steering::Parking;
+
+        // Where this street parks, and on which kerb. A street narrow enough
+        // that a parked row would reach past its own centreline is a street
+        // nobody parks in — and the game used to park in them anyway, which put
+        // a stationary car in the one lane the traffic and the cyclists were
+        // using. Between that and a street wide enough for two rows there is a
+        // third case, and it is most of a real old town: one row, one kerb.
+        let parking = crate::ai::steering::parking_for(edge.width);
+        if parking == Parking::None {
             continue;
         }
 
@@ -638,42 +675,87 @@ pub fn spawn_parked_vehicles(
             continue;
         };
         let normal = Vec2::new(-direction.y, direction.x);
+        let one_side = crate::ai::steering::parked_kerb(a, b);
 
-        // Somewhere along the segment, parked against one kerb.
-        let along: f32 = rng.random_range(0.25..0.75);
-        let side = if rng.random_range(0.0..1.0) < 0.5 {
-            1.0
-        } else {
-            -1.0
+        // Clear of a *crossing*, which is not the same as clear of a node. A
+        // real town's streets arrive as polylines, so most nodes are bends in
+        // one street rather than junctions, and holding nine metres at both
+        // ends of every twenty-metre segment left the whole town with room for
+        // no cars at all.
+        let clear_at = |node| {
+            if city.graph.node(node).edges.len() >= 3 {
+                BAY_END_CLEAR
+            } else {
+                BAY_BEND_CLEAR
+            }
         };
-        let class = VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
-        let mut spec = class.spec();
-        (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
-        // Off the kerb by the car's own width, which the fixed metre and a half
-        // above was not.
-        //
-        // Parked cars are startup-resident and the kerbs they are parked
-        // against are streamed, so a car overlapping one is not a car sitting
-        // in a wall — it is a *static collider appearing inside a dynamic
-        // body*, a second later, when the chunk arrives. Avian resolves that
-        // the only way it can, and the patrol caught what it looks like: a
-        // parked car leaving the ground at thirteen metres a second and coming
-        // down from seventy.
-        //
-        // It went unnoticed for as long as every street was one of six widths
-        // from a table. Real widths off the extract run down to four and a
-        // half metres, and on one of those a van parked a metre and a half off
-        // the centre line has its flank inside the kerb.
-        let offset = (edge.width * 0.5 - spec.half_extents.x - KERB_CLEARANCE).max(0.0);
-        let position = a + *direction * (edge.length * along) + normal * offset * side;
-        // Nose along the street, facing the way traffic on that side runs.
-        let facing = if side > 0.0 { *direction } else { -*direction };
-        let heading = heading_towards(facing);
-        let transform = Transform::from_xyz(position.x, resting_height(&spec), position.y)
-            .with_rotation(Quat::from_rotation_y(heading));
+        let (head, tail) = (clear_at(edge.a), clear_at(edge.b));
 
-        spawn_vehicle(&mut commands, &assets, &mut materials, spec, transform);
-        spawned += 1;
+        // A row down the kerb rather than one car per street: the streets that
+        // qualify are parked the way a real one is, bumper to bumper with gaps.
+        let bays = ((edge.length - head - tail) / BAY_LENGTH).floor().max(0.0) as usize;
+        for bay in 0..bays {
+            // Not every bay, or the street is a wall of parked cars with no
+            // dropped kerbs, no driveways and nowhere for the traffic to pull
+            // in. Three in five is what a busy street looks like.
+            if rng.random_range(0.0..1.0) > 0.62 {
+                continue;
+            }
+            // On a narrow street only the saloons fit; a pickup parked on one
+            // of those leaves no lane behind it, which is the whole reason the
+            // row's depth is a smaller number there.
+            let narrow = parking == Parking::OneSide;
+            let choices: Vec<VehicleClass> = VehicleClass::CIVILIAN
+                .into_iter()
+                .filter(|class| {
+                    !narrow
+                        || class.spec().half_extents.x
+                            <= crate::ai::steering::NARROW_STREET_HALF_WIDTH
+                })
+                .collect();
+            let class = choices[rng.random_range(0..choices.len())];
+            let mut spec = class.spec();
+            (spec.body_color, spec.body_metallic, spec.body_age) =
+                super::paint::street_paint(&mut rng);
+
+            // Which kerb. A one-sided street parks on the kerb the street
+            // itself names, so the traffic and the cyclists — who ask the same
+            // question of the same function — leave that half of the road
+            // alone.
+            let side = match parking {
+                Parking::BothSides => {
+                    if rng.random_range(0.0..1.0) < 0.5 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+                _ => one_side.dot(normal).signum(),
+            };
+
+            // Off the kerb by the car's own width, which the fixed metre and a
+            // half this started as was not.
+            //
+            // Parked cars are startup-resident and the kerbs they are parked
+            // against are streamed, so a car overlapping one is not a car
+            // sitting in a wall — it is a *static collider appearing inside a
+            // dynamic body*, a second later, when the chunk arrives. Avian
+            // resolves that the only way it can, and the patrol caught what it
+            // looks like: a parked car leaving the ground at thirteen metres a
+            // second and coming down from seventy.
+            let offset = (edge.width * 0.5 - spec.half_extents.x - KERB_CLEARANCE).max(0.0);
+            let slack = (BAY_LENGTH - spec.half_extents.z * 2.0 - 0.6).max(0.05);
+            let along = head + bay as f32 * BAY_LENGTH + rng.random_range(0.3..0.3 + slack);
+            let position = a + *direction * along + normal * offset * side;
+            // Nose along the street, facing the way traffic on that side runs.
+            let facing = if side > 0.0 { *direction } else { -*direction };
+            let heading = heading_towards(facing);
+            let transform = Transform::from_xyz(position.x, resting_height(&spec), position.y)
+                .with_rotation(Quat::from_rotation_y(heading));
+
+            spawn_vehicle(&mut commands, &assets, &mut materials, spec, transform);
+            spawned += 1;
+        }
     }
 
     // Guarantee one at the player's start. Relying on the random scatter to
@@ -775,10 +857,16 @@ mod tests {
         ] {
             let spec = class.spec();
             let height = resting_height(&spec);
-            // The body must clear the road, and the wheels must still reach it.
+            // The box the car is felt as must clear a kerb, or a parked car is
+            // a dynamic body with a static kerb slab inside it the moment the
+            // chunk arrives — which Avian resolves by firing the car into the
+            // sky. Not `height > half_extents.y`, which was the old assertion:
+            // that measured the drawn body against a box the collider stopped
+            // being when the ride heights came down.
+            let floor = height + spec.collider_offset() - spec.collider_half_extents().y;
             assert!(
-                height > spec.half_extents.y,
-                "{} would spawn with its belly in the road",
+                floor >= crate::world::buildings::SIDEWALK_HEIGHT,
+                "{}'s collider floor is at {floor:.3}m, under the kerb",
                 spec.display_name
             );
             // The invariant that matters: the suspension ray from each wheel

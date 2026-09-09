@@ -11,6 +11,14 @@ use bevy::prelude::*;
 /// Wheel ordering used everywhere: front-left, front-right, rear-left, rear-right.
 pub const WHEEL_COUNT: usize = 4;
 
+/// How much daylight a settled car's collider leaves over a kerb.
+///
+/// Enough that a kerb streaming in under a parked car is not a body spawned
+/// inside a static box — which Avian resolves the only way it can, and which
+/// the patrol once caught as a parked car leaving the ground at thirteen
+/// metres a second.
+const KERB_DAYLIGHT: f32 = 0.02;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VehicleClass {
     Sedan,
@@ -51,11 +59,22 @@ pub struct VehicleSpec {
     pub display_name: &'static str,
 
     // --- body ---
-    /// Half-extents of the box collider (x = half width, y = half height, z = half length).
+    /// How big the bodywork is: half width, half height, half length.
+    ///
+    /// Read by `body::build` as the scale of the three lofts, by
+    /// `bounce::launch` as the volume to sweep, and — through
+    /// [`collider_half_extents`](Self::collider_half_extents) — as the size of
+    /// the box the car collides as. It is *not* the collider directly any more;
+    /// see there for why.
     pub half_extents: Vec3,
     pub mass: f32,
     /// Offset of the centre of mass from the body origin. Lowering it is the
     /// single most effective thing preventing the car from tipping in corners.
+    ///
+    /// Relative to the origin, so it moves when the ride height does. When the
+    /// ride heights were dropped to put the wheel arches back on the tyres,
+    /// every one of these was raised by exactly as much, so the centre of mass
+    /// stayed where it was above the road and no car's handling changed.
     pub center_of_mass: Vec3,
 
     // --- wheels ---
@@ -63,9 +82,24 @@ pub struct VehicleSpec {
     pub track: f32,
     pub wheel_radius: f32,
     /// Height of the wheel anchors relative to the body origin.
+    ///
+    /// This and [`suspension_rest`](Self::suspension_rest) together decide the
+    /// ride height, and therefore where the tyre sits inside the wheel arch —
+    /// which is a fact about the *bodywork*, a table away in `vehicle::body`.
+    /// The two drifted apart, and what that looked like is a car hanging a
+    /// quarter of a metre of daylight between the top of every tyre and the
+    /// arch above it: every car in the city visibly floating, on wheels that
+    /// read as detached. `the_arch_sits_on_the_tyre` in `vehicle::body` is the
+    /// invariant that ties them together now, and it is the reason these are
+    /// three decimal places rather than two.
     pub axle_height: f32,
 
     // --- suspension ---
+    /// How far the spring is extended with no load on it.
+    ///
+    /// Minus the compression the car's own weight causes, this is the travel
+    /// left before the body bottoms out — a fifth of a metre or so, which is
+    /// soft for a road car and deliberately so.
     pub suspension_rest: f32,
     pub spring_strength: f32,
     /// Resistance to the spring's own motion, in newtons per m/s.
@@ -151,18 +185,74 @@ impl VehicleSpec {
         self.suspension_rest + self.wheel_radius
     }
 
+    /// How far the springs are squashed by the car's own weight.
+    ///
+    /// One function rather than the four copies of `mass · g / (4 · k)` that
+    /// were spread across the spawner, the controller and two tests. They
+    /// agreed, which is the only reason it never showed.
+    pub fn rest_compression(&self) -> f32 {
+        self.wheel_mass_share() * 9.81 / self.spring_strength
+    }
+
+    /// Height the body origin settles at once the springs balance the weight.
+    pub fn resting_height(&self) -> f32 {
+        (self.max_ray_length() - self.rest_compression()) - self.axle_height
+    }
+
+    /// The box the car is *felt* as, which is not the box it is drawn as.
+    ///
+    /// Two different jobs used to share [`half_extents`](Self::half_extents),
+    /// and dropping the ride heights is what pulled them apart. Centred on the
+    /// body origin, a box a car's height reached from well above the roof to
+    /// well below the sill — at the old ride height its floor was forty
+    /// centimetres up, comfortably over every kerb in the city, which is why
+    /// cars glided across kerbs without ever touching one and why the parked
+    /// ones survived a kerb streaming in underneath them. Lower the car by a
+    /// third of a metre with that box still centred and the floor drops under
+    /// the kerb: every parked car in Landshut would be ejected by the kerb
+    /// arriving inside it, which is the thirteen-metres-a-second launch the
+    /// spawner already carries a comment about.
+    ///
+    /// So the box is fitted between two heights instead: its floor clears a
+    /// kerb by a couple of centimetres, and its ceiling stays where the
+    /// bodywork's own half-height puts it. A car mounts a kerb the way a real
+    /// one does — on its wheels, through the suspension — rather than by
+    /// hovering over it.
+    pub fn collider_half_extents(&self) -> Vec3 {
+        let (floor, ceiling) = self.collider_span();
+        Vec3::new(
+            self.half_extents.x,
+            (ceiling - floor) * 0.5,
+            self.half_extents.z,
+        )
+    }
+
+    /// Where that box sits, relative to the body origin.
+    pub fn collider_offset(&self) -> f32 {
+        let (floor, ceiling) = self.collider_span();
+        (floor + ceiling) * 0.5 - self.resting_height()
+    }
+
+    /// The two heights above the road the collider is fitted between.
+    fn collider_span(&self) -> (f32, f32) {
+        (
+            crate::world::buildings::SIDEWALK_HEIGHT + KERB_DAYLIGHT,
+            self.resting_height() + self.half_extents.y,
+        )
+    }
+
     fn sedan() -> Self {
         Self {
             class: VehicleClass::Sedan,
             display_name: "Sedan",
             half_extents: Vec3::new(0.90, 0.58, 2.20),
             mass: 1400.0,
-            center_of_mass: Vec3::new(0.0, -0.45, 0.0),
+            center_of_mass: Vec3::new(0.0, -0.135, 0.0),
             wheel_base: 2.75,
             track: 1.56,
             wheel_radius: 0.34,
-            axle_height: -0.30,
-            suspension_rest: 0.48,
+            axle_height: -0.145,
+            suspension_rest: 0.32,
             spring_strength: 32_000.0,
             damping: 1_280.0,
             anti_roll: 9_000.0,
@@ -193,12 +283,12 @@ impl VehicleSpec {
             display_name: "Coupe",
             half_extents: Vec3::new(0.94, 0.55, 2.45),
             mass: 1620.0,
-            center_of_mass: Vec3::new(0.0, -0.44, 0.0),
+            center_of_mass: Vec3::new(0.0, -0.225, 0.0),
             wheel_base: 2.95,
             track: 1.62,
             wheel_radius: 0.36,
-            axle_height: -0.28,
-            suspension_rest: 0.46,
+            axle_height: -0.185,
+            suspension_rest: 0.34,
             spring_strength: 34_000.0,
             damping: 1_240.0,
             anti_roll: 8_000.0,
@@ -229,12 +319,12 @@ impl VehicleSpec {
             display_name: "Sports",
             half_extents: Vec3::new(0.92, 0.46, 2.15),
             mass: 1150.0,
-            center_of_mass: Vec3::new(0.0, -0.40, 0.0),
+            center_of_mass: Vec3::new(0.0, -0.192, 0.0),
             wheel_base: 2.60,
             track: 1.64,
             wheel_radius: 0.33,
-            axle_height: -0.26,
-            suspension_rest: 0.38,
+            axle_height: -0.152,
+            suspension_rest: 0.28,
             spring_strength: 36_000.0,
             damping: 1_440.0,
             anti_roll: 14_000.0,
@@ -265,12 +355,12 @@ impl VehicleSpec {
             display_name: "Pickup",
             half_extents: Vec3::new(1.00, 0.78, 2.65),
             mass: 2300.0,
-            center_of_mass: Vec3::new(0.0, -0.48, 0.0),
+            center_of_mass: Vec3::new(0.0, -0.095, 0.0),
             wheel_base: 3.20,
             track: 1.72,
             wheel_radius: 0.42,
-            axle_height: -0.38,
-            suspension_rest: 0.56,
+            axle_height: -0.175,
+            suspension_rest: 0.38,
             spring_strength: 44_000.0,
             damping: 1_760.0,
             anti_roll: 11_000.0,
@@ -301,12 +391,12 @@ impl VehicleSpec {
             display_name: "Truck",
             half_extents: Vec3::new(1.05, 0.95, 2.85),
             mass: 3200.0,
-            center_of_mass: Vec3::new(0.0, -0.55, 0.0),
+            center_of_mass: Vec3::new(0.0, -0.115, 0.0),
             wheel_base: 3.40,
             track: 1.80,
             wheel_radius: 0.46,
-            axle_height: -0.42,
-            suspension_rest: 0.60,
+            axle_height: -0.185,
+            suspension_rest: 0.40,
             spring_strength: 62_000.0,
             damping: 2_480.0,
             anti_roll: 16_000.0,

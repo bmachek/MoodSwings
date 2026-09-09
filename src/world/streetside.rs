@@ -703,7 +703,8 @@ pub fn spawn_edge(
         if strip.body.1 < 1.0 {
             continue;
         }
-        let at = middle + *direction * strip.body.0 + normal * (side * (half + SIDEWALK_WIDTH * 0.5));
+        let at =
+            middle + *direction * strip.body.0 + normal * (side * (half + SIDEWALK_WIDTH * 0.5));
         commands.spawn((
             ChunkOf(chunk),
             Transform::from_xyz(at.x, SIDEWALK_HEIGHT * 0.5, at.y)
@@ -1058,7 +1059,10 @@ mod tests {
         // pavement on the outside of the turn has to run *past* the node or the
         // bend shows a notch of bare road between two strips.
         let outside = mitre(4.5, 4.5, std::f32::consts::PI + 0.25);
-        assert!(outside < 0.0, "the outside of a bend stopped {outside}m short");
+        assert!(
+            outside < 0.0,
+            "the outside of a bend stopped {outside}m short"
+        );
         // And the inside of the same bend stops just short of it.
         let inside = mitre(4.5, 4.5, std::f32::consts::PI - 0.25);
         assert!(
