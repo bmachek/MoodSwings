@@ -475,6 +475,7 @@ pub fn update_streaming(
                     super::streetside::spawn_junction(
                         &mut commands,
                         ribbons,
+                        id,
                         node.pos,
                         widest,
                         paved,

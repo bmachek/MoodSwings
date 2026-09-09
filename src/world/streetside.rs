@@ -295,6 +295,9 @@ pub struct Ribbons {
     /// One shared square for a crossing. Small enough that a fixed tiling is
     /// right whatever it is stretched over.
     junction: Handle<Mesh>,
+    /// How wide that square has to be at each junction, indexed by `NodeId` —
+    /// see [`junction_reach`].
+    reach: Vec<f32>,
     /// One material per [`super::atlas::Surface`], indexed by its own `index`.
     paving: [Handle<super::road::RoadMaterial>; 4],
     /// The two pavements of each street, indexed by `EdgeId` then by side —
@@ -553,6 +556,60 @@ fn wrap(angle: f32) -> f32 {
     }
 }
 
+/// How far a junction has to be paved, per node.
+///
+/// The outer mitre of every corner is where that corner's two pavements meet
+/// at their backs, and it is the furthest any pavement stands from the node. A
+/// quad that reaches it covers everything the ribbons and the strips leave
+/// between them — which at a square crossing is what the old width-of-the-
+/// widest-arm square already covered, and at an oblique one is a good deal
+/// more.
+///
+/// Capped, because a mitre is unbounded as the angle goes to nothing and a
+/// junction quad the size of a block would pave over the town.
+fn junction_reach(layout: &CityLayout, fans: &[Vec<Arm>]) -> Vec<f32> {
+    layout
+        .graph
+        .nodes()
+        .map(|(id, node)| {
+            let fan = &fans[id.0 as usize];
+            let widest = node
+                .edges
+                .iter()
+                .map(|&edge| layout.graph.edge(edge).width)
+                .fold(0.0f32, f32::max);
+            // The floor is the old answer: half the widest carriageway plus a
+            // pavement, which is what a square crossing needs and no more.
+            let mut out = widest * 0.5 + SIDEWALK_WIDTH;
+            for index in 0..fan.len() {
+                let next = &fan[(index + 1) % fan.len()];
+                let gap = wrap(next.bearing - fan[index].bearing);
+                // A reflex wedge is the outside of a bend, where the pavements
+                // run past the node rather than being cut back from it. There
+                // is nothing to pave there.
+                if fan.len() < 2 || gap >= std::f32::consts::PI {
+                    continue;
+                }
+                // The outer mitre as a distance from the node rather than as a
+                // distance along an arm: the arm distance and the offset across
+                // it are the two legs of a right angle.
+                let along = mitre(
+                    fan[index].half + SIDEWALK_WIDTH,
+                    next.half + SIDEWALK_WIDTH,
+                    gap,
+                );
+                let across = fan[index].half + SIDEWALK_WIDTH;
+                out = out.max(along.hypot(across));
+            }
+            // Doubled, because the quad is centred on the node, and capped.
+            (out * 2.0).min(widest * JUNCTION_CAP + SIDEWALK_WIDTH * 2.0)
+        })
+        .collect()
+}
+
+/// How much bigger than its widest arm a junction quad may be paved.
+const JUNCTION_CAP: f32 = 2.6;
+
 /// The two pavements of one street, cut to the joints at both of its ends.
 ///
 /// `None` where what is left after both crossings have been given their room
@@ -681,6 +738,17 @@ pub fn build_ribbons(
     hedge: Handle<StandardMaterial>,
 ) -> Ribbons {
     let fans = fans(layout);
+    // How far the pavement's own corners stand from each junction.
+    //
+    // The junction quad used to be a square the width of the widest arm, on
+    // the argument that the arms' own ribbons cover everything but the diamond
+    // in the middle. That holds when the arms meet square and fails the moment
+    // they do not: the pavements are mitred outward by `1/sin` of the crossing
+    // angle, so at a forty-degree corner the paving they are cut back from is
+    // half as wide again as the square — and what shows in the gap is bare
+    // ground, at every oblique junction in the town. Sized off the mitres it
+    // is sized off the same numbers the pavements are.
+    let reach = junction_reach(layout, &fans);
     let strips = (0..layout.graph.edge_count())
         .map(|i| strips(layout, &fans, super::roadgraph::EdgeId(i as u32), meshes))
         .collect();
@@ -741,6 +809,7 @@ pub fn build_ribbons(
         })
         .collect();
     Ribbons {
+        reach,
         roads,
         junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0, TILE))),
         paving,
@@ -1011,16 +1080,24 @@ fn fill_gaps(
 pub fn spawn_junction(
     commands: &mut Commands,
     ribbons: &Ribbons,
+    node: super::roadgraph::NodeId,
     at: Vec2,
     widest: f32,
     surface: super::atlas::Surface,
     chunk: IVec2,
 ) {
-    // A square the size of the widest street meeting here, plus its pavements
-    // for the same reason the ribbons carry theirs. Square rather than
-    // fitted to the arms, because a junction is covered by the ribbons of its
-    // own arms except for the diamond in the very middle, and a square covers
-    // that whatever angle the arms arrive at.
+    // A square reaching the outermost corner of the pavements that meet here —
+    // see [`junction_reach`]. Square rather than fitted to the arms, because a
+    // junction is covered by the ribbons of its own arms except for the wedges
+    // between them, and a square covers those whatever angle the arms arrive
+    // at. What it is *sized* by is the mitre rather than the widest street: at
+    // an oblique corner the pavements are cut back half as far again as a
+    // width-sized square reaches, and what showed in the gap was bare ground.
+    let side = ribbons
+        .reach
+        .get(node.0 as usize)
+        .copied()
+        .unwrap_or(widest + SIDEWALK_WIDTH * 2.0);
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(ribbons.junction.clone()),
@@ -1031,11 +1108,7 @@ pub fn spawn_junction(
         // Under every arm's own ribbon, so what shows in the middle of a
         // junction is the ribbons themselves and this is only what fills the
         // diamond none of them covers.
-        Transform::from_xyz(at.x, ROAD_BED - 0.002, at.y).with_scale(Vec3::new(
-            widest + SIDEWALK_WIDTH * 2.0,
-            1.0,
-            widest + SIDEWALK_WIDTH * 2.0,
-        )),
+        Transform::from_xyz(at.x, ROAD_BED - 0.002, at.y).with_scale(Vec3::new(side, 1.0, side)),
     ));
 }
 
