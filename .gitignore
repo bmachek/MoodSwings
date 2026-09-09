@@ -15,9 +15,14 @@
 /assets/sounds/
 
 # Working before/after comparisons for a phase. The README gallery is what
-# ships; these are scratch.
-shots/before/
-shots/after/
+# ships -- the tracked `shots/*.png` -- and every subdirectory under it is
+# scratch from a `tools/shoot.sh --out` run.
+#
+# This used to name `shots/before/` and `shots/after/` specifically, which
+# covered two of the seventy directories that have accumulated. A `git add -A`
+# then swept two thousand seven hundred captures into a commit and took the
+# repository to four gigabytes. One rule for all of them.
+shots/*/
 
 # Auditioned sound, written by `cargo run -- --audition`
 /shots/audio/
