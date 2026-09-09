@@ -900,6 +900,13 @@ fn sandwich_board(
     const HEIGHT: f32 = 0.92;
     const WIDTH: f32 = 0.62;
     /// How far the two panels lean apart at the foot, as a fraction of height.
+    ///
+    /// Mind the sign. `Quat::from_rotation_x(t)` sends local +Y to
+    /// `(0, cos t, sin t)`, so a *positive* angle swings a panel's head toward
+    /// +Z and its feet toward −Z. The leaf offset below is positive on the +Z
+    /// side, so the rotation has to be negated or the board comes out as a V:
+    /// feet touching, heads 0.4 m apart, standing on its head. Which is how it
+    /// stood for a while.
     const SPLAY: f32 = 0.22;
 
     commands
@@ -921,7 +928,7 @@ fn sandwich_board(
                     Mesh3d(kit.cube.clone()),
                     MeshMaterial3d(kit.slate.clone()),
                     Transform::from_xyz(0.0, 0.0, lean * HEIGHT * SPLAY * 0.5)
-                        .with_rotation(Quat::from_rotation_x(lean * SPLAY))
+                        .with_rotation(Quat::from_rotation_x(-lean * SPLAY))
                         .with_scale(Vec3::new(WIDTH, HEIGHT, 0.035)),
                     range.clone(),
                 ));
@@ -934,7 +941,7 @@ fn sandwich_board(
                 Transform::from_xyz(0.0, HEIGHT * 0.5, 0.0).with_scale(Vec3::new(
                     WIDTH * 1.04,
                     0.05,
-                    HEIGHT * SPLAY * 1.4,
+                    HEIGHT * SPLAY * 0.8,
                 )),
                 range.clone(),
             ));
@@ -1249,9 +1256,12 @@ fn terrace(
                 ChunkOf(chunk),
                 Mesh3d(kit.cone.clone()),
                 MeshMaterial3d(canvas),
-                // A cone points up and a parasol is the other way round.
-                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + 2.12, at.y)
-                    .with_rotation(Quat::from_rotation_x(std::f32::consts::PI))
+                // Bevy's cone is built tip-up, which is what a parasol is:
+                // peak in the middle, canvas falling away to the rim. It used
+                // to be turned over by a half turn on the theory that "a cone
+                // points up and a parasol is the other way round", and that is
+                // how the terraces came to be shaded by funnels.
+                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + 2.09, at.y)
                     .with_scale(Vec3::new(1.40, 0.46, 1.40)),
                 far.clone(),
             ));
@@ -1368,6 +1378,39 @@ mod tests {
     /// two axes. Pick the other and the bike keeps both wheels, both at right
     /// angles to the direction it would travel in — which from twelve metres
     /// reads as a bicycle that has been run over rather than as a bug.
+    #[test]
+    fn an_a_board_stands_on_its_feet_and_not_on_its_head() {
+        // The spawner's own numbers, and its own arithmetic.
+        const HEIGHT: f32 = 0.92;
+        const SPLAY: f32 = 0.22;
+        let (mut feet, mut heads) = ([0.0f32; 2], [0.0f32; 2]);
+        for (slot, lean) in [-1.0f32, 1.0].into_iter().enumerate() {
+            let centre = lean * HEIGHT * SPLAY * 0.5;
+            let tilt = Quat::from_rotation_x(-lean * SPLAY);
+            // The z the panel's top and bottom edges reach, half a height
+            // either side of its centre.
+            let up = tilt * Vec3::new(0.0, HEIGHT * 0.5, 0.0);
+            heads[slot] = centre + up.z;
+            feet[slot] = centre - up.z;
+        }
+        let stance = (feet[0] - feet[1]).abs();
+        let apex = (heads[0] - heads[1]).abs();
+        assert!(
+            stance > apex,
+            "the board stands {stance} m wide at the foot and {apex} m at the head"
+        );
+        assert!(apex < 0.05, "the two leaves do not meet: {apex} m apart");
+        assert!(stance > 0.3, "the board barely opens: {stance} m");
+    }
+
+    #[test]
+    fn a_parasol_has_its_point_at_the_top() {
+        // Bevy's cone is tip-up. The parasol spawner applies no rotation, so
+        // the canopy's own axis is still +Y — anything else is a funnel.
+        let up = Quat::IDENTITY * Vec3::Y;
+        assert!(up.y > 0.999, "the canopy points {up:?}");
+    }
+
     #[test]
     fn a_bicycle_wheel_stands_in_the_plane_it_would_roll_in() {
         // The bike is built along local X. A wheel rolling along X turns about
