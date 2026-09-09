@@ -813,6 +813,7 @@ fn fan_plan(outline: &[Vec2], at: Vec2) -> Mesh {
 fn strips(
     layout: &CityLayout,
     fans: &[Vec<Arm>],
+    roads: &HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>>,
     edge_id: super::roadgraph::EdgeId,
     meshes: &mut Assets<Mesh>,
 ) -> [Option<Strip>; 2] {
@@ -820,6 +821,14 @@ fn strips(
     let edge = graph.edge(edge_id);
     let length = edge.length;
     let half = edge.width * 0.5;
+    // The street in world terms, which the corridor test below needs and the
+    // mesh does not: the quad is built about the street's own middle.
+    let (from, to) = (graph.node(edge.a).pos, graph.node(edge.b).pos);
+    let middle = (from + to) * 0.5;
+    let Ok(direction) = Dir2::new(to - from) else {
+        return [None, None];
+    };
+    let normal = Vec2::new(-direction.y, direction.x);
 
     // At `a` the street leaves along `a -> b`, so the pavement on the world
     // `+normal` side is the anticlockwise one. At `b` it leaves the other way,
@@ -882,6 +891,31 @@ fn strips(
         let body_a = a_kerb.max(a_back).max(0.0) + KERB_BODY_INSET;
         let body_b = b_kerb.max(b_back).max(0.0) + KERB_BODY_INSET;
         let body_run = length - body_a - body_b;
+
+        // Is this pavement lying in another street?
+        //
+        // A town read off a map has streets mapped as several parallel ways:
+        // "Altstadt" is twenty-two of them, 1908 m of centreline for a street
+        // that is seven hundred metres long and thirty wide, because the
+        // carriageway, the parking lanes and the pedestrian half are each
+        // their own way. Every one of them was being given two pavements, and
+        // the ones facing inward landed on top of the next carriageway along.
+        // What that draws is the market square as nine parallel stripes of
+        // alternating paving.
+        //
+        // The same test a building takes, for the same reason, and it is
+        // general rather than a special case for the Altstadt: wherever a
+        // pavement would be laid in a road, there is no pavement there.
+        let footway = Oblong {
+            centre: middle
+                + *direction * ((a_kerb - b_kerb) * 0.5)
+                + normal * (side * (half + (BULLNOSE + SIDEWALK_WIDTH) * 0.5)),
+            axis: *direction,
+            half: Vec2::new(kerb_run, SIDEWALK_WIDTH - BULLNOSE) * 0.5,
+        };
+        if on_another_carriageway(roads, &footway, edge_id) {
+            continue;
+        }
 
         out[index] = Some(Strip {
             footway: meshes.add(super::buildings::with_tangents(plan(&corners, &uvs))),
@@ -948,6 +982,10 @@ pub fn build_ribbons(
     hedge: Handle<StandardMaterial>,
 ) -> Ribbons {
     let fans = fans(layout);
+    // Every carriageway in the town, filed by cell, so a pavement can ask
+    // whether the ground it wants is already a road — see the pavement's own
+    // use of it in [`strips`].
+    let corridors = corridors(layout);
     // The paving of each crossing, cut to it — see [`plate`], which is where
     // the square this replaced is argued with at length.
     let plates = layout
@@ -955,9 +993,26 @@ pub fn build_ribbons(
         .nodes()
         .map(|(id, node)| plate(&fans[id.0 as usize], node.pos).map(|mesh| meshes.add(mesh)))
         .collect();
-    let strips = (0..layout.graph.edge_count())
-        .map(|i| strips(layout, &fans, super::roadgraph::EdgeId(i as u32), meshes))
+    let strips: Vec<_> = (0..layout.graph.edge_count())
+        .map(|i| {
+            strips(
+                layout,
+                &fans,
+                &corridors,
+                super::roadgraph::EdgeId(i as u32),
+                meshes,
+            )
+        })
         .collect();
+    let laid = strips
+        .iter()
+        .flatten()
+        .filter(|side| side.is_some())
+        .count();
+    info!(
+        "{laid} of {} pavement sides laid",
+        layout.graph.edge_count() * 2
+    );
     let roads = layout
         .graph
         .edges()
@@ -1398,14 +1453,26 @@ impl Oblong {
 /// there was compared buildings against other buildings.
 const IN_THE_ROAD: f32 = 0.20;
 
+/// How far onto another street's tarmac a pavement has to reach before it is
+/// that street's ground rather than its own.
+///
+/// Much looser than [`IN_THE_ROAD`], and it has to be: a mitred pavement ends
+/// exactly on the kerb line of the street it gives way to, so at a hand's width
+/// every pavement in the town would reject itself at both ends. Over a metre in
+/// is not a corner touching a corner, it is one street's pavement laid down the
+/// middle of another.
+const PAVED_OVER: f32 = 1.2;
+
 /// Every road, filed by cell, so a candidate plot only tests the handful of
 /// streets that could possibly be under it.
 ///
 /// Without this the check is every plot against every road: six thousand times
 /// two thousand for Landshut, which is thirteen million tests to place a town.
-fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<Oblong>> {
-    let mut filed: HashMap<(i32, i32), Vec<Oblong>> = HashMap::default();
-    for edge in layout.graph.edges() {
+fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>> {
+    let mut filed: HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>> =
+        HashMap::default();
+    for (edge_id, edge) in layout.graph.edges().enumerate() {
+        let edge_id = super::roadgraph::EdgeId(edge_id as u32);
         let a = layout.graph.node(edge.a).pos;
         let b = layout.graph.node(edge.b).pos;
         let Ok(direction) = Dir2::new(b - a) else {
@@ -1425,7 +1492,7 @@ fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<Oblong>> {
         let high = ((road.centre + extent) / CELL).floor().as_ivec2();
         for x in low.x..=high.x {
             for z in low.y..=high.y {
-                filed.entry((x, z)).or_default().push(road);
+                filed.entry((x, z)).or_default().push((edge_id, road));
             }
         }
     }
@@ -1997,7 +2064,61 @@ fn runs(layout: &CityLayout) -> Vec<Run> {
 /// up to its own street and therefore sits at some arbitrary angle to every
 /// other one, which is why this is a rotated-rectangle test and not a box
 /// overlap.
-fn in_a_road(roads: &HashMap<(i32, i32), Vec<Oblong>>, shape: &Oblong) -> bool {
+fn in_a_road(
+    roads: &HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>>,
+    shape: &Oblong,
+) -> bool {
+    in_another_road(roads, shape, None, IN_THE_ROAD)
+}
+
+/// Is this pavement lying on somebody else's *carriageway*?
+///
+/// Two differences from [`in_a_road`], and both are the point. It knows which
+/// street is its own, because a pavement is inside its own street's corridor by
+/// construction. And it tests against the carriageway alone rather than against
+/// the corridor: the corridor is the tarmac *and* a pavement either side, so
+/// against the whole of it every pavement in the town rejects itself the moment
+/// another street passes within a few metres — measured, that was 1870 of 4483,
+/// which is not a fix for a striped market square, it is the holes back again.
+///
+/// A pavement meeting another pavement is two pavements meeting. A pavement
+/// over another street's tarmac is the bug.
+fn on_another_carriageway(
+    roads: &HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>>,
+    shape: &Oblong,
+    ignore: super::roadgraph::EdgeId,
+) -> bool {
+    let cell = (
+        (shape.centre.x / CELL).floor() as i32,
+        (shape.centre.y / CELL).floor() as i32,
+    );
+    (-1..=1).any(|dx| {
+        (-1..=1).any(|dz| {
+            roads.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
+                near.iter().any(|(id, road)| {
+                    *id != ignore
+                        && shape.clashes_with(
+                            &Oblong {
+                                centre: road.centre,
+                                axis: road.axis,
+                                // Back off the pavement the corridor reserves,
+                                // leaving the tarmac it was measured from.
+                                half: Vec2::new(road.half.x, road.half.y - SIDEWALK_WIDTH),
+                            },
+                            PAVED_OVER,
+                        )
+                })
+            })
+        })
+    })
+}
+
+fn in_another_road(
+    roads: &HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>>,
+    shape: &Oblong,
+    ignore: Option<super::roadgraph::EdgeId>,
+    margin: f32,
+) -> bool {
     let cell = (
         (shape.centre.x / CELL).floor() as i32,
         (shape.centre.y / CELL).floor() as i32,
@@ -2006,7 +2127,7 @@ fn in_a_road(roads: &HashMap<(i32, i32), Vec<Oblong>>, shape: &Oblong) -> bool {
         (-1..=1).any(|dz| {
             roads.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
                 near.iter()
-                    .any(|road| shape.clashes_with(road, IN_THE_ROAD))
+                    .any(|(id, road)| Some(*id) != ignore && shape.clashes_with(road, margin))
             })
         })
     })
@@ -2474,7 +2595,7 @@ mod tests {
                     half: Vec2::new(gap.span, FORECOURT) * 0.5,
                 };
                 for near in roads.values() {
-                    for road in near {
+                    for (_, road) in near {
                         assert!(
                             !yard.clashes_with(road, IN_THE_ROAD),
                             "a forecourt at {} is standing in the road",
@@ -2497,7 +2618,7 @@ mod tests {
                 half: building.footprint.size() * 0.5,
             };
             for near in roads.values() {
-                for road in near {
+                for (_, road) in near {
                     assert!(
                         !plot.clashes_with(road, IN_THE_ROAD),
                         "a house at {} is standing in the road",
