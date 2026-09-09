@@ -18,8 +18,34 @@
 //! [`Provocation`] like the player's do. That is the whole of the "NPCs react
 //! to each other" requirement: nothing here knows or cares which of the
 //! provokers is holding the mouse.
+//!
+//! ## There was a ring, and there is not one now
+//!
+//! Every provocation used to paint an expanding disc on the ground, red for a
+//! taunt and green for a cheer, and it worked on an empty street and only on an
+//! empty street. The arithmetic of a Versammlung is what killed it: `events`
+//! marches fourteen people whose baseline mood is already past
+//! [`SPONTANEOUS_JOY`] or [`SPONTANEOUS_SPITE`], a failed roll rests only half
+//! the cooldown, and the contagion this module is built to cause recruits the
+//! bystanders — so the column alone sustained about three rings a second, each
+//! sweeping eleven to fifteen metres in 0.45 s at alpha 0.55.
+//!
+//! Four of those overlapping cover the road. That much is only garish. What
+//! made it *flicker* is that a transparent surface is drawn in the
+//! `Transparent3d` phase, which depth-tests but never writes, and the depth
+//! prepass is opaque-only: TAA gets no motion vectors for a ring and cannot
+//! reproject one, so with `Msaa::Off` it rejects and re-accepts the history per
+//! pixel every frame while the sub-pixel edge sweeps past. Back-to-front
+//! sorting then reshuffles rings spawned milliseconds apart, and alpha
+//! blending does not commute. The composite changed every frame.
+//!
+//! None of that is fixable by moving the ring up a millimetre — it was never
+//! the [`crate::world::layer`] tie, which is a different bug with the same
+//! symptom. The feedback the ring was carrying is carried already: the sound
+//! plays flat in both ears for the player's own mouth (see [`announce`]), and
+//! the crowd's answer is on every face and in every voice. So it is gone rather
+//! than tuned.
 
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use rand::RngExt;
@@ -44,12 +70,6 @@ const SPONTANEOUS_JOY: f32 = 0.55;
 /// extremes of the scale. Low: an NPC that provokes constantly is a hazard
 /// rather than a character.
 const SPONTANEITY: f32 = 0.22;
-
-/// Seconds the ripple takes to reach its full width and vanish.
-const RIPPLE_LIFE: f32 = 0.45;
-/// Height above the ground the ring is drawn at, so it is not fighting the road
-/// surface for the same depth.
-const RIPPLE_LIFT: f32 = 0.06;
 
 /// Which way somebody was rude.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -78,15 +98,6 @@ pub struct Provoker {
     pub cooldown: f32,
 }
 
-/// An expanding ring on the ground, marking where something was said.
-#[derive(Component)]
-struct Ripple {
-    age: f32,
-    reach: f32,
-    material: Handle<StandardMaterial>,
-    colour: LinearRgba,
-}
-
 /// Everything that produces or applies a [`Provocation`].
 ///
 /// Exported so a grudge can be taken in the same frame the offence happened
@@ -99,37 +110,15 @@ pub struct ProvokePlugin;
 
 impl Plugin for ProvokePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Provocation>()
-            .add_systems(Startup, build_ring)
-            .add_systems(
-                Update,
-                (
-                    (player_provokes, npcs_provoke),
-                    (feel_provocations, spread_ripples),
-                )
-                    .chain()
-                    .in_set(Provoking)
-                    .in_set(GameSet::Ai)
-                    .after(crate::ai::pedestrian::Walking),
-            );
+        app.add_message::<Provocation>().add_systems(
+            Update,
+            ((player_provokes, npcs_provoke), feel_provocations)
+                .chain()
+                .in_set(Provoking)
+                .in_set(GameSet::Ai)
+                .after(crate::ai::pedestrian::Walking),
+        );
     }
-}
-
-/// The ring mesh, shared by every ripple. Only the material differs, because
-/// only the material fades.
-#[derive(Resource)]
-struct RingMesh(Handle<Mesh>);
-
-fn build_ring(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    // An annulus is a 2D primitive, so it is born standing up in the XY plane.
-    // Laid flat here rather than rotated per ripple, which would be the same
-    // quarter turn a few hundred times a minute.
-    let ring = Annulus::new(0.82, 1.0)
-        .mesh()
-        .resolution(48)
-        .build()
-        .rotated_by(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
-    commands.insert_resource(RingMesh(meshes.add(ring)));
 }
 
 // ------------------------------------------------------------- the maths ----
@@ -169,8 +158,6 @@ fn player_provokes(
     time: Res<Time>,
     config: Res<GameConfig>,
     bank: Option<Res<SoundBank>>,
-    ring: Option<Res<RingMesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<AudioRng>,
     mut provocations: MessageWriter<Provocation>,
     mut players: Query<(Entity, &Transform, &ActionState<Action>, &mut Provoker), With<Player>>,
@@ -202,8 +189,6 @@ fn player_provokes(
         &mut commands,
         &config,
         bank.as_deref(),
-        ring.as_deref(),
-        &mut materials,
         &mut rng,
         at,
         kind,
@@ -223,8 +208,6 @@ fn npcs_provoke(
     time: Res<Time>,
     config: Res<GameConfig>,
     bank: Option<Res<SoundBank>>,
-    ring: Option<Res<RingMesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<AudioRng>,
     mut provocations: MessageWriter<Provocation>,
     mut flummis: Query<
@@ -282,8 +265,6 @@ fn npcs_provoke(
             &mut commands,
             &config,
             bank.as_deref(),
-            ring.as_deref(),
-            &mut materials,
             &mut rng,
             at,
             kind,
@@ -292,9 +273,9 @@ fn npcs_provoke(
     }
 }
 
-/// The noise and the ring. Shared by both, because a raspberry from an NPC has
-/// to look and sound exactly like one from the player or the crowd's behaviour
-/// reads as scripted rather than as the same rule applying to everybody.
+/// The noise. Shared by both, because a raspberry from an NPC has to sound
+/// exactly like one from the player or the crowd's behaviour reads as scripted
+/// rather than as the same rule applying to everybody.
 ///
 /// `own` marks the player's mouth. Their raspberry happens *to* them rather
 /// than near them — the same rule the footsteps follow (see
@@ -305,8 +286,6 @@ fn announce(
     commands: &mut Commands,
     config: &GameConfig,
     bank: Option<&SoundBank>,
-    ring: Option<&RingMesh>,
-    materials: &mut Assets<StandardMaterial>,
     rng: &mut AudioRng,
     at: Vec3,
     kind: Rudeness,
@@ -339,71 +318,6 @@ fn announce(
             settings.with_speed(rng.random_range(0.9..1.15)),
             Transform::from_translation(at),
         ));
-    }
-
-    let Some(ring) = ring else { return };
-    let (colour, reach) = match kind {
-        Rudeness::Taunt => (
-            LinearRgba::new(0.95, 0.22, 0.16, 1.0),
-            config.mood.taunt_radius,
-        ),
-        Rudeness::Cheer => (
-            LinearRgba::new(0.55, 0.92, 0.42, 1.0),
-            config.mood.cheer_radius,
-        ),
-    };
-    // One material per ripple, because the fade is per ripple. They are cheap,
-    // short-lived, and the handle goes with the entity.
-    let material = materials.add(StandardMaterial {
-        base_color: colour.into(),
-        emissive: colour * 2.0,
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        // Nothing should be able to walk behind a ring painted on the road and
-        // have it disappear, and nothing should be shadowed by it either.
-        double_sided: true,
-        cull_mode: None,
-        ..default()
-    });
-    commands.spawn((
-        Name::new("Provocation"),
-        Ripple {
-            age: 0.0,
-            reach,
-            material: material.clone(),
-            colour,
-        },
-        Mesh3d(ring.0.clone()),
-        MeshMaterial3d(material),
-        Transform::from_translation(at.with_y(at.y - 0.8 + RIPPLE_LIFT))
-            .with_scale(Vec3::splat(0.1)),
-        NotShadowCaster,
-    ));
-}
-
-fn spread_ripples(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut ripples: Query<(Entity, &mut Ripple, &mut Transform)>,
-) {
-    let dt = time.delta_secs();
-    for (entity, mut ripple, mut transform) in &mut ripples {
-        ripple.age += dt;
-        let along = ripple.age / RIPPLE_LIFE;
-        if along >= 1.0 {
-            // Forgiving: this hangs off a citizen who may already be gone.
-            commands.entity(entity).try_despawn();
-            continue;
-        }
-        // Fast at first and slowing, which reads as something spreading out
-        // from a source rather than as a circle being drawn.
-        let spread = 1.0 - (1.0 - along) * (1.0 - along);
-        transform.scale = Vec3::splat((ripple.reach * spread).max(0.05));
-        if let Some(mut material) = materials.get_mut(&ripple.material) {
-            let fade = 1.0 - along;
-            material.base_color = ripple.colour.with_alpha(fade * 0.55).into();
-        }
     }
 }
 

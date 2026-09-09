@@ -1183,8 +1183,14 @@ in the world.
   them, a riot sounds like a disagreement.
 
 - The crowd never spawns within 25 m of you, so a taunt on an empty street is
-  a raspberry into the wind until somebody walks in. The ring shows, which is
-  the only reason it does not read as a broken button.
+  a raspberry into the wind until somebody walks in. The sound is what confirms
+  the button; the faces are what confirm it landed. There was a red or green
+  ring on the ground as well, and it was removed: fourteen marchers at a
+  Versammlung sustain about three of them a second, each one a transparent
+  disc sweeping eleven to fifteen metres in under half a second, and a
+  transparent surface writes no motion vectors for TAA to reproject. The whole
+  street flickered. A visual that only misbehaves in a crowd is a visual for an
+  empty street.
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only —
