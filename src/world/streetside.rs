@@ -428,7 +428,12 @@ impl Ribbons {
 const TILE: f32 = super::ASPHALT_TILE;
 
 /// Metres of pavement one repeat of the slabs covers.
-const FOOTWAY_TILE: f32 = 1.45;
+///
+/// The pavement wears `set::PAVEMENT`, which is a mosaic of about forty stones
+/// across a square repeat. At 2.5 m a stone is 6 cm, which is what a German
+/// Gehsteig is actually laid in; at the 1.45 m this used to be it was 3.5 cm
+/// and the pavement read as sandpaper.
+const FOOTWAY_TILE: f32 = 2.5;
 
 /// A flat quad `width` by `length`, lying in XZ, with UVs that tile a paving
 /// of size `tile` at its true size.

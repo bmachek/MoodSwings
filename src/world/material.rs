@@ -40,12 +40,26 @@ const VARIANT: &str = "2K-JPG";
 /// surface that wants it then asks the library by name.
 pub mod set {
     pub const ROAD: &str = "Asphalt031";
-    pub const PAVEMENT: &str = "PavingStones138";
+    /// The fine mosaic a German pavement is laid in — Mosaikpflaster, thumb-
+    /// sized stones in fanned courses. Also what a square or a shopping street
+    /// is surfaced with, which is why `Surface::Slabs` takes it too.
+    pub const PAVEMENT: &str = "PavingStones151";
     pub const ROOF: &str = "Gravel023";
     pub const GRASS: &str = "Grass005";
-    /// Kopfsteinpflaster: granite setts laid in fans, which is what a fifth of
-    /// Landshut's carriageways are tagged as and what the Altstadt is made of.
-    pub const SETT: &str = "PavingStones151";
+    /// Kopfsteinpflaster: hand-sized granite setts with moss in the joints,
+    /// which is what a fifth of Landshut's carriageways are tagged as and what
+    /// the Altstadt is made of.
+    ///
+    /// These two used to be the other way round, and it is worth saying why it
+    /// was wrong rather than just which is which now. 151 is a *mosaic* — some
+    /// forty stones across one repeat — and it was carrying the Altstadt
+    /// carriageway at a 1.35 m tile, which put a sett at 3.2 cm. Real
+    /// Grosspflaster is 15 to 18. The Altstadt read as snakeskin, and the
+    /// chunky scan that would have read as Kopfsteinpflaster was meanwhile on
+    /// the pavement, stretched better than two to one because it is the one
+    /// portrait scan in the library and every caller scaled it with a
+    /// `Vec2::splat`.
+    pub const SETT: &str = "PavingStones138";
 
     // Walls. Six of them, because one set dressed four ways still leaves every
     // brick building in the city cut from the same photograph — and a facade

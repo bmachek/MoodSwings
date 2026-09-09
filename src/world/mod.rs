@@ -925,11 +925,24 @@ fn boundary_wall(
 
 /// Metres of street one repeat of each paving covers.
 ///
-/// A sett is about fifteen centimetres and there are seven across the texture,
-/// so a metre and a bit is the true size of it. Slabs and grit are looser: what
-/// they have to avoid is reading as a pattern, and the repeat is what does that.
-const SETT_TILE: f32 = 1.35;
-const SLAB_TILE: f32 = 1.6;
+/// Derived from the scan rather than guessed, because guessing is what put the
+/// Altstadt in 3 cm setts. Count the stones across one repeat, multiply by what
+/// that stone is in life, and that is the number:
+///
+/// * `SETT_TILE` — `PavingStones138` runs about 7.5 stones across and 14.8 down
+///   a 1024x2048 scan. At 16 cm Grosspflaster that is 1.20 m by 2.37 m. It is
+///   the one portrait scan in the library, so it is also the one tile that
+///   cannot be square: scaled isotropically its stones come out twice as long
+///   as they are wide.
+/// * `SLAB_TILE` — `PavingStones151` runs about 42 stones and 2.5 fan arcs
+///   across a square repeat. At 3.4 m a stone is 8 cm and a Segmentbogen chord
+///   is 1.36 m, which is a real laying pattern; at the old 1.6 m it was 3.8 cm
+///   and half an arc, which is not.
+///
+/// Grit is looser: what it has to avoid is reading as a pattern, and the repeat
+/// is what does that.
+const SETT_TILE: Vec2 = Vec2::new(1.20, 2.37);
+const SLAB_TILE: Vec2 = Vec2::splat(3.4);
 pub(crate) const GRIT_TILE: f32 = 2.1;
 
 /// The carriageway material for one kind of surface, and how much asphalt
@@ -961,23 +974,23 @@ fn carriageway(
         // everything else in this match put together.
         Surface::Asphalt => (
             material::set::ROAD,
-            ASPHALT_TILE,
+            Vec2::splat(ASPHALT_TILE),
             Color::srgb(0.50, 0.50, 0.52),
             1.0,
             0.0,
             0.0,
         ),
-        // A sett is a rounded granite block with a three-centimetre sand joint
-        // around it, and it is the surface a player stands closest to in the
-        // whole Altstadt. This is the case parallax was worth loading the
-        // height maps for.
+        // A sett is a rounded granite block with a sand joint around it, and
+        // it is the surface a player stands closest to in the whole Altstadt.
+        // This is the case parallax was worth loading the height maps for, and
+        // at 16 cm the joint is deep enough to be worth marching a ray into.
         Surface::Sett => (
             material::set::SETT,
             SETT_TILE,
             Color::srgb(0.62, 0.61, 0.60),
             0.0,
             1.0,
-            0.030,
+            0.035,
         ),
         Surface::Slabs => (
             material::set::PAVEMENT,
@@ -989,7 +1002,7 @@ fn carriageway(
         ),
         Surface::Gravel => (
             material::set::ROOF,
-            GRIT_TILE,
+            Vec2::splat(GRIT_TILE),
             Color::srgb(0.55, 0.51, 0.45),
             0.0,
             0.45,
@@ -998,18 +1011,27 @@ fn carriageway(
     };
 
     let mut base = StandardMaterial {
-        uv_transform: Affine2::from_scale(Vec2::splat(ASPHALT_TILE / tile)),
+        uv_transform: Affine2::from_scale(Vec2::new(ASPHALT_TILE / tile.x, ASPHALT_TILE / tile.y)),
         ..default()
     };
     match library.get(set) {
         Some(scanned) => {
             scanned.apply(&mut base);
             if joint > 0.0 {
-                scanned.deepen(&mut base, joint, tile);
+                // The narrow axis: parallax depth is a fraction of a repeat and
+                // an oblong tile has two of them, so take the one that makes
+                // the ray shorter rather than the one that flatters it.
+                scanned.deepen(&mut base, joint, tile.x.min(tile.y));
             }
             base.base_color = tint;
         }
         None => {
+            // Every painted fallback is square, so it takes a square tile —
+            // the oblong one belongs to the scan it was measured off. The
+            // narrow axis, because that is the one the stone size came from:
+            // `texture::SETTS` cobbles across 1.20 m is 17 cm, which is the
+            // same Grosspflaster the scanned path now lays.
+            base.uv_transform = Affine2::from_scale(Vec2::splat(ASPHALT_TILE / tile.x.min(tile.y)));
             let (color, relief) = match surface {
                 Surface::Sett => (texture::cobbles(), texture::cobbles_normal()),
                 Surface::Gravel => (texture::roof(), texture::roof_normal()),
