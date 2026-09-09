@@ -995,6 +995,125 @@ impl Plugin for VegetationPlugin {
     }
 }
 
+// -------------------------------------------------------- the commons ----
+
+/// How far apart the planting grid is over a mapped piece of open ground.
+const COMMONS_SPACING: f32 = 11.0;
+/// And how far in from its edge nothing is planted, so a wood does not spill
+/// over the path round it.
+const COMMONS_MARGIN: f32 = 3.0;
+
+/// Plants a piece of ground the map says is open.
+///
+/// This is what fills what was, until the extract grew, simply bare: eighty-five
+/// parks, woods, pitches, allotments and a cemetery, each a real polygon rather
+/// than a rectangle. Clipped to the chunk here rather than at load, because a
+/// park is a ring and half a ring is not a smaller park.
+pub fn spawn_ground(
+    commands: &mut Commands,
+    kit: &FoliageKit,
+    rng: &mut ChaCha8Rng,
+    ground: &super::citygen::OpenGround,
+    chunk: IVec2,
+    range: f32,
+) {
+    use super::atlas::GroundKind;
+
+    // How thickly, and out of which species. A pitch and a car park are marked
+    // out here so that nothing is *built* on them — see `streetside::lots` —
+    // and get no trees at all; a lawn gets the odd specimen; a wood is a wood.
+    let (density, palette) = match ground.kind {
+        GroundKind::Trees => (0.85, Species::in_parks()),
+        GroundKind::Park => (0.34, Species::in_parks()),
+        GroundKind::Cemetery => (0.30, Species::in_parks()),
+        GroundKind::Allotments => (0.22, Species::in_parks()),
+        GroundKind::Grass => (0.07, Species::in_parks()),
+        GroundKind::Field | GroundKind::Pitch | GroundKind::Playground | GroundKind::Parking => {
+            return;
+        }
+    };
+
+    let cell = super::streaming::chunk_center(chunk);
+    let half = super::streaming::CHUNK_SIZE * 0.5;
+    // The part of this polygon that is this chunk's business.
+    let low = ground.bounds.min.max(cell - Vec2::splat(half));
+    let high = ground.bounds.max.min(cell + Vec2::splat(half));
+    if low.x >= high.x || low.y >= high.y {
+        return;
+    }
+
+    // A jittered grid, like `spawn_park`: it cannot put two trees in the same
+    // place however the dice fall, and it finishes in a fixed number of steps.
+    // Anchored to the world rather than to the chunk, so a tree does not move
+    // when the chunk it happens to be in changes.
+    let first = (low / COMMONS_SPACING).ceil() * COMMONS_SPACING;
+    let mut at = first;
+    while at.y < high.y {
+        at.x = first.x;
+        while at.x < high.x {
+            let here = at;
+            at.x += COMMONS_SPACING;
+            if rng.random_range(0.0..1.0) > density {
+                continue;
+            }
+            let jitter = Vec2::new(
+                rng.random_range(-COMMONS_SPACING * 0.4..COMMONS_SPACING * 0.4),
+                rng.random_range(-COMMONS_SPACING * 0.4..COMMONS_SPACING * 0.4),
+            );
+            let point = here + jitter;
+            if !inside(&ground.points, point, COMMONS_MARGIN) {
+                continue;
+            }
+            let species = Species::pick(&palette, rng);
+            plant(
+                commands,
+                kit,
+                chunk,
+                point,
+                SIDEWALK_HEIGHT,
+                species,
+                rng,
+                range,
+            );
+        }
+        at.y += COMMONS_SPACING;
+    }
+}
+
+/// Is this point inside the ring, and at least `margin` in from its edge?
+///
+/// Ray casting for the inside test and a distance-to-segment sweep for the
+/// margin. Both are O(edges) and a ring here is a few dozen points, run a few
+/// hundred times per chunk — which is nothing next to spawning one tree.
+fn inside(ring: &[Vec2], at: Vec2, margin: f32) -> bool {
+    let mut within = false;
+    for i in 0..ring.len() {
+        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+        // A horizontal ray to +X. The half-open rule on y is what stops a
+        // vertex exactly on the ray being counted twice.
+        if (a.y > at.y) != (b.y > at.y) {
+            let cut = a.x + (at.y - a.y) / (b.y - a.y) * (b.x - a.x);
+            if cut > at.x {
+                within = !within;
+            }
+        }
+        if margin > 0.0 {
+            let span = b - a;
+            let length = span.length_squared();
+            let t = if length < 1e-6 {
+                0.0
+            } else {
+                ((at - a).dot(span) / length).clamp(0.0, 1.0)
+            };
+            if (a + span * t).distance(at) < margin {
+                return false;
+            }
+        }
+    }
+    within
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

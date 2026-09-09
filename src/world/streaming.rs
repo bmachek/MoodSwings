@@ -48,6 +48,12 @@ pub struct ChunkIndex {
     /// not, and because what goes up at a junction — signals — is placed once
     /// per junction rather than once per arm.
     junctions: HashMap<IVec2, Vec<NodeId>>,
+    /// Parks, woods, pitches and allotments, filed by *every* chunk their
+    /// outline reaches rather than by the one their middle is in. A park is a
+    /// hundred and fifty metres across and a chunk is two hundred and fifty, so
+    /// filing one by its middle leaves two thirds of it bare; the planting
+    /// clips itself to the chunk instead.
+    grounds: HashMap<IVec2, Vec<usize>>,
 }
 
 impl ChunkIndex {
@@ -75,8 +81,19 @@ impl ChunkIndex {
             junctions.entry(chunk_of(node.pos)).or_default().push(id);
         }
 
+        let mut grounds: HashMap<IVec2, Vec<usize>> = HashMap::default();
+        for (i, ground) in city.grounds.iter().enumerate() {
+            let (low, high) = (chunk_of(ground.bounds.min), chunk_of(ground.bounds.max));
+            for x in low.x..=high.x {
+                for y in low.y..=high.y {
+                    grounds.entry(IVec2::new(x, y)).or_default().push(i);
+                }
+            }
+        }
+
         Self {
             blocks,
+            grounds,
             streets,
             junctions,
         }
@@ -88,6 +105,10 @@ impl ChunkIndex {
 
     pub fn blocks_in(&self, chunk: IVec2) -> Option<&[usize]> {
         self.blocks.get(&chunk).map(|v| v.as_slice())
+    }
+
+    pub fn grounds_in(&self, chunk: IVec2) -> Option<&[usize]> {
+        self.grounds.get(&chunk).map(|v| v.as_slice())
     }
 
     pub fn streets_in(&self, chunk: IVec2) -> Option<&[EdgeId]> {
@@ -279,6 +300,23 @@ pub fn update_streaming(
                     &street.foliage,
                     &mut planting,
                     block,
+                    chunk,
+                    foliage_range,
+                );
+            }
+        }
+        if let Some(grounds) = index.grounds_in(chunk) {
+            let mut sowing = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::COMMONS,
+                (chunk.x, chunk.y),
+            );
+            for &i in grounds {
+                super::vegetation::spawn_ground(
+                    &mut commands,
+                    &street.foliage,
+                    &mut sowing,
+                    &city.grounds[i],
                     chunk,
                     foliage_range,
                 );

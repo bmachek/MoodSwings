@@ -1594,6 +1594,35 @@ pub fn lots(
     let roads = corridors(layout);
     let scale = style.lot_scale();
 
+    // Nor on the ground the map has marked out for something else. A pitch, a
+    // playground and a car park are flat open ground that a marcher would
+    // happily run a terrace across, and they are exactly the "empty" the town
+    // was said to be full of — empty because something is deliberately there.
+    // Parks and woods are left out of this: they are planted rather than
+    // built on, and their outlines are ragged enough that a bounding box round
+    // one would sterilise the streets beside it.
+    for ground in &layout.grounds {
+        use super::atlas::GroundKind;
+        if !matches!(
+            ground.kind,
+            GroundKind::Pitch | GroundKind::Playground | GroundKind::Parking | GroundKind::Cemetery
+        ) {
+            continue;
+        }
+        let size = ground.bounds.size();
+        if size.x < 1.0 || size.y < 1.0 {
+            continue;
+        }
+        file(
+            &mut taken,
+            Oblong {
+                centre: ground.bounds.center(),
+                axis: Vec2::X,
+                half: size * 0.5,
+            },
+        );
+    }
+
     // The river goes in first, as the thing nothing may be built on. It is
     // filed into the same grid the buildings are, so a footprint in the Isar
     // and a terrace in the Isar are rejected by the test that already exists
@@ -2733,6 +2762,7 @@ mod tests {
         );
 
         let layout = CityLayout {
+            grounds: Vec::new(),
             waters: Vec::new(),
             seed: 1,
             half_extent: 400.0,

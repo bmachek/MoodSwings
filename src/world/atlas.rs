@@ -236,6 +236,44 @@ pub struct Signposts {
 ///
 /// The blocks come out empty and that is not an oversight — see
 /// `frontage_lots`, which is what fills a real city instead.
+/// The ground the map says is not built on.
+///
+/// Kept whole rather than clipped: a park is a ring and half a ring is not a
+/// smaller park, it is an open curve that a point-in-polygon test reads as
+/// nonsense. Anything whose whole outline is outside the square is dropped and
+/// the rest is left as it is — the planting inside it is clipped to the chunk
+/// instead, which is where the clipping belongs.
+fn open_ground(atlas: &Atlas, half_extent: f32) -> Vec<super::citygen::OpenGround> {
+    let mut out = Vec::new();
+    for ground in &atlas.grounds {
+        let points: Vec<Vec2> = ground
+            .points
+            .iter()
+            .map(|&(x, z)| Vec2::new(x, z))
+            .collect();
+        if points.len() < 4 {
+            continue;
+        }
+        if !points
+            .iter()
+            .any(|at| at.x.abs() <= half_extent && at.y.abs() <= half_extent)
+        {
+            continue;
+        }
+        let (mut low, mut high) = (points[0], points[0]);
+        for at in &points {
+            low = low.min(*at);
+            high = high.max(*at);
+        }
+        out.push(super::citygen::OpenGround {
+            kind: ground.kind,
+            points,
+            bounds: Rect::new(low, high),
+        });
+    }
+    out
+}
+
 /// The town's water, clipped to the square the game builds.
 ///
 /// Clipped the way a street is — an arm that leaves and comes back is two
@@ -406,6 +444,7 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
             // could have been — it is a `waters` entry, below, and the reason
             // this said `None` with an apology attached for as long as it did.
             canal: None,
+            grounds: open_ground(atlas, half_extent),
             waters: waters(atlas, half_extent),
         },
         signs,

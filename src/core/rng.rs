@@ -133,6 +133,15 @@ pub mod stream {
     /// real building's palette from it would mean that a re-bake of the extract
     /// — one new house in OSM — reshuffled every invented street in the town.
     pub const ATLAS: u64 = 33;
+
+    /// The town's own open ground: what grows on the parks, the woods, the
+    /// cemetery and the allotments a real map marks out.
+    ///
+    /// Not `VEGETATION`, which plants the streets and the generator's own
+    /// parks: these are drawn per chunk from a baked polygon list, and sharing
+    /// the key would mean that a re-bake of the extract moved every street
+    /// tree in the town.
+    pub const COMMONS: u64 = 34;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

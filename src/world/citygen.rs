@@ -315,6 +315,10 @@ pub struct CityLayout {
     pub graph: RoadGraph,
     /// The one street surrendered to water, if the grid had a spare.
     pub canal: Option<Canal>,
+    /// Ground a real town does not build on: its parks, its pitches, its
+    /// allotments, its cemetery. Empty for the generator, which decides all of
+    /// that from its own districts.
+    pub grounds: Vec<OpenGround>,
     /// Real water, read off a map: a river with arms, a mill race, a stream.
     ///
     /// Beside `canal` rather than instead of it, because the two are different
@@ -323,6 +327,18 @@ pub struct CityLayout {
     /// and axis-aligned, and the Isar is a braided river that goes where it
     /// goes. The generator keeps its canal; a town read off a map gets these.
     pub waters: Vec<Waterway>,
+}
+
+/// A piece of ground the map says is not built on.
+#[derive(Debug, Clone)]
+pub struct OpenGround {
+    pub kind: super::atlas::GroundKind,
+    /// The outline, anticlockwise or clockwise — the point-in-polygon test
+    /// this feeds does not care which.
+    pub points: Vec<Vec2>,
+    /// Its bounding box, so the chunk index can file it without walking the
+    /// ring again.
+    pub bounds: Rect,
 }
 
 /// One arm of a river, as a polyline with a width.
@@ -389,6 +405,7 @@ pub fn generate(seed: u64, half_extent: f32, style: CityStyle) -> CityLayout {
     zone_civics(seed, &mut blocks, style);
 
     CityLayout {
+        grounds: Vec::new(),
         waters: Vec::new(),
         seed,
         half_extent,
