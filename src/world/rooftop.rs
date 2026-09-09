@@ -398,12 +398,21 @@ impl RoofKit {
 ///
 /// `deck` is the world-space height the pieces stand on — the top of the
 /// capping slab, so nothing is buried in it and nothing floats above it.
+///
+/// `yaw` turns the whole plan onto the building's own frame. A plan is laid out
+/// in the footprint's axes, and for a building placed along a real street the
+/// footprint *is* the site frame — so a deck left unturned had its tanks and
+/// vent stacks marching along the map's north while the roof they stand on
+/// runs along its street, which puts half of them over the edge. Zero for a
+/// generated block, whose footprint is a rectangle on the map already.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     commands: &mut Commands,
     kit: &RoofKit,
     chunk: super::buildings::ChunkOf,
     center: Vec2,
     deck: f32,
+    yaw: f32,
     plan: &[Placement],
     lod_scale: f32,
 ) {
@@ -413,11 +422,13 @@ pub fn spawn(
     // back, which is more noticeable than the furniture itself.
     let fade = draw * 0.88;
 
+    let turn = Quat::from_rotation_y(yaw);
     for placement in plan {
+        let offset = turn * Vec3::new(placement.offset.x, 0.0, placement.offset.y);
         let position = Vec3::new(
-            center.x + placement.offset.x,
+            center.x + offset.x,
             deck + placement.size.y,
-            center.y + placement.offset.y,
+            center.y + offset.z,
         );
 
         let mut piece = commands.spawn((
@@ -425,7 +436,7 @@ pub fn spawn(
             Mesh3d(kit.mesh(placement.piece).clone()),
             MeshMaterial3d(kit.material(placement.tone).clone()),
             Transform::from_translation(position)
-                .with_rotation(Quat::from_rotation_y(placement.yaw))
+                .with_rotation(turn * Quat::from_rotation_y(placement.yaw))
                 .with_scale(placement.size),
             VisibilityRange {
                 start_margin: 0.0..0.0,

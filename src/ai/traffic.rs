@@ -179,7 +179,8 @@ fn maintain_population(
         let position = lane_point(start, end, edge.width, t);
         let class = VehicleClass::CIVILIAN[rng.0.random_range(0..VehicleClass::CIVILIAN.len())];
         let mut spec = class.spec();
-        (spec.body_color, spec.body_metallic) = crate::vehicle::paint::street_paint(&mut rng.0);
+        (spec.body_color, spec.body_metallic, spec.body_age) =
+            crate::vehicle::paint::street_paint(&mut rng.0);
 
         let transform = Transform::from_xyz(position.x, resting_height(&spec), position.y)
             .with_rotation(Quat::from_rotation_y(

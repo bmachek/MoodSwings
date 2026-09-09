@@ -31,6 +31,15 @@ use super::buildings::{ChunkOf, SIDEWALK_HEIGHT};
 use super::mayhem::Breakaway;
 use super::roadgraph::RoadEdge;
 
+/// What a car has to be doing, in metres per second, to take a hydrant off its
+/// footing.
+///
+/// Public because it is the benchmark: the hydrant is the sturdiest fixture on
+/// an ordinary street, so anything elsewhere in the world that claims to be
+/// harder to shift than street furniture is measured against this rather than
+/// against a number somebody typed twice.
+pub const HYDRANT_SHEARS_AT: f32 = 5.5;
+
 /// Metres between chances to place something on a kerb.
 const SPACING: f32 = 14.0;
 /// How many of those chances actually produce a prop.
@@ -103,7 +112,7 @@ impl Prop {
             })),
             // The hydrant is the whole reason shearing exists.
             Prop::Hydrant => Footing::Bolted(Some(Breakaway {
-                at: 5.5,
+                at: HYDRANT_SHEARS_AT,
                 mass: 55.0,
                 geyser: true,
             })),

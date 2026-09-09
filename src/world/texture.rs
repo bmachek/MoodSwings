@@ -96,7 +96,10 @@ pub const EXTRA: [(u8, [u8; 7]); 12] = [
     (0xC4, [0b01010, 0b00000, 0b01110, 0b10001, 0b11111, 0b10001, 0b10001]), // Ä
     (0xD6, [0b01010, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110]), // Ö
     (0xDC, [0b01010, 0b00000, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]), // Ü
-    (0xDF, [0b01110, 0b10001, 0b10001, 0b10110, 0b10001, 0b10001, 0b10110]), // ß
+    // The eszett's top-left corner is open and neither bowl closes onto the
+    // stem. Both bowls closed — which is what this was — is a B, and every
+    // second sign in the town read STRABE.
+    (0xDF, [0b01100, 0b10010, 0b10010, 0b10100, 0b10010, 0b10010, 0b10100]), // ß
     (b'.', [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100]),
     (b',', [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b11000]),
     (b'!', [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100]),
@@ -232,7 +235,7 @@ pub fn ridge(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
 
 // -------------------------------------------------------------- painting ----
 
-fn srgb_to_linear(byte: u8) -> f32 {
+pub fn srgb_to_linear(byte: u8) -> f32 {
     let c = byte as f32 / 255.0;
     if c <= 0.04045 {
         c / 12.92
@@ -241,7 +244,7 @@ fn srgb_to_linear(byte: u8) -> f32 {
     }
 }
 
-fn linear_to_srgb(c: f32) -> f32 {
+pub fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.003_130_8 {
         c * 12.92
     } else {
@@ -468,6 +471,274 @@ pub fn grass() -> Image {
     })
 }
 
+// -------------------------------------------------------------- fabric ----
+
+/// Threads across one repeat of the weave.
+const THREADS: f32 = 22.0;
+
+/// Woven cloth, as a height field: warp over weft, in a twill.
+///
+/// A plain over-under weave is a checkerboard and reads as one. A twill steps
+/// the crossing by one thread per row, which is what puts the diagonal in
+/// denim and gabardine and is most of why cloth looks like cloth rather than
+/// like graph paper.
+fn weave_height(u: f32, v: f32) -> f32 {
+    let (across, along) = (u * THREADS, v * THREADS);
+    let (i, j) = (across.floor(), along.floor());
+    let (fu, fv) = (across - i, along - j);
+    // Which thread is on top here. The `2 * j` is the twill's step.
+    let warp_over = (i as i32 + 2 * j as i32).rem_euclid(3) != 0;
+    // A thread is round, so its cross-section is a bump; the ridge runs along
+    // whichever of the two is on top.
+    let ridge = if warp_over {
+        1.0 - (fu * 2.0 - 1.0).abs()
+    } else {
+        1.0 - (fv * 2.0 - 1.0).abs()
+    };
+    // Real yarn is not perfectly even, and a weave that is comes out as moiré
+    // the moment it is minified.
+    let slub = (fbm(u, v, 40, 3, 307) - 0.5) * 0.22;
+    (0.30 + ridge * 0.62 + slub).clamp(0.0, 1.0)
+}
+
+/// The colour of that weave, kept near white so a garment's own colour is what
+/// survives: this multiplies thirty different shirts and trousers.
+pub fn fabric() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        // Shallow. What a weave contributes at three millimetres is shading in
+        // its valleys, not a pattern — anything stronger and every citizen is
+        // dressed in hessian.
+        let value = 0.84 + weave_height(u, v) * 0.22;
+        [byte(value), byte(value), byte(value * 0.995), 255]
+    })
+}
+
+pub fn fabric_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.045, weave_height)
+}
+
+// -------------------------------------------------------------- rubber ----
+
+/// A moulded rubber surface, as relief and nothing else.
+///
+/// Not tiled, and that is the constraint that shaped it: a flummi's head
+/// carries its face in the same UVs, and `StandardMaterial` has one transform
+/// for all of its textures — so a rubber grain that tiled would tile the face
+/// with it. This is authored at the size of a head instead, half a millimetre
+/// to the texel, which is about the size of the pitting a mould leaves.
+pub fn rubber_normal() -> Image {
+    normal_map(FACADE_SIZE, 0.030, |u, v| {
+        // The pitting, fine and even.
+        let pits = fbm(u, v, 150, 3, 401);
+        // And the scuffs a bouncing ball collects, which are broad and shallow
+        // and are the only thing here that is not uniform.
+        let scuffs = (fbm(u, v, 7, 3, 419) - 0.5) * 0.5;
+        (pits * 0.7 + 0.15 + scuffs * 0.3).clamp(0.0, 1.0)
+    })
+}
+
+// ---------------------------------------------------------------- bark ----
+
+/// Furrows around a trunk, as a height field.
+///
+/// A trunk's UVs run around it in `u` and up it in `v`, so a bark pattern is
+/// one that is *continuous* along v and broken across u — ridges that run up
+/// the tree and wander as they go. Which is a stretched noise, plus a second
+/// one to make the ridges themselves lumpy.
+fn bark_height(u: f32, v: f32) -> f32 {
+    // Stretched fifteen to one: the ridges run up the trunk, not around it.
+    let furrow = fbm(u * 8.0, v * 0.55, 8, 4, 211);
+    // And crack across, every so often, the way an old plane tree does.
+    let plates = fbm(u * 2.0, v * 3.5, 5, 3, 223);
+    (furrow * 0.72 + plates * 0.28).clamp(0.0, 1.0)
+}
+
+/// Bark: deep vertical furrows with the light left in the ridges.
+pub fn bark() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let height = bark_height(u, v);
+        // Dark in the furrow and pale on the ridge, which is the whole of what
+        // bark looks like from three metres away.
+        let value = 0.55 + height * 0.62;
+        // Plane bark is grey-green where it has flaked and brown where it has
+        // not, so the two ends of the range are not the same hue.
+        [
+            byte(value * 0.98),
+            byte(value * 0.94),
+            byte(value * (0.78 + height * 0.14)),
+            255,
+        ]
+    })
+}
+
+pub fn bark_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.085, bark_height)
+}
+
+// ------------------------------------------------------------ cobblestone ----
+
+/// Stones across one repeat of the sett texture.
+///
+/// With the tile a metre and a bit, this puts a sett at about fifteen
+/// centimetres, which is what the granite blocks in a Bavarian market square
+/// actually measure.
+const SETTS: f32 = 7.0;
+
+/// Resolution the setts are painted at.
+///
+/// Four times the other ground textures. A cobbled street is read from a metre
+/// away by somebody standing on it, and at 256 a sett is thirty-six pixels
+/// across — enough for the shape and not enough for the stone.
+const SETT_SIZE: u32 = 512;
+
+/// Where a point sits among the setts: how far into a stone it is, and which
+/// stone.
+///
+/// A jittered-lattice Voronoi, which is the shape cobbles genuinely have — a
+/// paviour lays whatever stone comes to hand into whatever gap is left, so the
+/// joints are irregular polygons and no two stones are the same size. The two
+/// nearest cell centres are what matters: the *difference* between those
+/// distances is zero exactly on a joint and grows into the middle of a stone,
+/// which is a mortar groove and a domed top in one expression.
+///
+/// Returns the groove depth (0 in the joint, 1 in the middle of a stone) and a
+/// number per stone, so the colour can vary from one to the next — a sett
+/// pavement is grey the way a crowd is one colour.
+fn sett_at(u: f32, v: f32) -> (f32, f32) {
+    let point = Vec2::new(u * SETTS, v * SETTS);
+    let cell = point.floor();
+
+    let (mut nearest, mut second) = (f32::MAX, f32::MAX);
+    let mut winner = Vec2::ZERO;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            // Wrapped, so the tile still tiles: a lattice that runs off the
+            // edge has to come back on the other side or there is a seam down
+            // every repeat.
+            let neighbour = cell + Vec2::new(dx as f32, dy as f32);
+            let wrapped = Vec2::new(neighbour.x.rem_euclid(SETTS), neighbour.y.rem_euclid(SETTS));
+            let jitter = Vec2::new(
+                hash01(wrapped.x as u32, wrapped.y as u32, 17),
+                hash01(wrapped.x as u32, wrapped.y as u32, 29),
+            );
+            // Not the full cell: a paviour lays courses, and centres that can
+            // reach the next cell's give slivers rather than stones.
+            let centre = neighbour + Vec2::splat(0.22) + jitter * 0.56;
+            let distance = centre.distance(point);
+            if distance < nearest {
+                second = nearest;
+                nearest = distance;
+                winner = wrapped;
+            } else if distance < second {
+                second = distance;
+            }
+        }
+    }
+
+    let groove = ((second - nearest) * 3.4).clamp(0.0, 1.0);
+    (groove, hash01(winner.x as u32, winner.y as u32, 43))
+}
+
+/// The height field the setts' colour and their relief are both built from.
+fn sett_height(u: f32, v: f32) -> f32 {
+    let (groove, stone) = sett_at(u, v);
+    // Domed rather than flat-topped: a sett is a rounded block, and centuries
+    // of cartwheels round it further. The square root is that dome.
+    let top = groove.sqrt();
+    // Each stone sits a little proud or a little sunk of its neighbours, which
+    // is most of what makes an old pavement look laid rather than printed.
+    let settled = (stone - 0.5) * 0.16;
+    // And a fine grain over all of it, so the granite is granite.
+    let grain = (fbm(u, v, 96, 3, 61) - 0.5) * 0.09;
+    (top * 0.84 + 0.08 + settled + grain).clamp(0.0, 1.0)
+}
+
+/// Kopfsteinpflaster: granite setts with mortar between them.
+pub fn cobbles() -> Image {
+    painted(SETT_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let (groove, stone) = sett_at(u, v);
+        // The joint is sand and grit, and it is darker than any stone.
+        let joint = 1.0 - groove.min(1.0);
+        let value =
+            0.86 - joint * 0.34 + (stone - 0.5) * 0.20 + (fbm(u, v, 96, 3, 61) - 0.5) * 0.10;
+        // Granite is faintly warm where it is worn and faintly cool where it
+        // is not, so the stones do not all read as the same block of concrete.
+        let warm = 0.03 * (stone - 0.5);
+        [
+            byte(value * (1.0 + warm)),
+            byte(value),
+            byte(value * (1.0 - warm * 0.6)),
+            255,
+        ]
+    })
+}
+
+/// And its relief, which is the half that matters: setts are read almost
+/// entirely by the shadow in the joints.
+pub fn cobbles_normal() -> Image {
+    normal_map(SETT_SIZE, 0.075, sett_height)
+}
+
+// --------------------------------------------------------------- foliage ----
+
+/// How much of a canopy is leaf and how much is gap.
+///
+/// Over about a half and a tree reads as a wire mesh; under four tenths and
+/// the silhouette closes back up into the ball the geometry actually is. The
+/// number is a threshold on a field that averages a half, so it runs backwards:
+/// higher cuts away more.
+const CANOPY_COVER: f32 = 0.435;
+
+/// Leaf mass, as a field: high in the middle of a clump, low in the gaps.
+fn canopy_height(u: f32, v: f32) -> f32 {
+    // Two scales, because a crown has both. The broad one is the clump — the
+    // handful of branches that carry a bough's worth of leaves — and the fine
+    // one is the leaves themselves.
+    let clump = fbm(u, v, 5, 3, 137);
+    let leaves = fbm(u, v, 26, 3, 149);
+    (clump * 0.62 + leaves * 0.38).clamp(0.0, 1.0)
+}
+
+/// The leaf mass on a crown, and the holes between it.
+///
+/// A tree is not a ball, and a canopy modelled as one is the single loudest
+/// thing in a street that says a computer drew it: the geometry underneath here
+/// really is four spheres merged, and no amount of shading fixes an outline that
+/// smooth. What fixes it is throwing away part of the surface. The alpha channel
+/// is a hard cut through the leaf-mass field, so the sphere's edge comes apart
+/// into clumps and the sky shows through the gaps — the silhouette stops being a
+/// circle without a single extra triangle.
+///
+/// The colour is kept close to white on purpose. It multiplies the species tint,
+/// which is where a lime is meant to differ from a plane, and a texture that
+/// carried its own green would flatten the four of them into one.
+pub fn foliage() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let mass = canopy_height(u, v);
+        // Leaves out at the edge of a clump are the ones in the light, and they
+        // are also the young ones: brighter, and yellower.
+        let edge = 1.0 - (mass - CANOPY_COVER).max(0.0) * 1.6;
+        // Kept under one. Above it the young leaves at the edge of every clump
+        // came out brighter than the sky behind them, and a canopy dusted with
+        // white reads as snow rather than as sunlight.
+        let value = 0.66 + edge * 0.30;
+        [
+            byte(value * 0.96),
+            byte(value * 1.02),
+            byte(value * 0.80),
+            // The cut. Softened by a texel or two of the fine field so a mip
+            // level down the chain still has an edge to average rather than a
+            // stack of hard-clipped ones.
+            byte(((mass - CANOPY_COVER) * 14.0).clamp(0.0, 1.0)),
+        ]
+    })
+}
+
+/// The same field as relief, so a clump that reads solid also reads round.
+pub fn foliage_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.055, canopy_height)
+}
+
 fn roof_height(u: f32, v: f32) -> f32 {
     (fbm(u, v, 56, 4, 71) * 0.8 + fbm(u, v, 4, 3, 83) * 0.2).clamp(0.0, 1.0)
 }
@@ -482,6 +753,124 @@ pub fn roof() -> Image {
 
 pub fn roof_normal() -> Image {
     normal_map(GROUND_SIZE, 0.018, roof_height)
+}
+
+/// Biberschwanz: the plain clay tile a Bavarian old town is roofed with.
+///
+/// The name is the shape — a beaver's tail, a rectangle with a rounded end —
+/// and the shape is the whole of why a Landshut roof reads as one from across
+/// the river. It is laid in double lap, every course offset half a tile from
+/// the one below, so what the eye sees is rows of scallops rather than a grid.
+///
+/// ## Which way up
+///
+/// `u` runs *up the slope*, so the courses stack along it, and `v` runs along
+/// the ridge. That is the opposite of how one would write it on paper, and it
+/// is deliberate: a roof leaf is a scaled cube, and a cube's top face maps `u`
+/// to its local X, which for a leaf is the direction of the fall. Written the
+/// natural way round, the courses lapped sideways and the roof read as
+/// clapboard — visible in `shots/m18-tiles.png` before this was fixed.
+///
+/// Height, not colour, is what carries it: the tint lives on the material, so
+/// a new roof and a mossy one share this one image.
+/// Where a point on a roof falls: which tile, and where inside it.
+///
+/// Split out because the albedo and the relief both need it and neither can be
+/// derived from the other — a tile that is a shade darker than its neighbour is
+/// not a tile that sits lower.
+struct Tile {
+    /// Which tile of the pattern, for hashing something per-tile.
+    index: f32,
+    course: f32,
+    /// Across the tile and up the course, both 0..1.
+    across: f32,
+    up: f32,
+}
+
+/// Courses up the slope and tiles along the ridge, per repeat of the image.
+/// The material tiles it further; this is only the pattern.
+const COURSES: f32 = 9.0;
+const TILES: f32 = 6.0;
+/// How much of a course's height the rounded tail takes up.
+const TAIL: f32 = 0.36;
+
+fn tile_at(u: f32, v: f32) -> Tile {
+    let course = (u * COURSES).floor();
+    // Every other course is set half a tile over — the bond that stops the
+    // joints lining up into gutters running down the roof.
+    let stagger = if (course as i32).rem_euclid(2) == 0 {
+        0.0
+    } else {
+        0.5
+    };
+    Tile {
+        index: (v * TILES + stagger).floor(),
+        course,
+        across: (v * TILES + stagger).fract(),
+        // Up the course: 0 at the tail, 1 where it goes under the course above.
+        up: (u * COURSES).fract(),
+    }
+}
+
+fn tile_height(u: f32, v: f32) -> f32 {
+    let tile = tile_at(u, v);
+    // A groove down each joint, and the lap line where this tile goes under
+    // the next course.
+    let joint = 1.0 - (((tile.across - 0.5) * 2.0).abs()).powi(8);
+    let lap = ((1.0 - tile.up) / 0.14).clamp(0.0, 1.0);
+    let face = (0.60 + joint * 0.20 + lap * 0.20).clamp(0.0, 1.0);
+
+    // The rounded end. Measured from the middle of the tile, which is where it
+    // hangs lowest; the corners of the tail sit a third of a course higher.
+    let off = ((tile.across - 0.5) * 2.0).abs().min(1.0);
+    let edge = TAIL * (1.0 - (1.0 - off * off).max(0.0).sqrt());
+    if tile.up < edge {
+        // Below the tail. This is *not* a hole — it is the tile of the course
+        // below, seen through the gap between two round ends, sitting in their
+        // shadow. Filling it with darkness put a black arrowhead between every
+        // pair of tiles, which is the one thing a tiled roof does not have.
+        let under = ((edge - tile.up) / TAIL).clamp(0.0, 1.0);
+        return (face - 0.34 * (1.0 - under).powi(2) - 0.08).clamp(0.0, 1.0);
+    }
+    face
+}
+
+/// Clay tiles, for the pitched roofs.
+pub fn tiles() -> Image {
+    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+        let tile = tile_at(u, v);
+        // One value per *tile*, not per texel. This is what a clay roof
+        // actually looks like from the far pavement: the courses are a
+        // texture, but what the eye reads is that every tile came out of the
+        // kiln a slightly different colour. Shading alone gave a flat sheet as
+        // soon as the courses mipped away.
+        let fired = fbm(
+            (tile.index + 0.5) / TILES,
+            (tile.course + 0.5) / COURSES,
+            7,
+            2,
+            0x7B1E,
+        ) - 0.5;
+
+        // Held under one, because a value that clips is a value with no
+        // pattern left in it — the first pass at this ran to 1.24 and the top
+        // quarter of every roof came out flat white.
+        let value = (0.44 + tile_height(u, v) * 0.54 + fired * 0.26).clamp(0.06, 1.0);
+        // Warmer where the tile is proud and cooler in the shadow of the lap,
+        // which is what fired clay does and what keeps a tinted grey from
+        // reading as plastic. The cooler tiles are also the paler ones.
+        let warm = 1.0 + fired * 0.10;
+        [
+            byte(value * 1.05 * warm),
+            byte(value * 0.96),
+            byte(value * 0.90 / warm),
+            255,
+        ]
+    })
+}
+
+pub fn tiles_normal() -> Image {
+    normal_map(GROUND_SIZE, 0.038, tile_height)
 }
 
 // --------------------------------------------------------------- facades ----
@@ -639,6 +1028,94 @@ pub struct FacadeMaps {
     pub surface: Image,
     /// Tangent-space relief: recessed panes, grooved floor lines.
     pub normal: Image,
+}
+
+/// How wide a stroke of paint is, as a fraction of the tag's own image.
+const STROKE: f32 = 0.052;
+/// And the black outline round it, which is what makes a tag read as a tag
+/// rather than as a coloured squiggle.
+const OUTLINE: f32 = 0.030;
+
+/// Distance from a point to a line segment, in image space.
+fn to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let run = b - a;
+    let along = (p - a).dot(run) / run.length_squared().max(1e-6);
+    a.lerp(b, along.clamp(0.0, 1.0)).distance(p)
+}
+
+/// A tag: one continuous scrawl, outlined, with the rest transparent.
+///
+/// Not letters. Every attempt to spell something at this texel count comes out
+/// as a smudge that reads as a mistake rather than as writing, and a tag that
+/// says a real word says it on every wall in the city. What a tag is *shaped*
+/// like — one unbroken run of a fat marker, doubling back on itself, outlined
+/// in black — is unmistakable at ten metres and takes six points and a distance
+/// function.
+///
+/// `variant` picks a different scrawl and a different colour, so a street does
+/// not carry the same signature twice.
+pub fn graffiti(variant: u32) -> Image {
+    const SIZE: u32 = 256;
+    painted(SIZE, TextureFormat::Rgba8UnormSrgb, move |u, v| {
+        graffiti_at(u, v, variant)
+    })
+}
+
+/// One texel of a tag, so a surface that is already painting itself — the site
+/// hoarding, which has stripes under its graffiti — can lay one on without a
+/// second quad to parent, scale and knock over alongside the first.
+pub fn graffiti_at(u: f32, v: f32, variant: u32) -> [u8; 4] {
+    // The chain, hashed from the variant and kept off the border so the stroke
+    // and its outline both fit inside the image.
+    let points: Vec<Vec2> = (0..7)
+        .map(|i| {
+            // Marching left to right *on average*, with enough slack in each
+            // step to double back on the last one. That doubling-back is the
+            // whole difference between a tag and a worm: a chain that only ever
+            // advances comes out as one fat horizontal stroke, which is exactly
+            // what the first version drew across every shutter in the city.
+            let along = i as f32 / 6.0;
+            Vec2::new(
+                0.12 + along * 0.76 + (hash01(i, variant, 0x51a9) - 0.5) * 0.40,
+                0.16 + hash01(i, variant, 0x7d13) * 0.68,
+            )
+            .clamp(Vec2::splat(0.11), Vec2::splat(0.89))
+        })
+        .collect();
+
+    // Fill and outline. The fills are the colours somebody actually buys.
+    let fill = match variant % 3 {
+        0 => [0.92f32, 0.28, 0.14],
+        1 => [0.20, 0.62, 0.88],
+        _ => [0.94, 0.86, 0.16],
+    };
+
+    let p = Vec2::new(u, v);
+    let mut near = f32::MAX;
+    for pair in points.windows(2) {
+        near = near.min(to_segment(p, pair[0], pair[1]));
+    }
+    {
+        // A spray line is not a clean edge: the width wanders and the paint
+        // fades out where the can was moving.
+        let ragged = (fbm(u, v, 9, 3, 0x2be1 ^ variant) - 0.5) * 0.018;
+        let ink = smoothstep01((STROKE + ragged - near) / 0.007);
+        let edge = smoothstep01((STROKE + OUTLINE + ragged - near) / 0.007);
+
+        // Black under the colour, so the outline shows wherever the fill does
+        // not reach.
+        let color = [
+            fill[0] * ink + 0.04 * (1.0 - ink),
+            fill[1] * ink + 0.04 * (1.0 - ink),
+            fill[2] * ink + 0.045 * (1.0 - ink),
+        ];
+        [
+            byte(color[0]),
+            byte(color[1]),
+            byte(color[2]),
+            byte(edge * 0.92),
+        ]
+    }
 }
 
 pub fn smoothstep01(t: f32) -> f32 {
@@ -1011,5 +1488,45 @@ mod tests {
         }
         // Lowercase folds to the capitals the font actually has.
         assert_eq!(encode("boing"), encode("BOING"));
+    }
+
+    /// A tiled roof is rows of scallops, not a flat sheet with holes in it.
+    #[test]
+    fn clay_tiles_are_laid_in_courses() {
+        let mut darkest = 1.0f32;
+        let mut lightest = 0.0f32;
+        for y in 0..128 {
+            for x in 0..128 {
+                let h = tile_height(x as f32 / 128.0, y as f32 / 128.0);
+                assert!((0.0..=1.0).contains(&h));
+                darkest = darkest.min(h);
+                lightest = lightest.max(h);
+            }
+        }
+        // There is relief, and none of it is a hole. The failure this pins is
+        // the first version, whose shadow under a tail was a flat 0.18 wedge:
+        // that reads as a black arrowhead between every pair of tiles.
+        assert!(lightest - darkest > 0.25, "the roof is flat");
+        assert!(darkest > 0.25, "there are holes in the roof: {darkest:.3}");
+
+        // Nothing clips. A texel pinned at white or black is a texel with
+        // no pattern left in it, and a roof of them is a flat sheet however
+        // good the height field underneath is.
+        for y in 0..64 {
+            for x in 0..64 {
+                let value = 0.44 + tile_height(x as f32 / 64.0, y as f32 / 64.0) * 0.54;
+                assert!(value < 1.0, "the roof burns out: {value:.3}");
+            }
+        }
+
+        // The courses stack up the slope, which is `u` — not across it. Two
+        // points a course apart in `u` at the same `v` are at different points
+        // of the pattern, because the bond offsets every other course.
+        let one = tile_height(0.5 / 9.0, 0.5 / 6.0);
+        let two = tile_height(1.5 / 9.0, 0.5 / 6.0);
+        assert!(
+            (one - two).abs() > 0.05,
+            "the courses do not run up the slope: {one:.3} vs {two:.3}"
+        );
     }
 }

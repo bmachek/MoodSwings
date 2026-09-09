@@ -13,14 +13,14 @@
 //! Nothing in here writes to the simulation. If a system in this file were
 //! deleted the game would play identically, in silence.
 
-use bevy::audio::{AudioSinkPlayback, SpatialAudioSink, Volume};
+use bevy::audio::{AudioSinkPlayback, SpatialAudioSink};
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use rand::RngExt;
 
 use super::bank::SoundBank;
 use super::synth::SynthSound;
-use super::{AudioRng, close_once, effect_gain, spatial_once};
+use super::{AudioRng, Level, close_once, effect_gain, spatial_once};
 use crate::ai::animal::{Cat, Dog};
 use crate::bounce::launch::KnockedDown;
 use crate::core::config::GameConfig;
@@ -107,12 +107,13 @@ pub mod gain {
 /// fewer things audible at once, so the band came in hard and the curve got
 /// a third power. An engine is now a *local* fact; the city at large is the
 /// ambience beds' job, which is what they are for.
+/// Inside this, the mixer's own attenuation is the whole story.
+const ENGINE_CLEAR: f32 = 14.0;
+/// Beyond this a running engine is scenery, not sound.
+pub const ENGINE_GONE: f32 = 38.0;
+
 pub fn hush(distance: f32) -> f32 {
-    /// Inside this, the mixer's own attenuation is the whole story.
-    const CLEAR: f32 = 14.0;
-    /// Beyond this a running engine is scenery, not sound.
-    const GONE: f32 = 38.0;
-    let fade = ((GONE - distance) / (GONE - CLEAR)).clamp(0.0, 1.0);
+    let fade = ((ENGINE_GONE - distance) / (ENGINE_GONE - ENGINE_CLEAR)).clamp(0.0, 1.0);
     fade * fade * fade
 }
 
@@ -160,10 +161,15 @@ enum Ambience {
 /// a filling station's canopy, birdsong over a park. Spawned per block by
 /// `world::buildings::spawn_block` with `ChunkOf`, so a place's sound streams
 /// in and out with its geometry.
+///
+/// It carries the *handle* rather than an `AudioPlayer`, and that is the whole
+/// point of it — see [`tend_emitters`].
 #[derive(Component)]
 pub struct AmbienceEmitter {
     /// This emitter's slot in the mix, against the `gain` table's scale.
     pub gain: f32,
+    /// What this place sounds like.
+    pub sound: Handle<SynthSound>,
 }
 
 /// How many zone emitters may be audible at once. A street corner with a
@@ -171,19 +177,45 @@ pub struct AmbienceEmitter {
 /// loops — the same reasoning as the voice choir, at the scale of places.
 const EMITTER_CHOIR: usize = 4;
 
-/// Keeps the nearest few places audible and the rest muted.
+/// How many places keep their sink after dropping out of the choir.
 ///
-/// Same two-pass shape as `mood::voice::speak_up`: rank by distance from the
-/// listener, then touch every sink once. Distance is measured from the
-/// camera, where the `SpatialListener` actually sits.
+/// Pure hysteresis. Ranking by distance every frame puts the fourth and fifth
+/// nearest emitters either side of the line as the player walks, and without
+/// slack that boundary is a sink created and destroyed several times a second.
+const CHOIR_SLACK: usize = 2;
+
+/// Gives the nearest few places a voice and takes it away from the rest.
+///
+/// This used to mute rather than despawn, and muting is not enough — which is
+/// the single worst thing that has been wrong with the audio in this game.
+/// Rodio mixes every source it has been handed, every sample, whatever its
+/// volume: resample it from 44.1 to the device rate, spread it from mono to
+/// stereo, scale it, pan it. A muted source costs exactly what an audible one
+/// costs. Landshut streams in about twelve hundred blocks, every one of them
+/// spawned an emitter, and every emitter handed rodio a source — so the mixer
+/// was summing thirteen hundred loops to play four of them, on one thread,
+/// inside an audio callback with a few milliseconds to answer in. It could not,
+/// and what a missed callback sounds like is a stutter.
+///
+/// So the emitter entity is now a *place* — a position, a gain and a handle —
+/// and the sink is a component this system adds to the nearest few and takes
+/// off everything else. Ten sources instead of thirteen hundred.
+///
+/// Removal waits for the sink to be muted first. A rodio player stops when it
+/// is dropped, and dropping one mid-waveform is a click; one frame of silence
+/// costs nothing and guarantees there is no waveform left to cut.
+///
+/// Distance is measured from the camera, where the `SpatialListener` sits.
 fn tend_emitters(
+    mut commands: Commands,
     config: Res<GameConfig>,
     listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
     mut emitters: Query<(
         Entity,
         &GlobalTransform,
         &AmbienceEmitter,
-        &mut SpatialAudioSink,
+        Option<&mut Level>,
+        Option<&mut SpatialAudioSink>,
     )>,
 ) {
     let Ok(listener) = listeners.single() else {
@@ -197,24 +229,60 @@ fn tend_emitters(
         .map(|(entity, at, ..)| (at.translation().distance(ears), entity))
         .collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.truncate(EMITTER_CHOIR);
-    let audible: Vec<Entity> = near.into_iter().map(|(_, entity)| entity).collect();
+    // Two rings: the ones that should be sounding, and the wider ones that may
+    // keep a sink they already have.
+    let audible: Vec<Entity> = near
+        .iter()
+        .take(EMITTER_CHOIR)
+        .map(|(_, entity)| *entity)
+        .collect();
+    let spared: Vec<Entity> = near
+        .iter()
+        .take(EMITTER_CHOIR + CHOIR_SLACK)
+        .map(|(_, entity)| *entity)
+        .collect();
 
-    for (entity, at, emitter, mut sink) in &mut emitters {
-        let level = if audible.contains(&entity) {
-            base * emitter.gain * linger(at.translation().distance(ears))
-        } else {
-            0.0
-        };
-        sink.set_volume(Volume::Linear(level));
-        // A muted sink remembers its volume, so unmuting lands on the level
-        // just set rather than on last week's.
-        if level > 0.001 {
-            if sink.is_muted() {
-                sink.unmute();
+    for (entity, at, emitter, wants, sink) in &mut emitters {
+        let chosen = audible.contains(&entity);
+        match sink {
+            None if chosen => {
+                commands.entity(entity).insert((
+                    AudioPlayer(emitter.sound.clone()),
+                    // Muted until the branch below ranks it, so the first frame
+                    // cannot blare — the vehicle voices' trick.
+                    PlaybackSettings::LOOP.with_spatial(true).muted(),
+                    // Written here and read by the limiter; nothing sets a
+                    // sink's own volume any more.
+                    Level(0.0),
+                ));
             }
-        } else if !sink.is_muted() {
-            sink.mute();
+            None => {}
+            Some(mut sink) => {
+                let level = if chosen {
+                    base * emitter.gain * linger(at.translation().distance(ears))
+                } else {
+                    0.0
+                };
+                if let Some(mut wants) = wants {
+                    wants.0 = level;
+                }
+                // A muted sink remembers its volume, so unmuting lands on the
+                // level just set rather than on last week's.
+                if level > 0.001 {
+                    if sink.is_muted() {
+                        sink.unmute();
+                    }
+                } else if !sink.is_muted() {
+                    sink.mute();
+                } else if !spared.contains(&entity) {
+                    commands.entity(entity).remove::<(
+                        AudioPlayer<SynthSound>,
+                        PlaybackSettings,
+                        SpatialAudioSink,
+                        Level,
+                    )>();
+                }
+            }
         }
     }
 }
@@ -439,7 +507,7 @@ fn voice_geysers(
     config: Res<GameConfig>,
     bank: Res<SoundBank>,
     fresh: Query<Entity, (With<Geyser>, Without<SpatialAudioSink>)>,
-    mut running: Query<(&Geyser, &mut SpatialAudioSink)>,
+    mut running: Query<(&Geyser, &mut Level, &mut SpatialAudioSink)>,
 ) {
     for geyser in &fresh {
         commands.entity(geyser).insert((
@@ -447,12 +515,12 @@ fn voice_geysers(
             // Muted for the same reason the vehicle voices start muted: the
             // first frame must not blare before the level below has run once.
             PlaybackSettings::LOOP.with_spatial(true).muted(),
+            Level(0.0),
         ));
     }
-    for (geyser, mut sink) in &mut running {
-        let level = effect_gain(&config, gain::SPRAY) * pressure(geyser.life.fraction());
-        sink.set_volume(Volume::Linear(level));
-        if level > 0.001 && sink.is_muted() {
+    for (geyser, mut level, mut sink) in &mut running {
+        level.0 = effect_gain(&config, gain::SPRAY) * pressure(geyser.life.fraction());
+        if level.0 > 0.001 && sink.is_muted() {
             sink.unmute();
         }
     }
@@ -571,31 +639,67 @@ pub fn engine_pitch(speed_kph: f32, throttle: f32) -> f32 {
     0.62 + through * 0.92 + throttle.max(0.0) * 0.14
 }
 
-/// Adds a loop set to every vehicle that should be making noise, and takes them
-/// away again when it stops.
+/// Adds a loop set to the few vehicles that should be heard, and takes them
+/// away again when they should not.
 ///
-/// A car qualifies if something is driving it: the player or traffic, both of
-/// which are exempt from distance culling. Several hundred cars are parked
-/// around the city and none of them has its engine running.
+/// A car qualifies if something is driving it — the player or traffic, both of
+/// which are exempt from distance culling; several hundred cars are parked
+/// around the city and none of them has its engine running — *and* if it is one
+/// of the nearest [`ENGINE_CHOIR`] of those.
+///
+/// That second half used to be `update_vehicle_voices`' business alone, which
+/// meant it decided which cars were *audible* while every driven car in the
+/// district kept a live source. Forty cars, eighty rodio sources, three of them
+/// above silence: see [`tend_emitters`] for what that costs and why muting is
+/// not enough. The choir now decides what exists, not merely what is heard.
+///
+/// Despawn waits for the sink to be muted, so there is never a waveform to cut.
 fn manage_vehicle_voices(
     mut commands: Commands,
     bank: Res<SoundBank>,
-    driven: Query<Entity, (With<Vehicle>, Or<(With<DrivenBy>, With<AlwaysSimulated>)>)>,
-    voices: Query<(Entity, &Voice)>,
+    listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
+    driven: Query<
+        (Entity, &Transform),
+        (With<Vehicle>, Or<(With<DrivenBy>, With<AlwaysSimulated>)>),
+    >,
+    voices: Query<(Entity, &Voice, Option<&SpatialAudioSink>)>,
 ) {
-    let running: HashSet<Entity> = driven.iter().collect();
+    let ears = listeners
+        .single()
+        .map(|listener| listener.translation())
+        .unwrap_or_default();
+
+    // Only cars near enough to be heard at all are candidates: a car holding a
+    // choir slot from two streets away is a slot spent on silence.
+    let mut near: Vec<(f32, Entity)> = driven
+        .iter()
+        .map(|(entity, at)| (at.translation.distance(ears), entity))
+        .filter(|(distance, _)| *distance < ENGINE_GONE)
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let running: HashSet<Entity> = near
+        .iter()
+        .take(ENGINE_CHOIR)
+        .map(|(_, entity)| *entity)
+        .collect();
+    let spared: HashSet<Entity> = near
+        .iter()
+        .take(ENGINE_CHOIR + CHOIR_SLACK)
+        .map(|(_, entity)| *entity)
+        .collect();
 
     let mut voiced: HashSet<Entity> = HashSet::default();
-    for (entity, voice) in &voices {
-        if running.contains(&voice.owner) {
+    for (entity, voice, sink) in &voices {
+        let quiet = sink.is_none_or(|sink| sink.is_muted());
+        if spared.contains(&voice.owner) || !quiet {
             voiced.insert(voice.owner);
         } else {
             commands.entity(entity).despawn();
         }
     }
 
-    for vehicle in &driven {
-        if voiced.contains(&vehicle) {
+    for (vehicle, _) in &driven {
+        if voiced.contains(&vehicle) || !running.contains(&vehicle) {
             continue;
         }
         // Started muted rather than silent-by-volume so the first frame cannot
@@ -613,6 +717,7 @@ fn manage_vehicle_voices(
                 AudioPlayer(bank.engine.clone()),
                 looping,
                 place,
+                Level(0.0),
             ));
             car.spawn((
                 Voice {
@@ -622,6 +727,7 @@ fn manage_vehicle_voices(
                 AudioPlayer(bank.screech.clone()),
                 looping,
                 place,
+                Level(0.0),
             ));
         });
     }
@@ -640,8 +746,8 @@ const ENGINE_CHOIR: usize = 3;
 fn update_vehicle_voices(
     config: Res<GameConfig>,
     listeners: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
-    vehicles: Query<(Entity, &VehicleState, &VehicleInput, &Transform)>,
-    mut voices: Query<(&Voice, &mut SpatialAudioSink)>,
+    vehicles: Query<(&VehicleState, &VehicleInput, &Transform)>,
+    mut voices: Query<(&Voice, &mut Level, &mut SpatialAudioSink)>,
 ) {
     // Measured from the camera, because that is where the `SpatialListener`
     // sits — this used to measure from the player, and in the free camera the
@@ -651,26 +757,14 @@ fn update_vehicle_voices(
         .map(|listener| listener.translation())
         .unwrap_or_default();
 
-    // Two passes, the same shape as `tend_emitters`: rank, then touch every
-    // sink once. Both of a car's voices ride on one decision, so an engine
-    // and its tyres never disagree about whether that car is being heard.
-    let mut near: Vec<(f32, Entity)> = vehicles
-        .iter()
-        .map(|(entity, _, _, at)| (at.translation.distance(ears), entity))
-        .collect();
-    near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    near.truncate(ENGINE_CHOIR);
-    let audible: HashSet<Entity> = near.into_iter().map(|(_, entity)| entity).collect();
-
-    for (voice, mut sink) in &mut voices {
-        let Ok((_, state, input, at)) = vehicles.get(voice.owner) else {
+    // No ranking here any more. A voice exists only if `manage_vehicle_voices`
+    // put it there, so the set of sinks *is* the choir and this system's job is
+    // the modulation alone — engine pitch, tyre squeal, and the distance fader.
+    for (voice, mut wants, mut sink) in &mut voices {
+        let Ok((state, input, at)) = vehicles.get(voice.owner) else {
             continue;
         };
-        let heard = if audible.contains(&voice.owner) {
-            hush(at.translation.distance(ears))
-        } else {
-            0.0
-        };
+        let heard = hush(at.translation.distance(ears));
         let speed_kph = state.speed_kph();
 
         let level = match voice.kind {
@@ -695,7 +789,7 @@ fn update_vehicle_voices(
         // A muted sink still remembers its volume, so unmuting lands on the
         // right level rather than on whatever it was before.
         let level = level * heard;
-        sink.set_volume(Volume::Linear(level));
+        wants.0 = level;
         if level > 0.001 {
             if sink.is_muted() {
                 sink.unmute();
@@ -728,6 +822,7 @@ fn start_ambience(
             // Muted until the first mix pass, so no bed blares at full
             // synthesis level for a frame before the mood is read.
             PlaybackSettings::LOOP.muted(),
+            Level(0.0),
         ));
     }
 }
@@ -752,17 +847,17 @@ pub fn ambience_mix(mood: f32) -> (f32, f32, f32) {
 fn update_ambience(
     config: Res<GameConfig>,
     city: Res<CityMood>,
-    mut beds: Query<(&Ambience, &mut bevy::audio::AudioSink)>,
+    mut beds: Query<(&Ambience, &mut Level, &mut bevy::audio::AudioSink)>,
 ) {
     let (traffic, birds, uproar) = ambience_mix(city.average);
     let base = config.audio.master * config.audio.ambience;
-    for (bed, mut sink) in &mut beds {
+    for (bed, mut wants, mut sink) in &mut beds {
         let level = match bed {
             Ambience::Traffic => traffic * gain::TRAFFIC_BED,
             Ambience::Birdsong => birds * gain::BIRDS_BED,
             Ambience::Uproar => uproar * gain::UPROAR_BED,
         };
-        sink.set_volume(Volume::Linear(base * level));
+        wants.0 = base * level;
         // A muted sink remembers its volume, so unmuting lands on the level
         // just set rather than on last week's.
         if base * level > 0.001 {

@@ -53,7 +53,15 @@ use super::quality::{Upscaling, Volumetrics};
 /// Small enough to be almost invisible looking at it, which is the point: it is
 /// there so the shafts have something to be shafts *in*. Everything below adds
 /// to it.
-const DENSITY_CLEAR: f32 = 0.0020;
+///
+/// It was almost twice this, and "almost invisible" was not true of it. Bevy
+/// attenuates by `exp(-distance × density × 0.6)`, so over the volume's own
+/// reach it was taking a quarter of the contrast out of everything past two
+/// hundred metres — on a clear day, where the real atmosphere over that
+/// distance takes about a fiftieth. A town four streets across came out with a
+/// grey band across the middle of it and no depth cue left to spend on the
+/// genuinely distant.
+const DENSITY_CLEAR: f32 = 0.0011;
 /// What a solid overcast adds. Closes a long avenue down without closing the
 /// street you are standing in.
 const DENSITY_COVER: f32 = 0.0055;

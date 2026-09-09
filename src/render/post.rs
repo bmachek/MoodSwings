@@ -278,12 +278,26 @@ pub fn temperature(hours: f32, cover: f32) -> f32 {
 /// single most common thing that makes a game look like a game.
 pub fn saturation(hours: f32, cover: f32) -> f32 {
     let night = 1.0 - daylight(hours);
-    (1.06 - 0.20 * cover.clamp(0.0, 1.0) - 0.20 * night).clamp(0.55, 1.15)
+    (1.08 - 0.20 * cover.clamp(0.0, 1.0) - 0.20 * night).clamp(0.55, 1.15)
 }
+
+/// How much the grade steepens a clear, sunlit frame.
+///
+/// The opposite number to `flat` below, and it exists for the same reason: a
+/// hard sun is a high-contrast light, and a renderer that is scrupulous about
+/// the *quantity* of light still hands back a picture sitting inside a stop and
+/// a half unless somebody says so. Applied only in proportion to the direct
+/// beam, so overcast and night are untouched — under cloud the flattening below
+/// is the correct answer and this one would be arguing with it.
+const SUN_CONTRAST: f32 = 0.13;
 
 fn grade(hours: f32, cover: f32) -> ColorGrading {
     let day = daylight(hours);
     let night = 1.0 - day;
+    // Sun on the ground, as opposed to merely daytime: the steepening below is
+    // about the hard shadow a clear sun casts, and there is not one under an
+    // overcast.
+    let sun = day * (1.0 - cover.clamp(0.0, 1.0));
     // Cloud flattens *sunlight*: it turns one hard source into a soft one, and
     // the shadows go with it. After dark there is no such source to flatten —
     // the contrast in a night street comes from the lamps, and cloud does
@@ -306,11 +320,17 @@ fn grade(hours: f32, cover: f32) -> ColorGrading {
         // hole in the frame.
         shadows: ColorGradingSection {
             lift: 0.006 * night,
-            contrast: 1.0 - 0.10 * flat,
+            // *Gentler* at the bottom than in the middle, and that is the
+            // opposite of the first attempt. Bevy applies contrast per channel
+            // about a pivot, so steepening it pushes a colour's channels apart —
+            // and a shadow lit by a blue sky already has its channels a long way
+            // apart. At the same steepening as the midtones it took a shaded
+            // street from cool to navy.
+            contrast: 1.0 + 0.45 * SUN_CONTRAST * sun - 0.10 * flat,
             ..default()
         },
         midtones: ColorGradingSection {
-            contrast: 1.0 - 0.12 * flat,
+            contrast: 1.0 + SUN_CONTRAST * sun - 0.12 * flat,
             ..default()
         },
         // Pulled down under cloud so a white sky stops just short of clipping,

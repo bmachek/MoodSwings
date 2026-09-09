@@ -33,6 +33,22 @@ const LAMP_SPACING: f32 = 32.0;
 /// Sodium-vapour warmth.
 const LAMP_COLOR: Color = Color::srgb(1.0, 0.82, 0.55);
 
+/// How many shopfronts can be spilling light at once.
+///
+/// Fewer than the lamps, and closer: a lamp lights a junction from twenty
+/// metres and a shop window lights the two metres of pavement in front of it,
+/// so the ones that matter are the ones you are walking past.
+const SHOPS: usize = 28;
+/// How far a shop's light carries. Short — this is a window, not a floodlight.
+const SHOP_RANGE: f32 = 11.0;
+/// Warmer than the street lamp and much weaker. Sodium is orange; a shop is
+/// lit with something closer to white and is behind glass.
+const SHOP_COLOR: Color = Color::srgb(1.0, 0.90, 0.74);
+
+/// One of the pooled lights that stands in for a lit shop window.
+#[derive(Component)]
+pub struct ShopGlow;
+
 #[derive(Component)]
 pub struct StreetLight;
 
@@ -103,8 +119,11 @@ impl Plugin for StreetLightPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LampTimer>()
             .init_resource::<LampPosts>()
-            .add_systems(Startup, spawn_pool)
-            .add_systems(Update, (reposition_lamps, set_lamp_brightness));
+            .add_systems(Startup, (spawn_pool, spawn_shop_glow))
+            .add_systems(
+                Update,
+                (reposition_lamps, reposition_shop_glow, set_lamp_brightness),
+            );
     }
 }
 
@@ -175,6 +194,81 @@ fn spawn_pool(
 }
 
 /// Snaps the pool onto the nearest intersections to the camera.
+/// The shopfronts' pool, parked below the world until there are shops to stand
+/// in front of. No visible source: the source is the shop window, which the
+/// facade is already drawing.
+fn spawn_shop_glow(mut commands: Commands) {
+    for i in 0..SHOPS {
+        commands.spawn((
+            Name::new(format!("Shop Glow {i}")),
+            ShopGlow,
+            PointLight {
+                color: SHOP_COLOR,
+                intensity: 0.0,
+                range: SHOP_RANGE,
+                // A shop's light is a wash on a pavement, and a wash does not
+                // need to be occluded by the bollard standing in it. Shadow
+                // maps for twenty-eight more lights would cost more than
+                // everything else in this module put together.
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::from_xyz(0.0, -1000.0, 0.0),
+        ));
+    }
+}
+
+/// Moves the pool onto the nearest lit shopfronts, and turns it up after dark.
+///
+/// Same shape as `reposition_lamps` and for the same reason: the fixtures are
+/// streamed and there are hundreds of them, the lights are few and expensive,
+/// so the lights go to the fixtures rather than the other way round.
+fn reposition_shop_glow(
+    clock: Res<TimeOfDay>,
+    fronts: Query<&GlobalTransform, With<super::interior::Shopfront>>,
+    cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
+    mut glows: Query<(&mut Transform, &mut PointLight), With<ShopGlow>>,
+) {
+    let night = 1.0 - daylight(clock.hours);
+    if night <= 0.01 {
+        for (_, mut light) in &mut glows {
+            light.intensity = 0.0;
+        }
+        return;
+    }
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let eye = camera.translation();
+
+    let mut nearest: Vec<(f32, Vec3)> = fronts
+        .iter()
+        .map(|at| {
+            let at = at.translation();
+            (at.distance_squared(eye), at)
+        })
+        .collect();
+    let take = SHOPS.min(nearest.len());
+    if take > 0 {
+        nearest.select_nth_unstable_by(take - 1, |a, b| a.0.total_cmp(&b.0));
+    }
+
+    // Much weaker than a street lamp: this is one shop window, and the point of
+    // it is the two metres of pavement under it rather than the road.
+    let intensity = 110_000.0 * night;
+    let mut placed = 0;
+    for (mut transform, mut light) in &mut glows {
+        match nearest.get(placed) {
+            Some((_, at)) => {
+                transform.translation = *at;
+                light.intensity = intensity;
+                placed += 1;
+            }
+            None => light.intensity = 0.0,
+        }
+    }
+}
+
 fn reposition_lamps(
     time: Res<Time>,
     mut timer: ResMut<LampTimer>,

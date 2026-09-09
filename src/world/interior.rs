@@ -155,6 +155,28 @@ pub fn build_assets(
     }
 }
 
+/// How high above the pavement a shopfront's light hangs.
+///
+/// Head height rather than window height. The source is a whole shop window
+/// two or three metres wide, and a point light standing in for one has to sit
+/// where its *average* is or the pavement gets a hard little disc instead of a
+/// wash.
+pub const SPILL_HEIGHT: f32 = 2.3;
+
+/// Marks the patch of pavement a lit shopfront throws its light onto.
+///
+/// A marker with a position and nothing else: the light itself belongs to
+/// `world::streetlights`, which keeps a pool of them and moves the pool to
+/// whichever fixtures are nearest. Spawning a real `PointLight` per shop would
+/// be a few hundred lights in a district, and almost all of them behind the
+/// camera.
+///
+/// Spawned by `world::buildings::spawn_building` rather than here, because a
+/// shopfront is a thing every building above house height has and a walk-in
+/// interior is a thing about one in twenty of them has.
+#[derive(Component)]
+pub struct Shopfront;
+
 /// Everything `spawn` needs to know about where the room stands.
 pub struct Doorframe {
     /// World position of the footprint's centre, at pavement level.
@@ -184,6 +206,7 @@ pub fn spawn(
     let spin = Quat::from_rotation_y(frame.yaw);
     let head = shell::door_head(frame.class, frame.height);
     let range = (RANGE * lod_scale).max(1.0);
+
     // The room inside the structural walls.
     let (w, d) = (frame.width - 2.0 * WALL, frame.depth - 2.0 * WALL);
 

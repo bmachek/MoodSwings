@@ -1,6 +1,7 @@
 //! Building vehicle entities and scattering parked ones around the city.
 
 use avian3d::prelude::*;
+use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use rand::RngExt;
 
@@ -40,6 +41,58 @@ pub struct AlwaysSimulated;
 #[derive(Component)]
 pub struct WheelVisual(pub usize);
 
+/// Where a car stops being worth its fittings, in metres.
+///
+/// A car is not one mesh. It is bodywork, glazing, a liner, four tyres, four
+/// rims, two bumpers, a grille, two mirrors in three pieces each, a tailpipe,
+/// two plates, four lamps and a cabin full of seats — a little over thirty
+/// meshes, and there are two and a half thousand parked cars in the city. Most
+/// of them are far enough away that a mirror shell is under two pixels across.
+///
+/// So the fittings carry a range and the bodywork does not. What survives to
+/// any distance is the silhouette: shell, sill, glazing, liner and tyres. That
+/// is the shape of a car, and the shape is all that is left of one at ninety
+/// metres anyway.
+///
+/// The lamps are the one fitting deliberately left off this budget, and the
+/// reason is the hour rather than the distance: `vehicle::lights` glows every
+/// lens in the city after dusk, so a tail lamp at two hundred metres is not a
+/// two-pixel box, it is one of the red dots a night street is made of.
+const FITTINGS: f32 = 85.0;
+
+/// And where the *inside* of the cabin stops being worth drawing.
+///
+/// Much nearer, because seats and a steering wheel are seen through tinted
+/// glass at a grazing angle: they are gone as a readable thing long before
+/// they are gone as pixels.
+///
+/// The liner is deliberately not on this budget. It is the surface that stops
+/// the near glass being a window straight through the car to the street behind
+/// — culling it would not save a mesh so much as knock a hole in every distant
+/// car in the row.
+const CABIN: f32 = 45.0;
+
+/// A tenth of the distance is the crossfade, which at these ranges is a couple
+/// of frames of dither on something a few pixels wide.
+fn beyond(distance: f32) -> VisibilityRange {
+    VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: distance..(distance * 1.12),
+        use_aabb: false,
+    }
+}
+
+/// The range every bolted-on fitting carries: bumpers, grille, mirrors,
+/// tailpipe, plates, rims — and, from `vehicle::lights`, the lamps.
+pub fn fittings_range() -> VisibilityRange {
+    beyond(FITTINGS)
+}
+
+/// The range the cabin's furniture carries.
+pub fn cabin_range() -> VisibilityRange {
+    beyond(CABIN)
+}
+
 /// One archetype's bodywork, as loaded meshes.
 struct BodyHandles {
     shell: Handle<Mesh>,
@@ -71,6 +124,18 @@ pub struct VehicleAssets {
     /// Shared by every car: the flake is a property of automotive paint, not
     /// of one car's paint, and the colour that varies is in the material.
     flake: Handle<Image>,
+    /// The panel gaps and the road film, in the body's own UVs.
+    detail: Handle<Image>,
+    /// The finishes a car can come off the line in, built once.
+    ///
+    /// Every colour in this city comes from one of two closed lists — the
+    /// street palette in `paint::stock`, and the five archetypes' own liveries
+    /// — so a car almost never needs a material of its own. It used to get one
+    /// regardless: two and a half thousand parked cars meant two and a half
+    /// thousand `StandardMaterial`s that were bit-for-bit copies of twelve, and
+    /// a material handle is what Bevy batches by, so a street of identical
+    /// white hatchbacks was a draw call each.
+    stock: Vec<(LinearRgba, f32, f32, Handle<StandardMaterial>)>,
     trim: super::trim::TrimKit,
 }
 
@@ -82,6 +147,40 @@ impl VehicleAssets {
             .map(|(_, meshes)| meshes)
             .expect("every archetype gets meshes at startup")
     }
+
+    /// The prebuilt material for a finish, if this is one of the stock ones.
+    ///
+    /// Matched on the colour rather than on a palette index, so a caller that
+    /// tints a car by hand — the capture harness does — still shares a material
+    /// when it happens to land on a stock colour, and still gets its own when
+    /// it does not.
+    fn stock_paint(
+        &self,
+        color: Color,
+        metallic: f32,
+        age: f32,
+    ) -> Option<&Handle<StandardMaterial>> {
+        let wanted = LinearRgba::from(color);
+        self.stock
+            .iter()
+            .find(|(color, stock_metallic, stock_age, _)| {
+                same_colour(*color, wanted)
+                    && (stock_metallic - metallic).abs() < 1e-4
+                    && (stock_age - age).abs() < 1e-4
+            })
+            .map(|(_, _, _, handle)| handle)
+    }
+}
+
+/// Whether two colours are the same paint.
+///
+/// A tolerance rather than equality: the colours make a round trip through
+/// sRGB and linear, and a finish that misses its own material by one bit would
+/// silently put the per-car materials back.
+fn same_colour(a: LinearRgba, b: LinearRgba) -> bool {
+    (a.red - b.red).abs() < 1e-4
+        && (a.green - b.green).abs() < 1e-4
+        && (a.blue - b.blue).abs() < 1e-4
 }
 
 /// Fraction of its own radius that a tyre is wide.
@@ -98,7 +197,16 @@ pub fn build_assets(
             let built = super::body::build(class, &class.spec());
             // Normal maps need a tangent basis, and mikktspace is the one the
             // shader agrees with.
-            let mut add = |mesh| meshes.add(crate::world::buildings::with_tangents(mesh));
+            // Two UV sets, because the body wants two textures at two scales
+            // and `StandardMaterial` has one transform for all of them. The
+            // first is the loft's own, nought to one over the whole car, and
+            // carries the panel gaps and the road film; the second is the same
+            // one multiplied by the flake tiling, and carries the flake.
+            let mut add = |mesh| {
+                meshes.add(crate::world::buildings::with_tangents(
+                    super::body::with_tiled_uv(mesh, super::paint::FLAKE_TILING),
+                ))
+            };
             (
                 class,
                 BodyHandles {
@@ -113,8 +221,40 @@ pub fn build_assets(
         })
         .collect();
 
+    // Every finish anything in this city is painted: the street palette, plus
+    // the five archetypes' own liveries. Deduplicated, because several classes
+    // could pick the same colour and two handles for one paint would put the
+    // batching back where it was.
+    let flake = images.add(super::paint::flake());
+    let detail = images.add(super::paint::detail());
+    let mut stock: Vec<(LinearRgba, f32, f32, Handle<StandardMaterial>)> = Vec::new();
+    for (color, metallic) in super::paint::stock().chain(
+        VehicleClass::ALL
+            .into_iter()
+            .map(|class| class.spec())
+            .map(|spec| (spec.body_color, spec.body_metallic)),
+    ) {
+        let linear = LinearRgba::from(color);
+        // Once per condition. Four times the materials and the same number of
+        // *batches* per finish, which is what actually costs anything.
+        for age in super::paint::AGES {
+            if stock.iter().any(|(had, had_metallic, had_age, _)| {
+                same_colour(*had, linear) && *had_metallic == metallic && *had_age == age
+            }) {
+                continue;
+            }
+            stock.push((
+                linear,
+                metallic,
+                age,
+                materials.add(bodywork(color, metallic, age, &flake, &detail)),
+            ));
+        }
+    }
+
     VehicleAssets {
         bodies,
+        detail,
         tyre_mesh: meshes.add(crate::world::buildings::with_tangents(
             super::body::tyre_mesh(TYRE_WIDTH),
         )),
@@ -150,8 +290,45 @@ pub fn build_assets(
             perceptual_roughness: 0.24,
             ..glazing(1.0)
         }),
-        flake: images.add(super::paint::flake()),
+        flake: flake.clone(),
+        stock,
         trim: super::trim::build_kit(meshes, materials, images),
+    }
+}
+
+/// One panel of bodywork, as a material.
+///
+/// Pulled out of the spawner so the same recipe serves both the stock finishes
+/// built at startup and the one-off a hand-tinted car still needs.
+fn bodywork(
+    color: Color,
+    metallic: f32,
+    age: f32,
+    flake: &Handle<Image>,
+    detail: &Handle<Image>,
+) -> StandardMaterial {
+    // Car paint is a coloured base under a clear lacquer, and modelling it that
+    // way rather than as "shiny metal" is what makes the highlight sit *on* the
+    // panel instead of tinting itself the colour of the car.
+    let finish = super::paint::finish(color, metallic, age);
+    StandardMaterial {
+        base_color: finish.base_color,
+        perceptual_roughness: finish.perceptual_roughness,
+        metallic: finish.metallic,
+        clearcoat: finish.clearcoat,
+        clearcoat_perceptual_roughness: 0.08,
+        // The facets. See `paint::flake` for why this is a normal map and not
+        // the anisotropy the plan asked for.
+        normal_map_texture: Some(flake.clone()),
+        // The loft's UVs run nought to one over the whole car, so the tile has
+        // to be brought down to the size of a hand before it is flake rather
+        // than dents.
+        // Identity. The flake's tiling lives in the mesh's second UV set now —
+        // see `build_assets` — because this one transform applies to every
+        // channel, and the detail map has to arrive untiled.
+        base_color_texture: Some(detail.clone()),
+        normal_map_channel: bevy::mesh::UvChannel::Uv1,
+        ..default()
     }
 }
 
@@ -189,25 +366,19 @@ pub fn spawn_vehicle(
     transform: Transform,
 ) -> Entity {
     let size = spec.half_extents * 2.0;
-    // Car paint is a coloured base under a clear lacquer, and modelling it that
-    // way rather than as "shiny metal" is what makes the highlight sit *on* the
-    // panel instead of tinting itself the colour of the car.
-    let finish = super::paint::finish(spec.body_color, spec.body_metallic);
-    let paint = materials.add(StandardMaterial {
-        base_color: finish.base_color,
-        perceptual_roughness: finish.perceptual_roughness,
-        metallic: finish.metallic,
-        clearcoat: finish.clearcoat,
-        clearcoat_perceptual_roughness: 0.08,
-        // The facets. See `paint::flake` for why this is a normal map and not
-        // the anisotropy the plan asked for.
-        normal_map_texture: Some(assets.flake.clone()),
-        // The loft's UVs run nought to one over the whole car, so the tile has
-        // to be brought down to the size of a hand before it is flake rather
-        // than dents.
-        uv_transform: bevy::math::Affine2::from_scale(super::paint::FLAKE_TILING),
-        ..default()
-    });
+    // Off the shelf where the colour is one this city stocks, which it almost
+    // always is; a fresh material only for a car somebody tinted by hand.
+    let paint = match assets.stock_paint(spec.body_color, spec.body_metallic, spec.body_age) {
+        Some(handle) => handle.clone(),
+        None => materials.add(bodywork(
+            spec.body_color,
+            spec.body_metallic,
+            spec.body_age,
+            &assets.flake,
+            &assets.detail,
+        )),
+    };
+    let fittings = fittings_range();
 
     let anchors = spec.wheel_anchors();
     let wheel_radius = spec.wheel_radius;
@@ -274,7 +445,7 @@ pub fn spawn_vehicle(
                 // of the cabin and let the sun in through the roof.
                 bevy::light::NotShadowCaster,
             ));
-            super::trim::furnish(parent, &assets.trim, class, &fitted);
+            super::trim::furnish(parent, &assets.trim, class, &fitted, &cabin_range());
         }
         if let Some(frame) = &body.frame {
             parent.spawn((
@@ -297,6 +468,7 @@ pub fn spawn_vehicle(
             &fitted,
             &paint,
             transform.translation,
+            &fittings,
         );
 
         for (index, anchor) in anchors.iter().enumerate().take(WHEEL_COUNT) {
@@ -312,6 +484,9 @@ pub fn spawn_vehicle(
                 .with_child((
                     Mesh3d(assets.rim_mesh.clone()),
                     MeshMaterial3d(assets.rim.clone()),
+                    // The tyre stays at every distance — it is the wheel's
+                    // silhouette — and the face inside it does not.
+                    fittings.clone(),
                     // The face belongs on the outside of the car, so the
                     // left-hand wheels wear theirs turned around. A negative
                     // scale would do it too, and would turn every triangle
@@ -431,6 +606,13 @@ pub fn update_wheel_visuals(
     }
 }
 
+/// How much daylight a parked car leaves between itself and the kerb.
+///
+/// A third of a metre, which is about how badly a real person parks. It has to
+/// be more than nothing, because the kerb's collider arrives with the chunk and
+/// a body already overlapping one is ejected rather than nudged.
+const KERB_CLEARANCE: f32 = 0.34;
+
 /// Scatters parked cars along the kerbs so there is always something to steal.
 pub fn spawn_parked_vehicles(
     mut commands: Commands,
@@ -464,12 +646,26 @@ pub fn spawn_parked_vehicles(
         } else {
             -1.0
         };
-        let offset = edge.width * 0.5 - 1.6;
-        let position = a + *direction * (edge.length * along) + normal * offset * side;
-
         let class = VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
         let mut spec = class.spec();
-        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+        (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
+        // Off the kerb by the car's own width, which the fixed metre and a half
+        // above was not.
+        //
+        // Parked cars are startup-resident and the kerbs they are parked
+        // against are streamed, so a car overlapping one is not a car sitting
+        // in a wall — it is a *static collider appearing inside a dynamic
+        // body*, a second later, when the chunk arrives. Avian resolves that
+        // the only way it can, and the patrol caught what it looks like: a
+        // parked car leaving the ground at thirteen metres a second and coming
+        // down from seventy.
+        //
+        // It went unnoticed for as long as every street was one of six widths
+        // from a table. Real widths off the extract run down to four and a
+        // half metres, and on one of those a van parked a metre and a half off
+        // the centre line has its flank inside the kerb.
+        let offset = (edge.width * 0.5 - spec.half_extents.x - KERB_CLEARANCE).max(0.0);
+        let position = a + *direction * (edge.length * along) + normal * offset * side;
         // Nose along the street, facing the way traffic on that side runs.
         let facing = if side > 0.0 { *direction } else { -*direction };
         let heading = heading_towards(facing);
@@ -494,7 +690,7 @@ pub fn spawn_parked_vehicles(
         };
 
         let mut spec = VehicleClass::Sedan.spec();
-        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+        (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
         let heading = heading_towards(*direction);
         // On the carriageway, a little down the street from the junction.
         let normal = Vec2::new(-direction.y, direction.x);
@@ -524,7 +720,8 @@ pub fn spawn_parked_vehicles(
                 let class =
                     VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
                 let mut spec = class.spec();
-                (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
+                (spec.body_color, spec.body_metallic, spec.body_age) =
+                    super::paint::street_paint(&mut rng);
                 // Lots sit on the kerb slab, a step above the carriageway.
                 let transform = Transform::from_xyz(
                     at.x,
@@ -598,5 +795,90 @@ mod tests {
                 anchor - ray_length
             );
         }
+    }
+
+    fn stocked() -> VehicleAssets {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut images = Assets::<Image>::default();
+        build_assets(&mut meshes, &mut materials, &mut images)
+    }
+
+    /// The whole point of the paint shop: nothing that spawns off the street
+    /// ever asks for a material of its own.
+    ///
+    /// If this fails, the city quietly goes back to one `StandardMaterial` per
+    /// parked car — which costs nothing visible and everything in batching, so
+    /// it is exactly the kind of regression that only turns up in a frame time
+    /// six months later.
+    #[test]
+    fn every_colour_a_car_can_be_is_already_on_the_shelf() {
+        let assets = stocked();
+        let mut rng = crate::core::rng::stream_for(7, stream::VEHICLE_SPAWNS);
+        for _ in 0..2000 {
+            let (color, metallic, age) = super::super::paint::street_paint(&mut rng);
+            assert!(
+                assets.stock_paint(color, metallic, age).is_some(),
+                "{color:?} at {metallic}, aged {age}, would need a material of its own"
+            );
+        }
+        for class in VehicleClass::ALL {
+            let spec = class.spec();
+            assert!(
+                assets
+                    .stock_paint(spec.body_color, spec.body_metallic, spec.body_age)
+                    .is_some(),
+                "{}'s own livery is not stocked",
+                spec.display_name
+            );
+        }
+    }
+
+    #[test]
+    fn the_shelf_holds_no_duplicates() {
+        // Two handles for one paint is two batches for one colour, which is
+        // the bug this whole mechanism exists to avoid.
+        let assets = stocked();
+        for (i, (color, metallic, age, _)) in assets.stock.iter().enumerate() {
+            for (other, other_metallic, other_age, _) in &assets.stock[i + 1..] {
+                assert!(
+                    !(same_colour(*color, *other)
+                        && metallic == other_metallic
+                        && age == other_age),
+                    "{color:?} at {metallic}, aged {age}, is stocked twice"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_colour_nobody_stocks_still_gets_painted() {
+        // The escape hatch has to stay open: the capture harness tints cars by
+        // hand, and a lookup that silently returned the nearest stock colour
+        // would repaint them without saying so.
+        let assets = stocked();
+        assert!(
+            assets
+                .stock_paint(Color::srgb(0.01, 0.99, 0.42), 0.5, 0.0)
+                .is_none()
+        );
+    }
+
+    /// Bevy asserts on a range whose margins cross, and a range that ends
+    /// before it starts is a mesh that is never drawn at all.
+    #[test]
+    fn the_detail_ranges_are_ordered_and_the_cabin_goes_first() {
+        for range in [fittings_range(), cabin_range()] {
+            assert!(range.start_margin.end <= range.end_margin.start);
+            assert!(range.end_margin.start < range.end_margin.end);
+        }
+        assert!(
+            cabin_range().end_margin.start < fittings_range().end_margin.start,
+            "the seats should go before the bumpers do"
+        );
+        // And both well inside the distance a car is still simulated at, so
+        // nothing that has physics done to it is being drawn without fittings
+        // in the player's face.
+        assert!(cabin_range().end_margin.start < ACTIVE_RADIUS);
     }
 }

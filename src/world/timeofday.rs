@@ -7,10 +7,9 @@
 //! The clock is not the only input any more. Cloud cover comes from `weather`,
 //! and what it does here is most of what makes an overcast day read as one: the
 //! direct beam drops away, the skylight that replaces it climbs, the warmth goes
-//! out of the sun, and the haze thickens. Not the sky *itself* — Bevy's
-//! atmosphere is a scattering model with no clouds in it, so the dome overhead
-//! stays blue however hard it is raining. Everything the light does is right;
-//! the thing you would photograph it against is not.
+//! out of the sun, and the haze thickens. What the sky *itself* does is not here
+//! — Bevy's atmosphere is a scattering model and has no clouds in it, so the
+//! deck is `world::sky`'s, hung on the same cover value this module reads.
 
 use std::f32::consts::PI;
 
@@ -97,6 +96,38 @@ pub fn sunlight_through(cover: f32) -> f32 {
 pub fn skylight_gain(cover: f32) -> f32 {
     1.0 + 0.85 * cover.clamp(0.0, 1.0)
 }
+
+/// Direct sunlight at the top of the day, in lux. The camera is metered for
+/// exactly this — see `render`.
+const SUN_LUX: f32 = 110_000.0;
+
+/// What fraction of the sunlight falling on a street comes back off it.
+///
+/// This is the one thing a directionless ambient term is genuinely the right
+/// model for, and getting it wrong in both directions in turn is most of the
+/// history of the lighting here. A sunlit street is lit twice: once by the sun,
+/// and once by every wall and metre of pavement around it throwing a share of
+/// that sun back. None of the second half is traced, so it has to be asserted.
+///
+/// It used to be asserted as a flat five hundred lux at every hour of the day,
+/// which is wrong at both ends — far too much at dawn, and far too little at
+/// noon, where it left a shadow lit by the environment map alone. That mattered
+/// more than the brightness suggests, because the environment map is the *sky*,
+/// and a clear sky is Rayleigh scattering and almost nothing else: measured off
+/// a noon frame, a shaded road came back with fifty times more blue in it than
+/// red. Not a cool shadow — a navy one.
+///
+/// Bounce is the missing red. It is sunlight, so it carries the sun's colour,
+/// and it scales with the sun rather than with the clock.
+///
+/// Three percent, and lower than the arithmetic alone would suggest, because it
+/// is not the only correction: `render::spawn_atmosphere` also lifted the
+/// planet's own ground albedo, which is the lower half of the environment map
+/// and therefore the other place a warm, groundward fill can come from. Between
+/// them a shaded wall comes back at about half the value of a lit one with its
+/// hue intact, which is a shadow rather than a hole and a shadow rather than a
+/// bruise.
+const BOUNCE: f32 = 0.03;
 
 /// How bright it is outside: 0 at night, 1 in full sun.
 ///
@@ -207,6 +238,7 @@ fn advance_clock(time: Res<Time>, config: Res<GameConfig>, mut clock: ResMut<Tim
 fn apply_sky(
     clock: Res<TimeOfDay>,
     weather: Res<Weather>,
+    shading: Res<super::sky::CloudShade>,
     config: Res<GameConfig>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
@@ -220,23 +252,6 @@ fn apply_sky(
 
     clear.0 = sky;
 
-    // Ambient is only a floor. Daytime sky light comes from the atmosphere's
-    // environment map, which is directional and coloured and does the job
-    // properly; this exists so that at night an unlit face is dark rather than
-    // pure black, and the city stays readable. Cloud raises it, because cloud is
-    // where the light goes when it stops being a beam.
-    ambient.color = Color::srgb(0.35 + 0.30 * day, 0.42 + 0.30 * day, 0.58 + 0.22 * day);
-    // Only the daylight half is boosted. Cloud does not make light, it
-    // redistributes sunlight — so with the sun down there is nothing for it to
-    // redistribute, and an overcast night is exactly as dark as a clear one.
-    // Boosting the floor as well washed the whole night street pale grey.
-    //
-    // The floor is higher than it once was because it inherited a job: the sun
-    // used to keep a 300 lx floor all night from a clamped, slowly circling
-    // position, and part of what that phantom beam did was keep night facades
-    // readable. That light belongs here, where it has no direction.
-    ambient.brightness = 240.0 + 260.0 * day * skylight_gain(cover);
-
     let dir = sun_direction(hours);
     // The beam dies *at* the horizon, not with the daylight. Civil twilight is
     // sky light, and the atmosphere and ambient carry it; a below-horizon
@@ -244,6 +259,31 @@ fn apply_sky(
     // underneath. The short ramp is so the last of the direct light fades over
     // a few game-minutes instead of switching off.
     let beam = (sun_elevation(hours) / 0.03).clamp(0.0, 1.0);
+    // And whatever is between this street and the sun right now. `cover` is
+    // the *average* sky; this is the cloud that happens to be in the way, and
+    // it is the difference between weather that is a setting and weather that
+    // is happening. Only the beam is dimmed: what is left under a cumulus is
+    // skylight, which is why a cloud's shadow is blue and not black.
+    let sunlight = SUN_LUX * day * beam * sunlight_through(cover) * shading.0;
+
+    // The flat ambient term has three jobs and they belong to different hours.
+    //
+    // At night it is a floor: with no sun and no sky worth speaking of, an unlit
+    // face would be pure black and the city would stop being readable. It is
+    // blue there, because at that hour the sky really is all it stands for. It
+    // is also higher than it looks, because it inherited a job: the sun used to
+    // keep a 300 lx floor all night from a clamped, slowly circling position,
+    // and part of what that phantom beam did was keep night facades legible.
+    // That light belongs here, where it has no direction.
+    //
+    // Under cloud it is the honest description of the light: an overcast sky has
+    // no direction, and a flat term is exactly what it is.
+    //
+    // And in clear sun it is *bounce* — see [`BOUNCE`], which is the term that
+    // used to be a flat five hundred lux at every hour of the day.
+    ambient.color = Color::srgb(0.35 + 0.53 * day, 0.42 + 0.42 * day, 0.58 + 0.16 * day);
+    ambient.brightness =
+        240.0 * (1.0 - day) + BOUNCE * sunlight + 150.0 * day * cover * skylight_gain(cover);
 
     for (mut transform, mut light) in &mut sun {
         // Honestly below the horizon at night. This used to clamp the sun to
@@ -259,7 +299,7 @@ fn apply_sky(
         // which is what lets the night sky belong to the lamps. The "not pitch
         // black" duty the old 300 lx floor did from a phantom direction is
         // ambient's now, above.
-        light.illuminance = 110_000.0 * day * beam * sunlight_through(cover);
+        light.illuminance = sunlight;
         light.color = sun_color(hours, cover);
         light.shadow_maps_enabled = beam > 0.0;
     }
@@ -271,8 +311,8 @@ fn apply_sky(
     // every long street into smog.
     //
     // Cloud and rain pull that band in. Visibility really does close down in
-    // weather, and it is also the cheapest honest way to say "overcast" in a
-    // renderer whose sky has no clouds in it.
+    // weather, and it is what puts the far edge of the city under the same
+    // overcast `world::sky` is drawing overhead.
     let far = config.world.stream_radius;
     let closing = 1.0 - 0.34 * cover - 0.22 * weather.rain;
     let haze = fog_color(hours, cover);

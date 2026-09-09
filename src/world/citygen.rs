@@ -33,7 +33,11 @@ pub enum District {
 
 impl District {
     /// (min height, max height) in metres.
-    fn height_range(self) -> (f32, f32) {
+    ///
+    /// Public because a town read off a map has no districts of its own: it
+    /// works out which district a frontage behaves like and then wants the same
+    /// heights the generator would have given it.
+    pub fn height_range(self) -> (f32, f32) {
         match self {
             District::Downtown => (38.0, 135.0),
             District::Midtown => (16.0, 46.0),
@@ -259,6 +263,17 @@ pub fn quarter_for(seed: u64, center: Vec2) -> Option<Quarter> {
 #[derive(Debug, Clone, Copy)]
 pub struct Building {
     pub footprint: Rect,
+    /// The way this building faces, if it was placed along a street rather than
+    /// inside a block.
+    ///
+    /// `None` is the generator's own answer: a building in a rectangular block
+    /// fronts whichever of its four sides is nearest the block's perimeter, and
+    /// `buildings::site_in` works that out. `Some(yaw)` is a real town read off
+    /// `world::atlas`, where there are no blocks and no four sides to choose
+    /// between — the building faces the street it was placed along, and the
+    /// footprint is read as `frontage x depth` in that street's own frame
+    /// rather than as a rectangle on the map.
+    pub facing: Option<f32>,
     pub height: f32,
     /// Index into the district's material palette.
     pub palette: u8,
@@ -269,6 +284,15 @@ pub struct Building {
 pub struct Block {
     /// Kerb-to-kerb extent, sidewalk included.
     pub area: Rect,
+    /// Whether this block lays its own kerb slab.
+    ///
+    /// True for a generated block, whose rectangle *is* the pavement — the
+    /// ground is asphalt and the slab carves the street grid out of it as
+    /// negative space. False for the one-building blocks a real town is filled
+    /// with, where the pavement is a strip laid along each street by
+    /// `world::streetside` instead, because an axis-aligned slab round a
+    /// building on a curved street is a paving stone at the wrong angle.
+    pub paved: bool,
     pub district: District,
     pub buildings: Vec<Building>,
     /// Lots the vacancy roll left empty, now put to use.
@@ -475,7 +499,7 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street], canal: Option<Canal>)
             let a = graph.node_at_grid((xi as u16, zi as u16));
             let b = graph.node_at_grid((xi as u16, zi as u16 + 1));
             if let (Some(a), Some(b)) = (a, b) {
-                graph.connect(a, b, xs.width, xs.arterial);
+                graph.connect(a, b, xs.width, xs.arterial, super::atlas::Surface::Asphalt);
             }
         }
     }
@@ -487,7 +511,7 @@ fn build_graph(x_streets: &[Street], z_streets: &[Street], canal: Option<Canal>)
             let a = graph.node_at_grid((xi as u16, zi as u16));
             let b = graph.node_at_grid((xi as u16 + 1, zi as u16));
             if let (Some(a), Some(b)) = (a, b) {
-                graph.connect(a, b, zs.width, zs.arterial);
+                graph.connect(a, b, zs.width, zs.arterial, super::atlas::Surface::Asphalt);
             }
         }
     }
@@ -529,6 +553,7 @@ fn build_blocks(
             let (buildings, vacants) =
                 lay_out_buildings(seed, area, district, arterial, style, &mut building_rng);
             blocks.push(Block {
+                paved: true,
                 area,
                 district,
                 buildings,
@@ -574,11 +599,21 @@ fn lay_out_buildings(
     }
 
     let mut lots = Vec::new();
-    subdivide(buildable, district.min_lot(), rng, 0, &mut lots);
+    // The style's second lever, and the one that decides how *wide* a house is
+    // rather than how tall: a postcard of burgage plots subdivides further than
+    // one of city blocks. Applied here rather than inside `min_lot`, because
+    // `min_lot` is a fact about a district and this is a fact about a city.
+    subdivide(
+        buildable,
+        district.min_lot() * style.lot_scale(),
+        rng,
+        0,
+        &mut lots,
+    );
 
     // The style's one big lever: the same draws, a different skyline.
     let (min_h, max_h) = district.height_range();
-    let (min_h, max_h) = (min_h * style.height_scale(), max_h * style.height_scale());
+    let (min_h, max_h) = style.heights((min_h, max_h));
     let min_h = min_h.max(4.0);
     let max_h = max_h.max(min_h + 1.0);
     let vacancy = district.vacancy();
@@ -613,6 +648,7 @@ fn lay_out_buildings(
             continue;
         }
         buildings.push(Building {
+            facing: None,
             footprint,
             height: rng.random_range(min_h..max_h),
             palette: rng.random_range(0..PALETTE_SIZE),
@@ -966,7 +1002,13 @@ fn zone_civics(seed: u64, blocks: &mut [Block], style: CityStyle) {
 }
 
 /// Number of material variants per district.
-pub const PALETTE_SIZE: u8 = 4;
+///
+/// Six rather than four since the Landshut pass: an old town's whole look is
+/// that no two houses in a row are the same colour, and with four tones a
+/// terrace of eight repeats itself twice however the draws fall. The cost is
+/// two more shared materials per district — every building still draws from
+/// the same table, so this is a handful of materials, not a handful per house.
+pub const PALETTE_SIZE: u8 = 6;
 
 /// Recursively halves a block into lots, always splitting the longer side so
 /// lots stay roughly square rather than degenerating into slivers.

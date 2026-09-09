@@ -36,6 +36,25 @@ tools/shoot.sh                 # the whole battery of framings into shots/
 tools/shoot.sh --only street,night --out shots/after
 ```
 
+### Letting the game find its own bugs
+
+`core::capture` renders one *posed* frame. `core::patrol` plays instead:
+
+```sh
+cargo run --release -- --patrol 120        # two minutes, then a report
+cargo run --release -- --patrol 60 --city minga
+```
+
+It writes `ActionState<Action>` directly — gameplay has never read a key, only
+the action — and walks the city junction by junction, taunting, whistling and
+taking a car, while `Watch` takes the city's vital signs once a second: the
+player's position and speed, moods outside their range, entity and *asset*
+counts that only ever climb (the documented leak: a mesh built in the streaming
+path is added afresh every time a chunk comes back), audio sources being mixed,
+frame hitches, and anything that belongs on the road found above the rooftops.
+A patrol ending with no complaints is the point. It found the parked cars that
+were being fired into the sky by the kerb collider arriving inside them.
+
 `--lineup` stands one of every archetype in a row and points the camera down
 it — the cast's `--showroom`. The rare archetypes are the ones whose costume
 goes wrong and the ones a street framing cannot be relied on to contain, so
@@ -46,8 +65,16 @@ rather than against a memory of it: shoot the same framings before and after.
 Pin `--hour` on any shot being compared — the clock and the weather run together,
 so an unpinned shot drifts its own sky between runs. `--city` builds a given
 `CityStyle` instead of the persisted one, which is the only way to shoot a
-postcard the player has not selected. `--fps-log` reports median, p95 and worst
-frame time. Full flag table is in README.md.
+postcard the player has not selected. Full flag table is in README.md.
+
+`--fps-log` reports median, p95 and worst frame time — over the *warmup* frames,
+and the default warmup is short enough that it is timing a half-built scene.
+Always pass `--frames 200` for a number worth quoting: the same street framing
+reads about 19ms over the default window and about 28ms once everything is
+resident and the crowd is up. Mixing the two windows has produced two false
+readings already — a "free" change and a "2ms regression" that were both noise —
+so compare like with like, and rerun two or three times, because the spread over
+a settled window is under half a millisecond and over the default one is not.
 
 The seed a capture builds is the *persisted* one from the player's options file,
 not the code default — so a position probed in a citygen unit test is a position
@@ -79,12 +106,12 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), churches & cathedrals (`church`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the variation that keeps open ground from being one green (`ground`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
-| `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning |
+| `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
 | `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
-| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself |
+| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself, the animals among their feet, pigeon flocks that scatter (`pigeon`), umbrellas when it rains (`brolly`), a citizen who has stopped to play and the ring the city's mood gathers round them (`busker`) |
 | `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
@@ -141,13 +168,42 @@ cannot see. Only meshes and colliders stream, per 250 m chunk, in
 leaks.
 
 `CityStyle` (`core::config`) is the second input to that layout, next to the
-seed: a postcard, not a map. It is a handful of dials — height scale, palette
-override, how many churches and whether one of them is a cathedral, how wide
-the market band runs, how much the walls advertise — so a style is a *tuning*
+seed: a postcard, and — for exactly one style — a map underneath it. It is a handful of dials — height scale, how far
+lots subdivide, whether the low buildings step into a gable, palette override,
+how many churches and whether one of them is a cathedral, how wide the market
+band runs, how much the walls advertise — so a style is a *tuning*
 of the same generator, and a new one costs a match arm rather than a data file.
+`CityStyle::atlas` is the exception that proves the rest: `Landshuepf` names a
+baked OpenStreetMap extract (`assets/cities/landshut.ron`) and gets Landshut's
+real street network, and every other dial still applies on top of it. A town
+read off a map has no rectangular blocks, so it is filled by `world::streetside`
+instead — frontages marched down each side of each street — and its buildings
+carry `Building::facing`. The layout is then a pure function of
+`(seed, style, atlas)`; chunks still respawn identically, which is what the rule
+was protecting. The map data is ODbL, the only non-CC0 asset here: see
+CREDITS.md before touching it.
+
 Anything a style decides belongs on `CityStyle`, not as a `match` at the use
 site; the layout must stay a pure function of `(seed, style)` or the chunks
 stop respawning the same city.
+
+### A postcard can also be a real town
+
+`CityStyle` is a tuning of the generator — heights, a ceiling over them
+(`height_cap`), plot width, gables, palette, whether the walls are rendered
+(`rendered`) or faced with a scanned grain, how many spires. Anything a style
+decides belongs on `CityStyle` rather than as a `match` at the use site, and
+`heights` in particular exists because the generator and the atlas both draw
+building heights and had each been applying `height_scale` on their own.
+
+A style may also name a baked OSM extract (`atlas()`), and Landshüpf does: the
+road graph is the real Landshut, the blocks are empty, and `streetside::lots`
+marches plots along every street instead. A plot there is placed square to *its*
+street and therefore at some arbitrary angle to every other one, which is why
+`streetside::Oblong` tests candidates against the road corridors with a
+separating-axis test rather than a box overlap. Street names ride beside the
+layout in `atlas::Signposts` — a name is a fact about a street and an edge is
+one segment of one.
 
 ### The traps
 

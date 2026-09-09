@@ -8,6 +8,7 @@
 
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use rand::RngExt;
 
 use super::City;
 use super::buildings::{ChunkOf, CityAssets, spawn_block};
@@ -149,6 +150,7 @@ pub struct BuildingKits<'w> {
     statues: Res<'w, crate::world::statues::StatueKit>,
     stadium: Res<'w, crate::world::stadium::StadiumKit>,
     interior: Res<'w, crate::world::interior::InteriorKit>,
+    frontage: Res<'w, crate::world::frontage::FrontageKit>,
     bank: Option<Res<'w, crate::audio::bank::SoundBank>>,
     // The interior staff's wardrobe and disposition tables. Optional for the
     // same reason the bank is: a chunk streamed before they land simply
@@ -158,6 +160,30 @@ pub struct BuildingKits<'w> {
     tempers: Option<Res<'w, crate::mood::feeling::Tempers>>,
 }
 
+/// The street-side kits, bundled for the same reason [`BuildingKits`] is.
+///
+/// Bevy caps a system at sixteen parameters, and this one went over the moment
+/// the bunting arrived — which is exactly the failure the note on
+/// `BuildingKits` predicted, one street's worth of new furniture later. The
+/// honest cut is the same one: everything that exists only to be handed to a
+/// `spawn_edge` goes in one bag.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct StreetKits<'w> {
+    paint: Res<'w, MarkingAssets>,
+    props: Res<'w, PropAssets>,
+    foliage: Res<'w, crate::world::vegetation::FoliageKit>,
+    wear: Res<'w, crate::world::decals::WearKit>,
+    rubbish: Res<'w, crate::world::litter::LitterKit>,
+    works: Res<'w, crate::world::worksite::WorksiteKit>,
+    lines: Res<'w, crate::world::bunting::BuntingKit>,
+    plumes: Res<'w, crate::world::plume::PlumeKit>,
+    gables: Res<'w, crate::world::gable::GableKit>,
+    kerbs: Res<'w, crate::world::streetside::StreetsideKit>,
+    ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
+    plates: Res<'w, crate::world::streetname::StreetNameKit>,
+    signs: Res<'w, crate::world::atlas::Signposts>,
+}
+
 pub fn update_streaming(
     mut commands: Commands,
     time: Res<Time>,
@@ -165,10 +191,7 @@ pub fn update_streaming(
     city: Res<City>,
     index: Res<ChunkIndex>,
     kits: BuildingKits,
-    paint: Res<MarkingAssets>,
-    props: Res<PropAssets>,
-    foliage: Res<crate::world::vegetation::FoliageKit>,
-    wear: Res<crate::world::decals::WearKit>,
+    street: StreetKits,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -192,6 +215,9 @@ pub fn update_streaming(
         statues: &kits.statues,
         stadium: &kits.stadium,
         interior: &kits.interior,
+        frontage: &kits.frontage,
+        plumes: &street.plumes,
+        gables: &street.gables,
         bank: kits.bank.as_deref(),
         cast: match (&kits.figures, &kits.faces, &kits.tempers) {
             (Some(figures), Some(faces), Some(tempers)) => {
@@ -211,6 +237,22 @@ pub fn update_streaming(
         .graphics
         .lod_distance(crate::world::vegetation::RANGE);
     let wear_range = config.graphics.lod_distance(crate::world::decals::RANGE);
+    let litter_range = config.graphics.lod_distance(crate::world::litter::RANGE);
+    let works_range = config.graphics.lod_distance(crate::world::worksite::RANGE);
+    let bunting_range = config.graphics.lod_distance(crate::world::bunting::RANGE);
+    let plume_range = crate::world::plume::draw_range(config.graphics.lod_scale);
+    let name_range = config
+        .graphics
+        .lod_distance(crate::world::streetname::RANGE)
+        .min(400.0);
+    let kerb_range = config
+        .graphics
+        .lod_distance(crate::world::streetside::RANGE)
+        .min(2_000.0);
+    // A town built along its streets lays its pavement along them too. A
+    // generated block *is* its own pavement, so it must not have a second one
+    // laid over the top.
+    let streetside = city.blocks.first().is_some_and(|block| !block.paved);
     for chunk in arriving {
         // One stream per chunk and per subsystem, so a chunk's furniture is
         // identical every time it is walked back into rather than reshuffling,
@@ -232,7 +274,7 @@ pub fn update_streaming(
                 spawn_block(&mut commands, &ctx, block, chunk);
                 super::vegetation::spawn_park(
                     &mut commands,
-                    &foliage,
+                    &street.foliage,
                     &mut planting,
                     block,
                     chunk,
@@ -246,14 +288,37 @@ pub fn update_streaming(
                 crate::core::rng::stream::PROPS,
                 (chunk.x, chunk.y),
             );
+            let mut dropping = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::LITTER,
+                (chunk.x, chunk.y),
+            );
+            let mut digging = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::WORKSITE,
+                (chunk.x, chunk.y),
+            );
+            let mut stringing = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::BUNTING,
+                (chunk.x, chunk.y),
+            );
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
-                spawn_edge(&mut commands, &paint, edge, from, to, chunk);
-                super::props::spawn_edge(&mut commands, &props, &mut rng, edge, from, to, chunk);
+                spawn_edge(&mut commands, &street.paint, edge, from, to, chunk);
+                super::props::spawn_edge(
+                    &mut commands,
+                    &street.props,
+                    &mut rng,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                );
                 super::vegetation::spawn_edge(
                     &mut commands,
-                    &foliage,
+                    &street.foliage,
                     &mut planting,
                     edge,
                     from,
@@ -263,13 +328,138 @@ pub fn update_streaming(
                 );
                 super::decals::spawn_edge(
                     &mut commands,
-                    &wear,
+                    &street.wear,
                     &mut wearing,
                     edge,
                     from,
                     to,
                     chunk,
                     wear_range,
+                );
+                super::decals::spawn_footway(
+                    &mut commands,
+                    &street.wear,
+                    &mut wearing,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    wear_range,
+                );
+                super::litter::spawn_edge(
+                    &mut commands,
+                    &street.rubbish,
+                    &mut dropping,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    litter_range,
+                );
+                super::worksite::spawn_edge(
+                    &mut commands,
+                    &street.works,
+                    &mut digging,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    works_range,
+                );
+                // Steam out of a gully, on the odd street. Its own draw rather
+                // than one inside `decals`, because a plume is geometry and the
+                // manholes are decals — they only share a hole in the ground.
+                let mut steaming = crate::core::rng::stream_for_chunk(
+                    config.world_seed,
+                    crate::core::rng::stream::PLUMES,
+                    (chunk.x, chunk.y),
+                );
+                if steaming.random_range(0.0..1.0) < 0.09 {
+                    let along = steaming.random_range(0.2..0.8);
+                    let at = from.lerp(to, along);
+                    super::plume::gully(
+                        &mut commands,
+                        &street.plumes,
+                        at,
+                        chunk,
+                        &plume_range,
+                        &mut steaming,
+                    );
+                }
+                if let Some(ribbons) = street.ribbons.as_deref()
+                    && streetside
+                {
+                    // How far each end of this street's pavements has to give
+                    // way to whatever crosses there. Read off the graph rather
+                    // than passed down, because "the widest *other* street at
+                    // this node" is a question about the network and the
+                    // paving code has only ever been handed one edge.
+                    let setback = |at: super::roadgraph::NodeId, away: Vec2| {
+                        let node = city.graph.node(at);
+                        let mine = (away - node.pos).normalize_or_zero();
+                        let mut widest = 0.0f32;
+                        // The *shallowest* crossing, not the average: one
+                        // street coming in at twenty degrees is what decides
+                        // how far back this pavement has to stop, however
+                        // square the others are.
+                        let mut crossing = 1.0f32;
+                        for &other in &node.edges {
+                            if other == id {
+                                continue;
+                            }
+                            let edge = city.graph.edge(other);
+                            widest = widest.max(edge.width);
+                            let far = if edge.a == at { edge.b } else { edge.a };
+                            let theirs = (city.graph.node(far).pos - node.pos).normalize_or_zero();
+                            // |sin| between the two, from the 2D cross product.
+                            let sine = (mine.x * theirs.y - mine.y * theirs.x).abs();
+                            crossing = crossing.min(sine.max(1e-3));
+                        }
+                        super::streetside::pavement_trim(widest, node.edges.len(), crossing)
+                    };
+                    super::streetside::spawn_edge(
+                        &mut commands,
+                        &street.kerbs,
+                        ribbons,
+                        &kits.assets.concrete(),
+                        id,
+                        edge,
+                        from,
+                        to,
+                        (setback(edge.a, to), setback(edge.b, from)),
+                        chunk,
+                        kerb_range,
+                    );
+                }
+                // The name on the corner, once per arm of a real junction —
+                // which is where a plate actually goes, and is also what keeps
+                // a curved street from wearing its own name a dozen times.
+                if let Some(&Some(name)) = street.signs.per_edge.get(id.0 as usize) {
+                    for (node, other) in [(edge.a, edge.b), (edge.b, edge.a)] {
+                        if city.graph.node(node).edges.len() < 3 {
+                            continue;
+                        }
+                        super::streetname::spawn(
+                            &mut commands,
+                            &street.plates,
+                            name,
+                            city.graph.node(node).pos,
+                            city.graph.node(other).pos,
+                            edge.width,
+                            chunk,
+                            name_range,
+                        );
+                    }
+                }
+                super::bunting::spawn_edge(
+                    &mut commands,
+                    &street.lines,
+                    &mut stringing,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    bunting_range,
                 );
             }
         }
@@ -289,9 +479,43 @@ pub fn update_streaming(
                     .edges
                     .iter()
                     .any(|&edge| city.graph.edge(edge).arterial);
+                if let Some(ribbons) = street.ribbons.as_deref()
+                    && streetside
+                {
+                    let widest = arms.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
+                    // Read off the graph rather than off `arms`, which several
+                    // other spawners share and none of them wants widened.
+                    let paved = node
+                        .edges
+                        .iter()
+                        .map(|&edge| city.graph.edge(edge))
+                        .max_by(|a, b| a.width.total_cmp(&b.width))
+                        .map(|edge| edge.surface)
+                        .unwrap_or_default();
+                    super::streetside::spawn_junction(
+                        &mut commands,
+                        ribbons,
+                        node.pos,
+                        widest,
+                        paved,
+                        chunk,
+                    );
+                    // And the pavement round the outside of it, which is what
+                    // the strips give up when they stop short of the crossing.
+                    super::streetside::spawn_corner(
+                        &mut commands,
+                        &street.kerbs,
+                        ribbons,
+                        &kits.assets.concrete(),
+                        node.pos,
+                        &arms,
+                        chunk,
+                        kerb_range,
+                    );
+                }
                 super::props::spawn_junction(
                     &mut commands,
-                    &props,
+                    &street.props,
                     node.pos,
                     &arms,
                     arterial,
@@ -299,7 +523,7 @@ pub fn update_streaming(
                 );
                 super::decals::spawn_junction(
                     &mut commands,
-                    &wear,
+                    &street.wear,
                     &mut wearing,
                     node.pos,
                     &arms,

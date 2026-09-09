@@ -1016,16 +1016,22 @@ in the world.
   hum their own music, but the buildings under the paint are the same six
   wall sets the rest of the city wears.
 
-- The sky itself has no clouds in it. Bevy's atmosphere is a scattering model, so
-  cover is expressed entirely through the light — dimmer, flatter, cooler,
-  hazier, no hard shadows — and the dome overhead stays blue however hard it is
-  raining. Everything the weather does is right; the thing you would photograph
-  it against is not.
+- The cloud is one flat deck, not a volume. Bevy's atmosphere is a scattering
+  model with nothing in it, so `world::sky` hangs a dome on the camera and
+  intersects the view ray with a single horizontal layer of noise — which is
+  enough for cover to read as cover and for a cloud to have a lit side and a
+  shaded one, and not enough to fly through. Near the horizon the layer
+  compresses past what any sampling can resolve, so it is faded out into the
+  haze before it gets there.
 
-- Cloud shadows do not move across the city. Cover dims the sun everywhere at
-  once, which is exactly right for a solid overcast and wrong for broken cloud on
-  a windy day. A real one needs the pattern projected into the light, not a
-  multiplier on it.
+- A cloud's shadow covers the whole city or none of it. `world::sky::shade`
+  samples the deck where the sun's ray crosses it above the *player*, so the sun
+  goes in and out as the sky moves over — which is most of what broken cloud
+  does to a day — but the edge of the shadow never crosses the ground, because
+  it is one number for the whole frame rather than a pattern projected into the
+  light. Landshut is a kilometre across and a cloud is two, so the two are not
+  far apart; a tall building's own shadow is still the only moving edge there
+  is.
 
 - God rays are still soft. The air lights up towards a low sun and goes dark
   away from it, which is the physics working; a *shaft* additionally needs a

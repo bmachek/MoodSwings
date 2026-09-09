@@ -46,6 +46,12 @@ struct RoadSettings {
     time: f32,
     // How hard the rain is falling, which is what decides ripple strength.
     fall: f32,
+    // How much of the asphalt ageing below this surface takes. One for tarmac,
+    // zero for setts and slabs — see `world::road::RoadSettings`.
+    wear: f32,
+    // How coarse this surface's relief is, which decides how much of it
+    // survives being looked at edge-on.
+    relief: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> road: RoadSettings;
@@ -93,6 +99,127 @@ fn depth(world_position: vec2<f32>, wetness: f32) -> f32 {
     // surface is under it.
     let level = mix(0.72, 0.28, wetness);
     return smoothstep(level, level + 0.13, low);
+}
+
+// Metres across one repeat of the largest scale of road wear — the patch a
+// utility dug up and made good, the bay that was resurfaced on its own.
+const PATCH_TILE: f32 = 34.0;
+// How far a patch is allowed to move the road's value either way.
+const PATCH: f32 = 0.30;
+// Metres across one repeat of the crack field, and how much of that field is
+// actually cracked.
+const CRACK_TILE: f32 = 4.2;
+const CRACK_LINE: f32 = 0.985;
+// Metres across the field that decides *where* the road is cracked at all.
+const CRACK_AREA: f32 = 26.0;
+
+// Ages the road.
+//
+// One scan tiled at six metres gives a surface that is correct everywhere and
+// the same everywhere: stand in the middle of a junction and the tarmac fifty
+// metres down each of the four streets is the identical grey. Real tarmac is
+// not, and not because of anything at the scale of the aggregate — it is
+// because a road is a patchwork. It was laid in bays, dug up for a main and
+// made good in a slightly different mix, sealed along the joins, and cracked
+// where the ground moved under it.
+//
+// So a second field, an order of magnitude larger than the texture, in world
+// space where it belongs. It costs no texture fetch: the noise is already here
+// for the puddles, which is also why the two are tuned to different tile sizes —
+// wear at the size of the puddles would read as one thing, not two.
+fn age(input: PbrInput) -> PbrInput {
+    var pbr_input = input;
+    if road.wear <= 0.001 {
+        return pbr_input;
+    }
+    let here = pbr_input.world_position.xz;
+
+    // The patchwork. A generous smoothstep either side of the middle, so most
+    // of the road is near its own colour and the made-good bays have edges.
+    let field = fbm(here / PATCH_TILE);
+    let mend = (smoothstep(0.34, 0.44, field) + smoothstep(0.66, 0.56, field) - 1.0);
+    let value = 1.0 + mend * PATCH * road.wear;
+
+    // Cracks, drawn as a ridge through a higher-frequency field and cut off
+    // hard. A soft threshold gives tarmac rivers rather than a crack — the same
+    // lesson `texture::asphalt_height` records, at ten times the size, because
+    // a crack in a road runs for metres and the ones in the scan run for
+    // centimetres.
+    let ridge = 1.0 - abs(fbm(here / CRACK_TILE) * 2.0 - 1.0);
+    // Gated by a third, slower field, because a ridge through smooth noise runs
+    // unbroken for as far as the noise does — which came out as a single line
+    // wandering the length of a street and reading as a cable somebody had
+    // dropped rather than as a crack. A road cracks in patches, where the ground
+    // under *that bit* moved, and everywhere else is intact.
+    let cracked = smoothstep(0.46, 0.62, fbm(here / CRACK_AREA));
+    // And broken *along* its length by a third field at the scale of a stride.
+    // A ridge of constant width and constant darkness is a line, and a line
+    // lying on a road is not a crack — it is a cable somebody dropped, which is
+    // exactly what the first version of this looked like. A real crack opens and
+    // closes and disappears for a hand's width at a time. Pushed hard past its
+    // own ends, or the modulation is a gentle ripple in the darkness of a line
+    // that is still, unmistakably, a line.
+    let along = clamp((fbm(here / 2.4) - 0.5) * 3.2 + 0.55, 0.0, 1.0);
+    let crack = smoothstep(CRACK_LINE, 1.0, ridge) * cracked * along * road.wear;
+
+    pbr_input.material.base_color = vec4(
+        pbr_input.material.base_color.rgb * value * (1.0 - crack * 0.45),
+        pbr_input.material.base_color.a,
+    );
+    // A fresh patch is blacker *and* less worn, so it is rougher; the old
+    // surface around it has been polished by tyres. And a crack is a hole,
+    // which reflects nothing at all.
+    pbr_input.material.perceptual_roughness = clamp(
+        pbr_input.material.perceptual_roughness + mend * 0.12 + crack * 0.25,
+        0.04,
+        1.0,
+    );
+
+    return pbr_input;
+}
+
+// How much of the scan's relief survives, looking straight down at the road and
+// looking along it. The grazing figure is for the finest surface there is; a
+// coarse one keeps far more, and `road.relief` says which this is.
+const RELIEF_FACE_ON: f32 = 0.70;
+const RELIEF_GRAZING: f32 = 0.10;
+const RELIEF_GRAZING_COARSE: f32 = 0.62;
+
+// Lays the asphalt's relief back down as the view goes flat along it.
+//
+// A road is the pathological case for normal mapping and it took a while to
+// recognise why. Its albedo is four percent — almost nothing comes back off it
+// by diffusion — so nearly all of what the eye sees down a street is the sky,
+// reflected. That reflection is the specular term, and at a grazing angle the
+// specular term is both very large and very sensitive to the exact normal.
+//
+// The scan's normal map varies by more than a pixel's footprint can average, so
+// the reflection became a coin toss: one pixel lands on a chipping angled to
+// catch the sky and the next on one angled away, five times darker. On screen
+// that is dense dark speckle over grey, thickest right in front of the camera
+// where the view is most grazing, thinning into the distance where the mip chain
+// does the averaging instead. It reads as broken rendering, and it is —
+// the surface is under-sampled.
+//
+// Widening the specular lobe to cover the missing samples is the textbook answer
+// and it was tried first; it made the picture worse, because at a grazing angle
+// a wider GGX lobe loses energy rather than spreading it, so the speckle became
+// a general dimming. What works is the honest observation underneath: a
+// millimetre of asphalt relief seen edge-on does not tilt the reflection, it
+// *occludes* it, and the average of a tilt this small over a whole pixel is the
+// plane. So the relief is laid down as the view flattens — which is also what a
+// normal map's own mip chain would do, if a mip chain could know which way the
+// camera was looking.
+fn settle(input: PbrInput) -> PbrInput {
+    var pbr_input = input;
+
+    // One at a bird's-eye view of the road, zero looking along it.
+    let facing = saturate(dot(pbr_input.V, pbr_input.world_normal));
+    let grazing = mix(RELIEF_GRAZING, RELIEF_GRAZING_COARSE, saturate(road.relief));
+    let relief = mix(grazing, RELIEF_FACE_ON, facing);
+    pbr_input.N = normalize(mix(pbr_input.world_normal, pbr_input.N, relief));
+
+    return pbr_input;
 }
 
 fn wet(input: PbrInput) -> PbrInput {
@@ -155,6 +282,12 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
+    // Order: what the road is, then how flat it looks from here, then what is
+    // lying on it. Water goes last because it covers everything under it — a
+    // puddle over a crack is a puddle, and the wetness pass is the one that
+    // knows that.
+    pbr_input = age(pbr_input);
+    pbr_input = settle(pbr_input);
     pbr_input = wet(pbr_input);
 
 #ifdef PREPASS_PIPELINE

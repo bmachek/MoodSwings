@@ -41,10 +41,15 @@ use crate::world::roadgraph::NodeId;
 
 /// How far past the kerb the pavement centre sits.
 const PAVEMENT_OFFSET: f32 = 1.9;
-const RADIUS: f32 = 0.32;
-const HEIGHT: f32 = 1.05;
+/// The capsule a citizen is.
+///
+/// Public because anything that spawns a figure has to build the same one — a
+/// courier is a pedestrian who works for a living — and a second private copy
+/// of these numbers is a second thing to forget when the crowd is resized.
+pub const RADIUS: f32 = 0.32;
+pub const HEIGHT: f32 = 1.05;
 /// Distance from the capsule's centre to its lowest point.
-const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
+pub const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
 
 /// Pace multiplier at the angry end of the scale: a Wutbürger at rock bottom
 /// storms down the pavement half again as fast as they would stroll it.
@@ -189,6 +194,7 @@ fn setup(
     config: Res<GameConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     commands.insert_resource(PedestrianRng(stream_for(
         config.world_seed,
@@ -207,14 +213,25 @@ fn setup(
         Color::srgb(0.20, 0.22, 0.26),
         Color::srgb(0.42, 0.38, 0.52),
     ];
+    // The same weave the rest of the cast is cut from — this is where the
+    // crowd's own wardrobe is mixed, and it was thirty flat colours.
+    let weave = images.add(crate::world::texture::fabric());
+    let weave_relief = images.add(crate::world::texture::fabric_normal());
     let cloth = |materials: &mut Assets<StandardMaterial>, color: Color| {
         materials.add(StandardMaterial {
             base_color: color,
+            base_color_texture: Some(weave.clone()),
+            normal_map_texture: Some(weave_relief.clone()),
+            uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(super::figure::WEAVE_TILE)),
             perceptual_roughness: 0.85,
             ..default()
         })
     };
-    commands.insert_resource(super::figure::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(super::figure::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(PedestrianAssets {
         clothes: palette
             .into_iter()

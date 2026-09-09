@@ -38,6 +38,7 @@ RESOLUTION="2K-JPG"
 MATERIALS=(
     Asphalt031        # road surface
     PavingStones138   # pavement slabs
+    PavingStones151   # Kopfsteinpflaster: setts laid in fans, for a cobbled Altstadt
     Concrete034       # facades
     Concrete046       # facades
     Bricks097         # facades

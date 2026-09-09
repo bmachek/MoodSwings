@@ -73,6 +73,42 @@ pub mod stream {
     /// via `key_for` like the weather — where the river runs is a fact about
     /// the seed, and digging it must never move a lot.
     pub const RIVER: u64 = 21;
+    /// What a building has put out on the pavement: the pipe, the sandwich
+    /// board, the window boxes, the bikes, the terrace. Keyed per footprint
+    /// like the roofs are, and on its own stream for the usual reason — the
+    /// street's dressing must never move a roof, a lot or a bin.
+    pub const FRONTAGE: u64 = 22;
+    /// The pigeons: where a flock settles, how many are in it, and which one
+    /// is the white one. Its own stream rather than `ANIMALS` — how many birds
+    /// are on the paving must not move a cat, and startling a flock must not
+    /// change a dog's coat.
+    pub const PIGEONS: u64 = 23;
+    /// Where the city's rubbish has collected. Its own stream for the reason
+    /// every other one has: how dirty a street is must not move the bin at the
+    /// end of it, nor the tree, nor the manhole.
+    pub const LITTER: u64 = 24;
+    /// Which streets are being dug up. Its own stream so that adding a
+    /// worksite cannot move a bin, a tree or a piece of rubbish on any of the
+    /// streets that are not.
+    pub const WORKSITE: u64 = 25;
+    /// What is strung across the narrow streets: pennants and washing. Its own
+    /// stream so that hanging a line over a lane cannot move anything standing
+    /// under it.
+    pub const BUNTING: u64 = 26;
+    /// Who in the crowd owns an umbrella and what colour it is. Runtime
+    /// behaviour rather than world generation — it depends on what the sky is
+    /// doing — so it takes its own stream for the reason `MAYHEM` does: a
+    /// shower must not reshuffle anything the seed decided.
+    pub const UMBRELLAS: u64 = 27;
+    /// Which roofs have a chimney going and which gullies are steaming. Its
+    /// own stream so that lighting a fire cannot move a lamp post.
+    pub const PLUMES: u64 = 28;
+    /// Which citizen has stopped to play and where the ring stands round
+    /// them. Runtime behaviour, so its own stream: who is busking must not
+    /// depend on how many pigeons have gone up.
+    pub const BUSKERS: u64 = 29;
+    /// Which streets have a van stopped on them and who is unloading it.
+    pub const DELIVERIES: u64 = 30;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

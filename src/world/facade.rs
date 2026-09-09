@@ -177,11 +177,16 @@ pub fn grain_for(district: super::citygen::District, slot: usize) -> &'static st
 /// because what the eye measures is the course height against the storey — and
 /// a quarter turn breaks the last of the resemblance. Both are free: numbers in
 /// a uniform that already exists, so the city's material count does not move.
-const DRESS: [(f32, f32, bool); 4] = [
+const DRESS: [(f32, f32, bool); 6] = [
     (1.75, 0.72, false),
     (2.40, 0.62, true),
     (2.05, 0.80, true),
     (3.00, 0.66, false),
+    // The two the sixth palette slot brought with it. They matter most in a
+    // rendered town, where every slot draws the same plaster and the dressing
+    // is the only thing left telling one wall from the next.
+    (2.20, 0.55, false),
+    (1.55, 0.74, true),
 ];
 
 impl FacadeGrain {
@@ -190,10 +195,17 @@ impl FacadeGrain {
     /// the painted facade shows through untouched.
     pub fn for_district(
         library: &MaterialLibrary,
+        style: crate::core::config::CityStyle,
         district: super::citygen::District,
         palette: usize,
     ) -> Self {
-        let scanned = library.get(grain_for(district, palette));
+        // A rendered town has one wall and six colours; every other town has a
+        // wall per district and per slot. See `CityStyle::rendered`.
+        let scanned = library.get(if style.rendered() {
+            set::PLASTER
+        } else {
+            grain_for(district, palette)
+        });
         let (tile, strength, swap) = DRESS[palette % DRESS.len()];
         Self {
             settings: FacadeSettings {
