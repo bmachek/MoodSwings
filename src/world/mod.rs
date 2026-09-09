@@ -170,6 +170,11 @@ fn generate_city(
 
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
+    // One answer to "is this standing in a road", for every spawner that puts
+    // something upright beside a street. Built here rather than inside each of
+    // them because it is a fact about the whole layout and it costs a pass over
+    // the graph.
+    commands.insert_resource(streetside::Corridors::build(&city));
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));

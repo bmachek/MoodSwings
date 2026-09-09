@@ -1468,6 +1468,59 @@ const PAVED_OVER: f32 = 1.2;
 ///
 /// Without this the check is every plot against every road: six thousand times
 /// two thousand for Landshut, which is thirteen million tests to place a town.
+/// Every carriageway in the town, so anything standing up can ask whether it is
+/// standing in one.
+///
+/// This existed already, built inside `lots` and thrown away, and it was the
+/// only "is this in the road?" test in the game. Every furniture spawner
+/// meanwhile re-derived "half a width and a bit" from its own edge and asked
+/// nobody — which is why a fifth of the street-name plates and a fifth of the
+/// traffic signals stood in the crossing carriageway, and why raising the lamp
+/// density without this would have put a hundred and thirty-five posts of nine
+/// hundred in the road.
+#[derive(Resource)]
+pub struct Corridors(HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>>);
+
+impl Corridors {
+    pub fn build(layout: &CityLayout) -> Self {
+        Self(corridors(layout))
+    }
+
+    /// Is something `radius` across, standing at `at`, on a carriageway?
+    ///
+    /// The carriageway, not the corridor: the corridor is the tarmac *and* a
+    /// pavement either side, and a pavement is exactly where street furniture
+    /// belongs. A lamp behind its own kerb clears its own tarmac by its own
+    /// set-back, so this needs no notion of which street asked.
+    pub fn in_the_road(&self, at: Vec2, radius: f32) -> bool {
+        let thing = Oblong {
+            centre: at,
+            axis: Vec2::X,
+            half: Vec2::splat(radius),
+        };
+        let cell = (
+            (at.x / CELL).floor() as i32,
+            (at.y / CELL).floor() as i32,
+        );
+        (-1..=1).any(|dx| {
+            (-1..=1).any(|dz| {
+                self.0.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
+                    near.iter().any(|(_, road)| {
+                        thing.clashes_with(
+                            &Oblong {
+                                centre: road.centre,
+                                axis: road.axis,
+                                half: Vec2::new(road.half.x, road.half.y - SIDEWALK_WIDTH),
+                            },
+                            0.0,
+                        )
+                    })
+                })
+            })
+        })
+    }
+}
+
 fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>> {
     let mut filed: HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>> =
         HashMap::default();

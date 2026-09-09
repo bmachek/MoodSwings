@@ -402,7 +402,7 @@ const SIGNAL_SET_BACK: f32 = 0.62;
 /// and it looks back up the arm at them. Both halves are easy to get a quarter
 /// turn or a whole side out, and neither shows in a still — which is why they
 /// are a function with a test rather than four lines inside a spawn.
-fn signal_pose(at: Vec2, towards: Vec2, width: f32, widest: f32) -> Option<(Vec2, f32)> {
+fn signal_pose(at: Vec2, towards: Vec2, widest: f32) -> Option<(Vec2, f32)> {
     let direction = Dir2::new(towards - at).ok()?;
     // The driver is coming *down* the arm, so their heading is the other way
     // and their right hand is the other way with it.
@@ -414,7 +414,11 @@ fn signal_pose(at: Vec2, towards: Vec2, width: f32, widest: f32) -> Option<(Vec2
         -right
     };
 
-    let foot = at + *direction * (widest * SIGNAL_SET_BACK) + kerb * (width * 0.5 + 0.8);
+    // Both terms off the widest arm. The set-back already was; the lateral
+    // offset was off this arm's own half-width, and at a junction where the
+    // arms leave at anything but a right angle that put a fifth of the town's
+    // signal masts in the crossing carriageway.
+    let foot = at + *direction * (widest * SIGNAL_SET_BACK) + kerb * (widest * 0.5 + 0.8);
     // The lenses look down the head's local +Z, and a yaw of theta sends +Z to
     // (sin, cos) — which has to come out as the direction the traffic arrives
     // *from*, or the signal shows its back to the only people it is for.
@@ -442,8 +446,8 @@ pub fn spawn_junction(
         .map(|(_, width)| *width)
         .fold(0.0f32, f32::max);
 
-    for (towards, width) in approaches {
-        let Some((foot, yaw)) = signal_pose(at, *towards, *width, widest) else {
+    for (towards, _) in approaches {
+        let Some((foot, yaw)) = signal_pose(at, *towards, widest) else {
             continue;
         };
 
@@ -500,6 +504,7 @@ pub fn spawn_junction(
 pub fn spawn_edge(
     commands: &mut Commands,
     assets: &PropAssets,
+    corridors: &super::streetside::Corridors,
     rng: &mut ChaCha8Rng,
     edge: &RoadEdge,
     from: Vec2,
@@ -512,14 +517,29 @@ pub fn spawn_edge(
     let normal = Vec2::new(-direction.y, direction.x);
     let offset = edge.width * 0.5 + SET_BACK;
 
-    let slots = (edge.length / SPACING).floor() as i32;
-    for i in 1..slots {
+    // Walked along the segment rather than counted in whole slots of it. The
+    // third copy of this bug: `length / SPACING` floored and iterated from one
+    // gives nothing at all on any edge under twice the spacing, and Landshut's
+    // median segment is 13.7 m against a 14 m spacing — so most of the town had
+    // no bin, no bollard, no meter and no bench, and nothing said so.
+    // `vegetation` was fixed for this and neither this file nor `streetlights`
+    // was.
+    let mut along = (edge.length.min(SPACING) * 0.5).max(1.5);
+    while along < edge.length - 1.0 {
+        let here = along;
+        along += SPACING;
         for side in [-1.0f32, 1.0] {
             if rng.random_range(0.0..1.0) > DENSITY {
                 continue;
             }
             let jitter = rng.random_range(-2.5..2.5);
-            let at = from + *direction * (i as f32 * SPACING + jitter) + normal * offset * side;
+            let at = from + *direction * (here + jitter) + normal * offset * side;
+            // Not on somebody else's tarmac. The jitter alone can walk a bin
+            // into a crossing street, and at a real town's angles the street
+            // behind this one is at no angle in particular.
+            if corridors.in_the_road(at, 0.5) {
+                continue;
+            }
 
             let prop = Prop::pick(rng);
             let (mesh, material, height) = assets.parts(prop);
@@ -627,7 +647,7 @@ mod tests {
     #[test]
     fn a_signal_looks_back_at_the_traffic_it_is_for() {
         // An arm running east out of the origin: traffic arrives heading west.
-        let (foot, yaw) = signal_pose(Vec2::ZERO, Vec2::new(60.0, 0.0), 12.0, 17.0)
+        let (foot, yaw) = signal_pose(Vec2::ZERO, Vec2::new(60.0, 0.0), 17.0)
             .expect("an arm with a length");
 
         assert!(
@@ -645,13 +665,22 @@ mod tests {
             crate::ai::steering::RIGHT_HAND_TRAFFIC,
             "the signal at {foot} is on the wrong kerb for this side of the road"
         );
-        // Clear of the widest carriageway meeting here, not standing in it.
+        // Clear of the widest carriageway meeting here, not standing in it —
+        // in both directions. The set-back along the arm always came off the
+        // widest arm; the offset across it came off this arm's own half-width,
+        // so at a junction of a narrow arm and a wide one the mast stood in the
+        // wide one. A fifth of the town's signals did.
         assert!(
             foot.x > 17.0 * 0.5,
             "the signal at {foot} is inside the junction"
         );
+        assert!(
+            foot.y.abs() > 17.0 * 0.5,
+            "the signal at {foot} is in the crossing carriageway, \
+             which is 17m wide and not the 12m arm it stands on"
+        );
 
-        assert!(signal_pose(Vec2::ZERO, Vec2::ZERO, 12.0, 17.0).is_none());
+        assert!(signal_pose(Vec2::ZERO, Vec2::ZERO, 17.0).is_none());
     }
 
     #[test]

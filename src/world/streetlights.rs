@@ -43,7 +43,14 @@ const ARM_RADIUS: f32 = 0.055;
 /// not whether the post was anywhere sane.
 const KERB_SET_BACK: f32 = 0.7;
 /// Distance between lamp posts along a street.
-const LAMP_SPACING: f32 = 32.0;
+const LAMP_SPACING: f32 = 28.0;
+
+/// How much room a post needs to not be standing in a road, in metres.
+///
+/// The column is a hand's width; this is a little more, so a post is rejected
+/// while it is still obviously in the carriageway rather than when its centre
+/// has crossed the kerb line.
+const LAMP_GIRTH: f32 = 0.45;
 /// Sodium-vapour warmth.
 const LAMP_COLOR: Color = Color::srgb(1.0, 0.82, 0.55);
 /// How finely the lamp's glass globe is drawn.
@@ -134,7 +141,7 @@ pub struct LampPost {
 pub struct LampPosts(pub Vec<LampPost>);
 
 impl LampPosts {
-    pub fn build(city: &City) -> Self {
+    pub fn build(city: &City, corridors: &super::streetside::Corridors) -> Self {
         let graph = &city.graph;
         let mut posts = Vec::new();
 
@@ -148,12 +155,36 @@ impl LampPosts {
             // so half of it is the kerb and anything less is the road.
             let offset = edge.width * 0.5 + KERB_SET_BACK;
 
-            let count = (edge.length / LAMP_SPACING).floor() as i32;
-            for i in 1..count {
-                let along = a + *dir * (i as f32 * LAMP_SPACING);
-                let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+            // Walked along the segment rather than counted in whole slots of
+            // it, which is the fix `vegetation` already carries and this file
+            // never got. `length / SPACING` floored and iterated from one gives
+            // nothing at all on any edge under twice the spacing, and Landshut's
+            // median segment is 13.7 m against a 32 m spacing: only 98 of its
+            // 2634 segments are long enough to be given a single lamp, so the
+            // whole town was lit by 153 posts over 53 km of street. One lamp
+            // every three hundred and fifty metres, and the Altstadt dark.
+            let mut along = (edge.length.min(LAMP_SPACING) * 0.5).max(1.5);
+            let mut slot = 0usize;
+            while along < edge.length - 1.0 {
+                // Alternating kerbs, which is how a street is really lit: the
+                // pools overlap down the middle rather than in two rows.
+                let first = if slot.is_multiple_of(2) { 1.0 } else { -1.0 };
+                let at = a + *dir * along;
+                slot += 1;
+                along += LAMP_SPACING;
+                // A lamp post is a thing standing up, and a thing standing up
+                // in a carriageway is the complaint this was written for. Try
+                // the other kerb before giving the slot away — at a junction it
+                // is usually only one side that is another street's tarmac.
+                let Some((foot, side)) = [first, -first]
+                    .into_iter()
+                    .map(|side| (at + normal * offset * side, side))
+                    .find(|(foot, _)| !corridors.in_the_road(*foot, LAMP_GIRTH))
+                else {
+                    continue;
+                };
                 posts.push(LampPost {
-                    foot: along + normal * offset * side,
+                    foot,
                     // Whichever kerb it stands on, the arm reaches the other
                     // way — out over the carriageway.
                     inward: -normal * side,
@@ -373,6 +404,7 @@ fn reposition_lamps(
     time: Res<Time>,
     mut timer: ResMut<LampTimer>,
     city: Option<Res<City>>,
+    corridors: Option<Res<super::streetside::Corridors>>,
     mut posts: ResMut<LampPosts>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
     mut lamps: Query<&mut Transform, With<StreetLight>>,
@@ -380,11 +412,11 @@ fn reposition_lamps(
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let (Some(city), Ok(camera)) = (city, cameras.single()) else {
+    let (Some(city), Some(corridors), Ok(camera)) = (city, corridors, cameras.single()) else {
         return;
     };
     if posts.0.is_empty() {
-        *posts = LampPosts::build(&city);
+        *posts = LampPosts::build(&city, &corridors);
         info!("{} lamp posts along the street network", posts.0.len());
     }
 

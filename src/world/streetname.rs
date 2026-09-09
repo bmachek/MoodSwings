@@ -134,10 +134,12 @@ pub fn build_assets(
 pub fn spawn(
     commands: &mut Commands,
     kit: &StreetNameKit,
+    corridors: &super::streetside::Corridors,
     name: usize,
     at: Vec2,
     towards: Vec2,
     width: f32,
+    widest: f32,
     chunk: IVec2,
     range: f32,
 ) {
@@ -150,8 +152,22 @@ pub fn spawn(
     let normal = Vec2::new(-direction.y, direction.x);
     // On the pavement, a little way down the street from the middle of the
     // junction, so the post is not standing in the crossing.
-    let foot =
-        at + *direction * (width * 0.5 + 2.0) + normal * (width * 0.5 + SIDEWALK_WIDTH * 0.5);
+    //
+    // The set-back is off the *widest* arm at the junction rather than off this
+    // one, which is what it should always have been: a narrow lane meeting a
+    // market street set its post back by half its own width and planted it in
+    // the middle of the street it was naming. And it is checked rather than
+    // trusted — the arms at a real junction leave at every angle, so no formula
+    // in one arm's frame can be right about all of them. Walk further out until
+    // the ground is not somebody's carriageway; give the plate up rather than
+    // stand it in the road.
+    let sideways = normal * (width * 0.5 + SIDEWALK_WIDTH * 0.5);
+    let Some(foot) = (0..4)
+        .map(|step| at + *direction * (widest * 0.5 + 2.0 + step as f32 * 2.5) + sideways)
+        .find(|foot| !corridors.in_the_road(*foot, 0.4))
+    else {
+        return;
+    };
     // Facing back at the junction: `+Z` towards where somebody is coming from.
     let yaw = (-direction.x).atan2(-direction.y);
     let visibility = VisibilityRange {

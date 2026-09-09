@@ -42,6 +42,9 @@ use super::weather::Weather;
 const SPACING: f32 = 17.0;
 /// How far in from the kerb line a trunk stands.
 const SET_BACK: f32 = 1.15;
+
+/// How much room a trunk needs to not be standing in a road, in metres.
+const TRUNK_ROOM: f32 = 0.55;
 /// Fraction of streets that are planted at all.
 ///
 /// Not all of them, and not at random per tree: a street either is an avenue or
@@ -734,6 +737,7 @@ fn plant(
 pub fn spawn_edge(
     commands: &mut Commands,
     kit: &FoliageKit,
+    corridors: &super::streetside::Corridors,
     rng: &mut ChaCha8Rng,
     edge: &RoadEdge,
     // Which named street this segment belongs to, if the extract said. A whole
@@ -776,6 +780,14 @@ pub fn spawn_edge(
             }
             let jitter = rng.random_range(-1.1..1.1);
             let at = from + *direction * (along + jitter) + normal * offset * side;
+            // The density was fixed here and the ground was not: simulated over
+            // the committed extract, 536 of 7350 trunks stood in another
+            // street's carriageway. A town read off a map has streets behind
+            // streets at every angle, and a metre of jitter is enough to walk
+            // a plane tree into one.
+            if corridors.in_the_road(at, TRUNK_ROOM) {
+                continue;
+            }
             plant(
                 commands,
                 kit,

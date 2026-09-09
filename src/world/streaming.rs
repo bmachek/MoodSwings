@@ -182,6 +182,8 @@ pub struct StreetKits<'w> {
     ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
     plates: Res<'w, crate::world::streetname::StreetNameKit>,
     signs: Res<'w, crate::world::atlas::Signposts>,
+    /// Where the tarmac is, so nothing upright is stood on it.
+    corridors: Res<'w, crate::world::streetside::Corridors>,
 }
 
 pub fn update_streaming(
@@ -310,6 +312,7 @@ pub fn update_streaming(
                 super::props::spawn_edge(
                     &mut commands,
                     &street.props,
+                    &street.corridors,
                     &mut rng,
                     edge,
                     from,
@@ -319,6 +322,7 @@ pub fn update_streaming(
                 super::vegetation::spawn_edge(
                     &mut commands,
                     &street.foliage,
+                    &street.corridors,
                     &mut planting,
                     edge,
                     // Which named street this is, so a whole street is an
@@ -419,13 +423,27 @@ pub fn update_streaming(
                         if city.graph.node(node).edges.len() < 3 {
                             continue;
                         }
+                        // The widest arm at this junction, not this one. A
+                        // 7.5 m lane meeting a 13 m market street set its post
+                        // back 5.75 m from the node while the crossing tarmac
+                        // reached 6.55, and stood it in the road: a fifth of
+                        // the town's plates were doing that.
+                        let widest = city
+                            .graph
+                            .node(node)
+                            .edges
+                            .iter()
+                            .map(|arm| city.graph.edge(*arm).width)
+                            .fold(edge.width, f32::max);
                         super::streetname::spawn(
                             &mut commands,
                             &street.plates,
+                            &street.corridors,
                             name,
                             city.graph.node(node).pos,
                             city.graph.node(other).pos,
                             edge.width,
+                            widest,
                             chunk,
                             name_range,
                         );
