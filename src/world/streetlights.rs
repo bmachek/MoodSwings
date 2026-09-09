@@ -27,6 +27,12 @@ const POOL_SIZE: usize = 64;
 const LAMP_HEIGHT: f32 = 7.5;
 /// How far the lamp head reaches out over the road from its column.
 const ARM_REACH: f32 = 1.5;
+/// The lamp's glass globe, in metres.
+const LAMP_GLOBE_RADIUS: f32 = 0.30;
+/// The column and the arm, in metres. Both under 8 cm, which is what decides
+/// how many sides they are drawn with — see [`super::props::cylinder_sides`].
+const COLUMN_RADIUS: f32 = 0.075;
+const ARM_RADIUS: f32 = 0.055;
 /// How far back from the kerb line the column stands, on the pavement.
 ///
 /// A lamp post is street furniture, and street furniture stands on the
@@ -40,6 +46,17 @@ const KERB_SET_BACK: f32 = 0.7;
 const LAMP_SPACING: f32 = 32.0;
 /// Sodium-vapour warmth.
 const LAMP_COLOR: Color = Color::srgb(1.0, 0.82, 0.55);
+/// How finely the lamp's glass globe is drawn.
+///
+/// An icosphere is `20 * (subdivisions + 1)^2` triangles, so Bevy's default of
+/// five is 720 of them on a 30 cm ball hanging seven and a half metres up, in a
+/// pool of sixty-four of them: 46 000 triangles of street lighting, most of it
+/// on a shape that is a blown-out white blob in every frame it appears in — the
+/// emissive is thirteen times the white point and it blooms (see
+/// `LAMP_ENVELOPE`), so the silhouette is the *bloom*, not the mesh. Two
+/// subdivisions is 180, and the globe is still round enough that its unlit
+/// daytime form reads as a lantern rather than as a die.
+const LAMP_GLOBE_SUBDIVISIONS: u32 = 2;
 /// The half-angle of the lamp's beam, in radians, and where it starts to fall
 /// off.
 ///
@@ -181,7 +198,12 @@ fn spawn_pool(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // A visible glowing head, so the light has an apparent source.
-    let head = meshes.add(Sphere::new(0.30));
+    let head = meshes.add(
+        Sphere::new(LAMP_GLOBE_RADIUS)
+            .mesh()
+            .ico(LAMP_GLOBE_SUBDIVISIONS)
+            .expect("an icosphere at two subdivisions"),
+    );
     let glass = materials.add(StandardMaterial {
         base_color: LAMP_COLOR,
         emissive: LinearRgba::BLACK,
@@ -193,8 +215,15 @@ fn spawn_pool(
     // spheres floating at seven and a half metres, which reads as a bug at
     // dusk and as nothing at all in daylight — the pool of light on the road
     // had no visible cause.
-    let column = meshes.add(Cylinder::new(0.075, LAMP_HEIGHT));
-    let arm = meshes.add(Cylinder::new(0.055, ARM_REACH));
+    //
+    // Both of these are thinner than a wrist, so they go through
+    // `props::cylinder` and come out with six sides — 20 triangles each rather
+    // than the default resolution's 124. Sixty-four lamps were spending 15 800
+    // triangles on two poles whose facets are 7 cm wide at their widest and
+    // sit above head height; the same budget buys a great deal more of the
+    // roundness the buildings were missing.
+    let column = meshes.add(super::props::cylinder(COLUMN_RADIUS, LAMP_HEIGHT));
+    let arm = meshes.add(super::props::cylinder(ARM_RADIUS, ARM_REACH));
     let steel = materials.add(StandardMaterial {
         base_color: Color::srgb(0.20, 0.21, 0.22),
         perceptual_roughness: 0.62,

@@ -26,6 +26,9 @@ const TOWER_SIDE_MAX: f32 = 5.5;
 /// The spire's height as a share of the tower's.
 const SPIRE_SHARE: f32 = 0.55;
 
+/// How many stages a corner buttress steps in over.
+const BUTTRESS_STEPS: u32 = 3;
+
 /// Spawns one church: nave, pitched roof, tower, spire, cross.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
@@ -66,7 +69,7 @@ pub fn spawn(
                  spun: Quat| {
         commands.spawn((
             ChunkOf(chunk),
-            Mesh3d(assets.unit_cube.clone()),
+            Mesh3d(assets.stone_cube.clone()),
             MeshMaterial3d(material),
             Transform::from_translation(place(at))
                 .with_rotation(spin * spun)
@@ -116,20 +119,87 @@ pub fn spawn(
         Quat::IDENTITY,
     );
 
-    // The spire: a four-sided cone, i.e. a pyramid. Visual only — nothing
-    // lands on a spire on purpose, and anything arriving by accident can
-    // meet the tower's box below it.
+    // The spire: an octagonal helm. Visual only — nothing lands on a spire on
+    // purpose, and anything arriving by accident can meet the tower's box
+    // below it.
     let spire_h = tower_h * SPIRE_SHARE;
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.spire()),
         MeshMaterial3d(assets.roof_material(tower_side.max(spire_h))),
         Transform::from_translation(place(Vec3::new(0.0, tower_h + spire_h * 0.5, tower_z)))
-            // A four-sided cone stands with an edge forward; an eighth turn
-            // puts a *face* forward, which is how a spire sits on a tower.
-            .with_rotation(spin * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4))
+            // A cone stands with a vertex forward; half a face turns it so a
+            // *face* looks down the street, which is how a helm sits on a
+            // square tower.
+            .with_rotation(
+                spin * Quat::from_rotation_y(
+                    std::f32::consts::PI / super::buildings::SPIRE_SIDES as f32,
+                ),
+            )
             .with_scale(Vec3::new(tower_side * 0.72, spire_h, tower_side * 0.72)),
     ));
+
+    // Buttresses: four stepped piers on the tower's corners, each stepping in
+    // twice on its way up. A tower this tall with nothing on its corners is a
+    // chimney, and it is the one building in the town whose corners are looked
+    // at from four hundred metres — the whole reason `CityStyle` names a real
+    // town is the church at the end of its Altstadt.
+    //
+    // Stepped rather than tapered because a buttress is *courses* of stone,
+    // and three scaled boxes say that in twelve triangles apiece where a taper
+    // would need a mesh of its own.
+    let pier = tower_side * 0.22;
+    for step in 0..BUTTRESS_STEPS {
+        let share = 1.0 - step as f32 / BUTTRESS_STEPS as f32;
+        let stage = tower_h * share * 0.86;
+        let out = pier * (1.0 - step as f32 * 0.24);
+        for (sx, sz) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            solid(
+                commands,
+                assets.concrete(),
+                Vec3::new(
+                    sx * (tower_side * 0.5 + out * 0.5 - 0.08),
+                    stage * 0.5,
+                    tower_z + sz * (tower_side * 0.5 + out * 0.5 - 0.08),
+                ),
+                Vec3::new(out * 2.0, stage, out * 2.0),
+                Quat::IDENTITY,
+            );
+        }
+    }
+    // And the string course the helm sits on, which is what stops the spire
+    // reading as a party hat balanced on a post.
+    solid(
+        commands,
+        assets.concrete(),
+        Vec3::new(0.0, tower_h - 0.18, tower_z),
+        Vec3::new(tower_side * 1.16, 0.36, tower_side * 1.16),
+        Quat::IDENTITY,
+    );
+    // Two tall louvre openings per face of the belfry, in the same shadow the
+    // doorway is painted with.
+    let louvre = tower_h * 0.07;
+    for (dx, dz, turn) in [
+        (0.0f32, 1.0f32, 0.0f32),
+        (0.0, -1.0, 0.0),
+        (1.0, 0.0, std::f32::consts::FRAC_PI_2),
+        (-1.0, 0.0, std::f32::consts::FRAC_PI_2),
+    ] {
+        for side in [-1.0f32, 1.0] {
+            let along = Vec3::new(-dz, 0.0, dx) * (tower_side * 0.20 * side);
+            solid(
+                commands,
+                assets.roof_material(2.0),
+                Vec3::new(
+                    dx * (tower_side * 0.5 + 0.03),
+                    tower_h - 0.5 - louvre,
+                    tower_z + dz * (tower_side * 0.5 + 0.03),
+                ) + along,
+                Vec3::new(tower_side * 0.24, louvre * 2.0, 0.08),
+                Quat::from_rotation_y(turn),
+            );
+        }
+    }
 
     // The cross: two slim bars, proud of the spire's tip — scaled up on
     // the cathedral, where a parish cross would vanish at that altitude.
@@ -147,7 +217,7 @@ pub fn spawn(
     ] {
         commands.spawn((
             ChunkOf(chunk),
-            Mesh3d(assets.unit_cube.clone()),
+            Mesh3d(assets.stone_cube.clone()),
             MeshMaterial3d(assets.concrete()),
             Transform::from_translation(place(at))
                 .with_rotation(spin)

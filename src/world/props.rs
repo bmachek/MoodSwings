@@ -40,6 +40,67 @@ use super::roadgraph::RoadEdge;
 /// against a number somebody typed twice.
 pub const HYDRANT_SHEARS_AT: f32 = 5.5;
 
+/// How many sides a drawn cylinder gets, from the radius it is drawn at.
+///
+/// Everything round in the street kit used to take Bevy's default resolution of
+/// 32, which is 124 triangles whatever the thing is — a cylinder costs
+/// `4 * sides - 4` here, two per side for the wall and a fan of `sides - 2` per
+/// cap. On the 45 mm sign post that bought a silhouette whose facets are 9 mm
+/// wide, which is a fraction of a pixel from anywhere anyone stands, while the
+/// building behind it was a 12-triangle box with knife-sharp corners. The
+/// budget was being spent on the one object in frame that could not possibly
+/// show it.
+///
+/// What the eye reads is facet *width*, not side count, so the count follows
+/// the radius. The flats that come out run from 4.5 cm on a sign post to
+/// 18 cm on a bin, and 47 cm on the one object big enough to reach the top
+/// band:
+///
+/// * under 8 cm — the 45 mm sign post, the 55 mm lamp arm, the 75 mm lamp
+///   column and signal mast, the 60 mm rooftop aerial: **6 sides**, 20 tris.
+/// * up to 20 cm — the 110 mm bollard, the 160 mm hydrant, the 85 mm signal
+///   lens: **10 sides**, 36 tris.
+/// * up to 60 cm — the 260 mm bin, the 330 mm memorial bollard, the rooftop
+///   vent stacks: **12 sides**, 44 tris.
+/// * larger — rooftop water tanks, anything a person could stand inside:
+///   **16 sides**, 60 tris.
+///
+/// Sixteen is a deliberate ceiling rather than the end of the ramp. The only
+/// things up there are water tanks, which live behind a parapet and stop being
+/// drawn at 420 m (`rooftop::CLUTTER_RANGE`), so their 47 cm flats are read
+/// from at least twenty metres away and through a silhouette that is mostly
+/// parapet. Twenty-four sides would halve that and cost 92 triangles apiece on
+/// the one piece of clutter nobody stands next to.
+///
+/// Rejected: scaling continuously with the radius. It reads no better, and it
+/// makes the mesh count unbounded in a module whose whole bargain is one mesh
+/// per kind shared by the entire city.
+///
+/// Lives here rather than in `world::mesh` because street furniture is where
+/// the problem was measured; `statues`, `streetlights` and `rooftop` call in.
+pub fn cylinder_sides(radius: f32) -> u32 {
+    if radius < 0.08 {
+        6
+    } else if radius <= 0.20 {
+        10
+    } else if radius <= 0.60 {
+        12
+    } else {
+        16
+    }
+}
+
+/// A cylinder at a resolution its radius can actually show.
+///
+/// The one place `Cylinder::mesh()` is allowed to be called in the street kit,
+/// so that no future addition can quietly take the default 32 again.
+pub fn cylinder(radius: f32, height: f32) -> Mesh {
+    Cylinder::new(radius, height)
+        .mesh()
+        .resolution(cylinder_sides(radius))
+        .build()
+}
+
 /// Metres between chances to place something on a kerb.
 const SPACING: f32 = 14.0;
 /// How many of those chances actually produce a prop.
@@ -229,17 +290,17 @@ pub fn build_assets(
 ) -> PropAssets {
     PropAssets {
         bin: (
-            meshes.add(Cylinder::new(0.26, 0.95)),
+            meshes.add(cylinder(0.26, 0.95)),
             materials.add(painted_metal(Color::srgb(0.17, 0.20, 0.18), 0.72)),
             0.95,
         ),
         bollard: (
-            meshes.add(Cylinder::new(0.11, 0.95)),
+            meshes.add(cylinder(0.11, 0.95)),
             materials.add(painted_metal(Color::srgb(0.12, 0.13, 0.15), 0.55)),
             0.95,
         ),
         hydrant: (
-            meshes.add(Cylinder::new(0.16, 0.72)),
+            meshes.add(cylinder(0.16, 0.72)),
             materials.add(painted_metal(Color::srgb(0.60, 0.10, 0.09), 0.62)),
             0.72,
         ),
@@ -249,7 +310,7 @@ pub fn build_assets(
             1.25,
         ),
         sign_post: (
-            meshes.add(Cylinder::new(0.045, 2.35)),
+            meshes.add(cylinder(0.045, 2.35)),
             materials.add(painted_metal(Color::srgb(0.55, 0.56, 0.58), 0.45)),
             2.35,
         ),
@@ -297,7 +358,7 @@ pub fn build_assets(
             2.42,
         ),
         signal_post: (
-            meshes.add(Cylinder::new(0.075, SIGNAL_HEIGHT)),
+            meshes.add(cylinder(0.075, SIGNAL_HEIGHT)),
             materials.add(painted_metal(Color::srgb(0.17, 0.18, 0.19), 0.50)),
             SIGNAL_HEIGHT,
         ),
@@ -316,7 +377,7 @@ pub fn build_assets(
         ]
         .map(|color| {
             (
-                meshes.add(Cylinder::new(0.085, 0.045)),
+                meshes.add(cylinder(0.085, 0.045)),
                 materials.add(StandardMaterial {
                     base_color: color,
                     perceptual_roughness: 0.28,
@@ -683,5 +744,83 @@ mod tests {
         assert!(mass(Prop::Bin) < mass(Prop::NewsBox));
         assert!(mass(Prop::NewsBox) < mass(Prop::Bench));
         assert!(mass(Prop::Bench) < mass(Prop::Planter));
+    }
+
+    /// Triangles in a mesh, however it happens to be indexed.
+    fn tris(mesh: &Mesh) -> usize {
+        match mesh.indices() {
+            Some(bevy::mesh::Indices::U16(i)) => i.len() / 3,
+            Some(bevy::mesh::Indices::U32(i)) => i.len() / 3,
+            None => mesh.count_vertices() / 3,
+        }
+    }
+
+    #[test]
+    fn a_post_is_never_drawn_finer_than_it_can_show() {
+        // The rule the whole rebalance rests on: side count follows radius, so
+        // the facet a viewer actually sees stays roughly the same width from
+        // the 45 mm sign post to the 1.2 m water tank. If this inverts, the
+        // budget goes back where the audit found it — 124 triangles on a mast
+        // and 12 on the building behind it.
+        assert!(cylinder_sides(0.045) < cylinder_sides(0.11));
+        assert!(cylinder_sides(0.11) <= cylinder_sides(0.16));
+        assert!(cylinder_sides(0.16) < cylinder_sides(0.26));
+        assert!(cylinder_sides(0.26) < cylinder_sides(1.2));
+        // Nothing coarser than a hexagon: a pentagon post reads as a mistake
+        // rather than as a post.
+        assert!(cylinder_sides(0.001) >= 6);
+        // And nothing anywhere near Bevy's default of 32, which is where the
+        // budget was going.
+        assert!(cylinder_sides(9.0) <= 16);
+
+        // Chord width, which is the thing the rule is actually about: a
+        // 32-sided 45 mm post has 9 mm flats and an eight-sided 1.2 m tank
+        // would have 92 cm ones. Both are wrong. The band table keeps every
+        // piece of street furniture between 4.5 and 18 cm, and only the water
+        // tank — behind a parapet, gone by 420 m — runs out to the ceiling.
+        for radius in [0.045f32, 0.055, 0.075, 0.085, 0.11, 0.16, 0.26, 0.33, 0.35] {
+            let sides = cylinder_sides(radius) as f32;
+            let chord = 2.0 * radius * (std::f32::consts::PI / sides).sin();
+            assert!(
+                (0.03..0.20).contains(&chord),
+                "a {radius} m cylinder at {sides} sides has {chord:.3} m flats"
+            );
+        }
+        let tank = 2.0 * 1.2 * (std::f32::consts::PI / cylinder_sides(1.2) as f32).sin();
+        assert!(tank < 0.50, "even the water tank has {tank:.3} m flats");
+    }
+
+    #[test]
+    fn the_street_kit_costs_less_than_it_did_at_the_default_resolution() {
+        // Six round pieces, all of them previously 124 triangles because
+        // `Cylinder::mesh()` defaults to a resolution of 32. A cylinder is
+        // `4 * sides - 4` triangles here, so this is also a check that the
+        // helper is actually being reached from `build_assets` rather than
+        // sitting unused next to six literal `Cylinder::new`s.
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let assets = build_assets(&mut meshes, &mut materials);
+
+        let round = [
+            &assets.bin.0,
+            &assets.bollard.0,
+            &assets.hydrant.0,
+            &assets.sign_post.0,
+            &assets.signal_post.0,
+            &assets.signal_lens[0].0,
+        ];
+        let total: usize = round
+            .iter()
+            .map(|handle| tris(meshes.get(*handle).expect("a built mesh")))
+            .sum();
+        assert!(
+            total < 6 * 124,
+            "the round street kit is {total} triangles against {} at the default",
+            6 * 124
+        );
+        for handle in round {
+            let count = tris(meshes.get(handle).expect("a built mesh"));
+            assert!(count <= 44, "one piece of street furniture costs {count}");
+        }
     }
 }

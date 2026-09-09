@@ -52,8 +52,42 @@ const HEAD_SIZE: u32 = 256;
 /// The HUD portrait shows only the face, so it needs far less.
 const PORTRAIT_SIZE: u32 = 96;
 
-const SECTORS: u32 = 32;
-const STACKS: u32 = 18;
+/// How the head sphere is divided: meridians round it, and rows of quads from
+/// pole to pole.
+///
+/// It was left at Bevy's `uv(32, 18)` default, which is 1088 triangles — the
+/// single most expensive mesh on a citizen, and more than the four limbs now
+/// cost between them. A head is 13 cm across: at twenty meridians a facet
+/// spans 18° and sags 1.6 mm off the true sphere, at twelve stacks 15° and
+/// 1.1 mm, and the clearcoat over the top is what sells the roundness anyway.
+/// `uv(20, 12)` is 440 triangles.
+///
+/// The count is otherwise free to move, and deliberately so: [`FACE_U`] is a
+/// *fraction* of the way round, derived from the sphere's winding rather than
+/// from any particular vertex, and [`wrapped`] paints the face into the
+/// texture, not into the mesh. The two divisibility rules below are the whole
+/// of what the face asks of the tessellation, and they are asserted rather
+/// than remembered.
+const SECTORS: u32 = 20;
+const STACKS: u32 = 12;
+
+// A multiple of four puts a meridian exactly on FACE_U = 0.25, so the face is
+// tessellated symmetrically about its own centre line rather than with one eye
+// straddling a seam and the other not; an even number of stacks puts a ring of
+// vertices on the equator, which is where the face's y = 0 lands. Neither is
+// load-bearing for correctness — the texture would still map — but both are
+// free, and getting them wrong is the sort of asymmetry that reads as a
+// wonky face without ever looking like a bug.
+const _: () = {
+    assert!(
+        SECTORS.is_multiple_of(4),
+        "the face's meridian no longer lands on a vertex column"
+    );
+    assert!(
+        STACKS.is_multiple_of(2),
+        "the face's equator no longer lands on a vertex ring"
+    );
+};
 
 /// How wide a feature edge is ramped, in face units. Below about a texel this
 /// starts to alias; well above it the face turns to fog.
@@ -318,7 +352,13 @@ pub fn level_of(mood: f32) -> usize {
 
 // ------------------------------------------------------------- the assets ---
 
-/// The head mesh: poles standing up on ±Y, face round at [`FACE_U`].
+/// The head mesh: poles standing up on ±Y, face round at [`FACE_U`], divided
+/// [`SECTORS`] by [`STACKS`].
+///
+/// Still a UV sphere and not an icosphere, whatever the triangle budget says:
+/// the face is painted into these UVs, and an icosphere's seams run wherever
+/// the subdivision put them — which would drag the eyes off the front of the
+/// head and scatter the mouth across three charts.
 pub fn head_mesh(radius: f32) -> Mesh {
     Sphere::new(radius)
         .mesh()

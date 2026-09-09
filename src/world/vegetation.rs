@@ -85,8 +85,21 @@ const PARK_DENSITY: f32 = 0.55;
 /// How far away foliage stops being drawn, before `lod_scale`.
 ///
 /// Further than street furniture: a plane tree is six metres across and reads
-/// as a shape on the street long after a bollard has stopped being a pixel.
-pub const RANGE: f32 = 500.0;
+/// as a shape on the street long after a bollard has stopped being a pixel. But
+/// no longer five hundred metres, and the hundred that came off paid for the
+/// trunk and the crown getting rounder.
+///
+/// Trees scatter over the ground, so how many are drawn goes as the square of
+/// this: the ring between four hundred metres and five holds 36% of every tree
+/// in view. Each of those is about twenty pixels tall on a 1080-line frame, and
+/// each is drawn at full mesh resolution, because a tree has no second LOD —
+/// there is one trunk mesh and one crown mesh per species and that is what gets
+/// instanced at every distance. Losing the ring is 0.64 of the trees; the
+/// rounder trunk and the finer crown are 1.62 of the triangles; 0.64 × 1.62 is
+/// 1.04, so the whole change is very nearly triangle-neutral and every triangle
+/// it moved went from something nobody can resolve to something the player
+/// walks past at arm's length.
+pub const RANGE: f32 = 400.0;
 
 /// Wind speed, in metres per second, at which a tree leans as far as it is
 /// going to. Above this it thrashes rather than leans, and thrashing is not
@@ -372,9 +385,11 @@ fn leaves(
         // Note what this quietly does to the pipeline: transmission has nowhere
         // to live in the g-buffer, so Bevy reports any material asking for it as
         // forward-shaded whatever the default renderer method says. Every tree
-        // in the city therefore leaves the deferred path. That is the right
-        // trade — a crown is a few hundred triangles and there are not many
-        // lights on a tree — but it is not obvious from here.
+        // in the city therefore leaves the deferred path. That is still the
+        // right trade, but not for the reason first written here: a crown is
+        // 1280 to 1920 triangles now, not "a few hundred", and forward shading
+        // is paid per fragment and per light rather than per triangle. What
+        // makes it affordable is that there are not many lights on a tree.
         diffuse_transmission: 0.80,
         thickness: 0.35,
         // Not matte. A leaf has a cuticle on it and a canopy in low sun has a
@@ -456,13 +471,58 @@ pub fn build_assets(
 const BOUGH_THICK: f32 = 0.40;
 const BOUGH_REACH: f32 = 0.78;
 
+/// Sides on the prism a trunk is drawn as.
+///
+/// Every limb on the tree used to be five, and the justification written here
+/// was that a branch is three pixels wide at the distance anybody looks at it.
+/// That is true of a branch and it is false of a trunk. A street tree stands
+/// 1.15 m in from the kerb of a pavement the player walks down, and a 0.24 m
+/// pentagon seen from two metres shows three flat facets and two hard vertical
+/// creases running its whole height, seventy-two degrees apart, immediately
+/// under a crown that is smooth-shaded. That contrast — a faceted post holding
+/// up a round thing — is most of what "eckig" meant.
+///
+/// Ten puts the creases thirty-six degrees apart and the flat of a facet 12 mm
+/// inside the circle it stands in for, under half a degree of silhouette wobble
+/// at two metres, which is finer than the bark texture's own grain. Nine would
+/// have done and ten is an even number of facets, so the trunk has a facet
+/// facing the viewer rather than a crease whichever way it was planted. It
+/// costs 20 triangles per tree over the pentagon, on the one part of a tree
+/// that is ever looked at closely.
+const TRUNK_SIDES: u32 = 10;
+/// Sides on a bough.
+///
+/// A bough leaves the trunk at 0.40 of its radius — 96 mm on a plane tree — at
+/// three and a half metres up, and runs into the leaves before it ends. Six is
+/// enough that it is not a visible prism at head height, and there are up to
+/// six boughs to one trunk, so this is the number that multiplies.
+const BOUGH_SIDES: u32 = 6;
+/// Sides on a sub-branch.
+///
+/// Still five, because the original argument was always about these: 53 mm
+/// thick, thrown out sideways, and swallowed by the crown along most of their
+/// length. There are as many of them as there are boughs.
+const BRANCH_SIDES: u32 = 5;
+
+/// The ordering is the point of having three numbers, so it is checked where a
+/// tidy-up would meet it rather than in a test that has to be run. A trunk is
+/// walked past at arm's length, a bough is at head height with leaves round it,
+/// a sub-branch is inside them; collapse the three back to one and the
+/// pentagonal trunk is back on the pavement. The even count is so that the
+/// trunk turns a facet towards the viewer rather than a crease, whichever way
+/// the tree happened to be planted.
+const _: () = assert!(
+    TRUNK_SIDES > BOUGH_SIDES && BOUGH_SIDES > BRANCH_SIDES && TRUNK_SIDES.is_multiple_of(2),
+    "a trunk has to be rounder, and evenly so, than the branches it carries"
+);
+
 /// A tapered limb between two points: the one primitive a tree is made of.
 ///
 /// Two stacked cylinders rather than one, because a branch that does not get
 /// thinner is a pipe. Bevy has no frustum in its shape kit and one is not worth
-/// hand-rolling for a shape that is three pixels wide at the distance anybody
-/// looks at it.
-fn limb(from: Vec3, to: Vec3, radius: f32) -> Mesh {
+/// hand-rolling when the taper can be had by stacking two prisms of the same
+/// `sides`.
+fn limb(from: Vec3, to: Vec3, radius: f32, sides: u32) -> Mesh {
     let axis = to - from;
     let length = axis.length().max(1e-3);
     let along = axis / length;
@@ -471,7 +531,7 @@ fn limb(from: Vec3, to: Vec3, radius: f32) -> Mesh {
     let piece = |at: f32, span: f32, radius: f32| {
         Cylinder::new(radius, length * span)
             .mesh()
-            .resolution(5)
+            .resolution(sides)
             .build()
             .rotated_by(turn)
             .translated_by(from + axis * (at + span * 0.5))
@@ -497,7 +557,7 @@ fn limb(from: Vec3, to: Vec3, radius: f32) -> Mesh {
 /// lollipop from underneath, which is the angle a street tree is most often
 /// seen from.
 fn timber(species: Species, radius: f32, height: f32) -> Mesh {
-    let mut mesh = limb(Vec3::ZERO, Vec3::Y * height, radius);
+    let mut mesh = limb(Vec3::ZERO, Vec3::Y * height, radius, TRUNK_SIDES);
 
     // Out of the top of the trunk, one to each blob of crown, stopping well
     // short of its middle so the leaves swallow the end.
@@ -506,7 +566,7 @@ fn timber(species: Species, radius: f32, height: f32) -> Mesh {
         let (_, clear) = species.trunk();
         let target = Vec3::new(centre.x, clear + centre.y, centre.z);
         let out = fork + (target - fork) * BOUGH_REACH;
-        if let Err(error) = mesh.merge(&limb(fork, out, radius * BOUGH_THICK)) {
+        if let Err(error) = mesh.merge(&limb(fork, out, radius * BOUGH_THICK, BOUGH_SIDES)) {
             warn!("a {species:?} lost a bough: {error}");
         }
         // And one sub-branch off it, thrown to the side, which is what stops a
@@ -514,7 +574,8 @@ fn timber(species: Species, radius: f32, height: f32) -> Mesh {
         let aside = out
             + (target - fork).normalize_or_zero() * (blob * 0.35)
             + Vec3::new(centre.z, blob * 0.30, -centre.x) * 0.28;
-        if let Err(error) = mesh.merge(&limb(out, aside, radius * BOUGH_THICK * 0.55)) {
+        if let Err(error) = mesh.merge(&limb(out, aside, radius * BOUGH_THICK * 0.55, BRANCH_SIDES))
+        {
             warn!("a {species:?} lost a branch: {error}");
         }
     }
@@ -531,12 +592,41 @@ fn timber(species: Species, radius: f32, height: f32) -> Mesh {
 /// sky. Much more and a plane tree turns into a cauliflower.
 const CROWN_LUMP: f32 = 0.17;
 
-/// Merges a species' blobs into one mesh.
+/// The quickest ripple in a crown blob, in radians per unit of the unit sphere.
 ///
-/// Low subdivision on purpose. A crown is read as a silhouette against the sky
-/// and as a shadow on the pavement; smoothing it costs triangles on every tree
-/// in the city and buys a rounder edge nobody looks at — and now that the
-/// silhouette is deliberately lumpy, a rounder edge is not even wanted.
+/// The six sine terms in [`ball`] run from 2.7 to 8.7. This is the fastest of
+/// them, and therefore the one that decides how finely a blob has to be
+/// subdivided before the displacement means anything at all — hoisted out of
+/// `ball` so that [`CROWN_SUBDIVISIONS`] and the test that guards it can name
+/// the number they are reasoning about instead of copying it.
+const CROWN_FINEST: f32 = 8.7;
+
+/// How finely a crown blob is subdivided.
+///
+/// This was two, on the grounds that a crown is read as a silhouette and as a
+/// shadow, that smoothing it buys a rounder edge nobody looks at, and that a
+/// deliberately lumpy silhouette does not want one anyway. The last two thirds
+/// of that still stand. The mistake was treating the subdivision as a smoothness
+/// dial when it is the *sampling rate of the lumps*: [`ball`] displaces
+/// vertices, so a facet the noise never gets a vertex inside is a facet the
+/// noise cannot bend.
+///
+/// Bevy's icosphere is `20 * (n + 1)^2` triangles, so `ico(2)` is 180 facets
+/// over a whole sphere — about twenty-three degrees between neighbours — while
+/// the quickest ripple in `ball` runs at [`CROWN_FINEST`], 8.7 radians per unit,
+/// which turns over every twenty-one degrees. The mesh was sampling below
+/// Nyquist: what came out was not a lumpy crown at `CROWN_LUMP` amplitude, it
+/// was a sphere with a handful of vertices pulled off it at whatever phase they
+/// happened to land on, which is why raising `CROWN_LUMP` had never made the
+/// outline read as foliage. `ico(3)` is 320 facets, seventeen degrees apart,
+/// which is two and a half samples per ripple and the least that makes the
+/// shape the amplitude was tuned for.
+///
+/// 140 triangles a blob: 560 more on a cherry, 840 on a plane. Paid for by
+/// `RANGE`.
+const CROWN_SUBDIVISIONS: u32 = 3;
+
+/// Merges a species' blobs into one mesh.
 fn crown_mesh(species: Species) -> Mesh {
     let mut blobs = species.crown().iter().enumerate();
     let (_, (first, radius)) = blobs.next().expect("every species has a crown");
@@ -558,10 +648,16 @@ fn crown_mesh(species: Species) -> Mesh {
 /// determinism scheme, and it is continuous over the sphere, so the seam an
 /// icosphere's UVs have does not become a seam in the shape as well.
 fn ball(radius: f32, variant: u32) -> Mesh {
+    // The fallback is matched to the icosphere rather than left at the coarse
+    // `uv(11, 8)` it was: a UV sphere is `2 * longitudes * (latitudes - 1)`
+    // triangles, so 14 by 12 is 308 against `ico(3)`'s 320. It has never fired —
+    // Bevy only refuses an icosphere above 80 subdivisions — but a fallback that
+    // silently halves the sampling rate is not a fallback, it is a bug waiting
+    // for the day the limit moves.
     let mut mesh = Sphere::new(radius)
         .mesh()
-        .ico(2)
-        .unwrap_or_else(|_| Sphere::new(radius).mesh().uv(11, 8));
+        .ico(CROWN_SUBDIVISIONS)
+        .unwrap_or_else(|_| Sphere::new(radius).mesh().uv(14, 12));
 
     let turn = variant as f32 * 1.7;
     if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
@@ -574,7 +670,7 @@ fn ball(radius: f32, variant: u32) -> Mesh {
                 * (unit.z * 3.5 + turn).sin();
             let fine = (unit.x * 7.3 - turn).sin()
                 * (unit.y * 6.1 + turn).sin()
-                * (unit.z * 8.7 - turn).sin();
+                * (unit.z * CROWN_FINEST - turn).sin();
             let lump = 1.0 + (broad * 0.72 + fine * 0.28) * CROWN_LUMP;
             *position = (unit * radius * lump).to_array();
         }
@@ -979,6 +1075,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The ordering of the three side counts is a `const` assertion above;
+    /// what needs a test is that ten sides is actually enough for the trunk
+    /// radius every species is given, because those are four separate numbers
+    /// and a new species would come with a fifth.
+    #[test]
+    fn a_trunk_is_round_enough_to_stand_next_to() {
+        for species in Species::ALL {
+            let (radius, _) = species.trunk();
+            // Sagitta: how far the flat of one facet falls inside the circle it
+            // stands in for, which is the silhouette error at the edge of the
+            // trunk. Fifteen millimetres on a trunk seen from two metres is
+            // under half a degree, finer than the grain of the bark texture
+            // drawn over it.
+            let flat = radius * (1.0 - (std::f32::consts::PI / TRUNK_SIDES as f32).cos());
+            assert!(
+                flat < 0.015,
+                "{species:?}'s trunk is {:.0} mm off round at every facet",
+                flat * 1000.0
+            );
+        }
+    }
+
+    /// The lumps in a crown are displaced *vertices*, so the subdivision is the
+    /// rate at which the noise gets sampled and not a smoothness dial. Below
+    /// two samples to a ripple the mesh cannot make the shape at all, whatever
+    /// `CROWN_LUMP` is set to — which is the state `ico(2)` was in.
+    #[test]
+    fn a_crown_is_subdivided_finely_enough_to_show_its_lumps() {
+        // Bevy's icosphere is `20 * (n + 1)^2` triangles. Spread over the 4π
+        // steradians of a sphere and taken as equilateral, that gives the angle
+        // between neighbouring vertices.
+        let facets = 20.0 * (CROWN_SUBDIVISIONS as f32 + 1.0).powi(2);
+        let solid = 4.0 * std::f32::consts::PI / facets;
+        let spacing = (4.0 * solid / 3.0f32.sqrt()).sqrt();
+        // Crest to trough of the quickest ripple, in the same radians.
+        let feature = std::f32::consts::PI / CROWN_FINEST;
+        assert!(
+            spacing < feature,
+            "a crown samples every {:.0}° and its lumps turn over every {:.0}°",
+            spacing.to_degrees(),
+            feature.to_degrees()
+        );
     }
 
     #[test]

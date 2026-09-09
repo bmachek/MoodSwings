@@ -31,7 +31,11 @@ use super::texture::{byte, encode, fbm, painted_rect, text_band};
 
 /// How far a sign is drawn. Short: the plate is a hand's width tall, and a
 /// name nobody can read is a draw call with no picture in it.
-pub const RANGE: f32 = 75.0;
+///
+/// Short, but not seventy-five metres short: at that range a plate popped in
+/// while the player was already halfway down the street it names, which is the
+/// one moment it has nothing left to tell them.
+pub const RANGE: f32 = 120.0;
 
 /// The plate, in metres. A real one is about this.
 const PLATE: Vec2 = Vec2::new(1.55, 0.30);

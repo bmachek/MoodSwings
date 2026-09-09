@@ -492,6 +492,115 @@ fn rounded_box(size: Vec3) -> Mesh {
     mesh
 }
 
+// --------------------------------------------------- how round is round ----
+//
+// Bevy's primitive defaults are authored for a single hero object sitting in
+// the middle of a scene, and every one of them was left alone here. That put
+// the cast's whole triangle budget into its smoothest, least interesting
+// surfaces: a plain citizen was 8400 triangles, of which 4096 — nearly half —
+// were four featureless tubes, and a further 2160 were three balls under 14 cm
+// across. The buildings behind them are 60-triangle boxes.
+//
+// So each shape below now carries a named resolution with the arithmetic that
+// picked it. The measure throughout is the *sagitta*: how far a flat facet
+// sags away from the true curve, `r · (1 − cos(π/n))` for an n-sided ring of
+// radius r. A millimetre or two on a body part is well under a pixel at the
+// distance a pedestrian is seen, and it is not recovered by the shading
+// either — every one of these meshes is smooth-normalled, so what a coarser
+// ring costs is the silhouette and nothing else.
+
+/// Sides round a limb, and rings over each of its rounded ends.
+///
+/// `Capsule3d`'s default meshing is 32 longitudes by 16 latitudes = 1024
+/// triangles, and four limbs at that rate were 4096 triangles on a figure that
+/// is 40 pixels tall in the shots it actually appears in. At ten sides the
+/// sagitta is 2.8 mm on a 58 mm arm and 3.8 mm on a 78 mm leg; twelve sides
+/// would buy a millimetre of that back for another 24 triangles a limb, and
+/// eight would give up 2 mm more on the leg — the outside of a thigh is the
+/// one place on a figure with a long unbroken highlight down it, so that is
+/// the wrong side to save on. Ten by six is 120 triangles, so the four limbs
+/// cost 480 between them.
+const LIMB_SIDES: u32 = 10;
+/// Rings over a limb's cap. The caps are hemispheres nobody looks at: a
+/// shoulder is inside the coat and a hip is inside the torso, and only the
+/// wrist and the ankle are ever in the open, each with a hand or a shoe
+/// parked on top of it.
+const LIMB_RINGS: u32 = 6;
+
+/// Subdivisions on the round odds and ends — the hands and the cap of hair.
+///
+/// `Sphere::mesh()` defaults to an icosphere at five subdivisions, which is
+/// 720 triangles for a 62 mm hand. Two subdivisions is 180, and its facets
+/// span about 23°, so the sagitta is 1.2 mm on a hand and 2.7 mm on the
+/// 134 mm cap of hair. One subdivision (80 triangles) is where it stops being
+/// free: 6 mm of sag on the hair, and the hair is nothing *but* silhouette —
+/// it is the dark shape that stops a head fading into what is behind it.
+///
+/// The hands are also on [`trimmings_range`], so past 42 m they cost nothing
+/// at all.
+const BLOB_SUBDIVISIONS: u32 = 2;
+
+/// Sides on a wheelchair's drive wheels.
+///
+/// The one round prop in the wardrobe big enough to need them: at 270 mm
+/// radius, sixteen sides sag 5.2 mm, which on a 54 cm wheel is a hair over
+/// 1%. `Cylinder`'s default 32 is 124 triangles and sixteen is 60, and a chair
+/// carries two.
+const WHEEL_SIDES: u32 = 16;
+
+/// Sides on the small round props: ear cups, a paper cup, a camera lens, a
+/// castor. Nothing here is over 85 mm in radius, where eight sides sag 6.5 mm
+/// — and that worst case is a castor sitting 8 cm off the pavement under
+/// somebody who is sitting down. 28 triangles apiece instead of 124.
+const PROP_SIDES: u32 = 8;
+
+/// Sides on the cane. An 18 mm stick: six sides sag 2.3 mm, and there is no
+/// viewing distance at which a walking stick is not a line.
+const STICK_SIDES: u32 = 6;
+
+/// One limb: a capsule long enough to reach from its joint to its end, meshed
+/// at [`LIMB_SIDES`] by [`LIMB_RINGS`] rather than at Bevy's default.
+///
+/// `length` is the whole limb, joint to tip, so the caps are subtracted out of
+/// it — a capsule's `half_length` is the straight part only, and a leg built
+/// without the subtraction is 78 mm too long and stands its owner on tiptoe.
+fn limb_mesh(radius: f32, length: f32) -> Mesh {
+    Capsule3d {
+        radius,
+        half_length: length * 0.5 - radius,
+    }
+    .mesh()
+    .longitudes(LIMB_SIDES)
+    .latitudes(LIMB_RINGS)
+    .build()
+}
+
+/// A hand, or a cap of hair: an icosphere at [`BLOB_SUBDIVISIONS`].
+///
+/// An icosphere rather than a UV sphere because neither of these carries a
+/// texture — both are flat colour — so there is no reason to pay for the
+/// pole-to-pole layout the head needs, and an icosphere spends its triangles
+/// evenly instead of crowding them into two points nobody sees.
+fn blob_mesh(radius: f32) -> Mesh {
+    Sphere::new(radius)
+        .mesh()
+        .ico(BLOB_SUBDIVISIONS)
+        .expect("an icosphere at two subdivisions is well inside Bevy's limit")
+}
+
+/// One round thing the cast carries, at a stated number of sides.
+///
+/// The sides are passed rather than taken from the radius, because what
+/// decides them is how close the prop is ever looked at and not how big it is:
+/// a wheelchair's wheel is at the player's knee and its castors are on the
+/// floor behind it.
+fn prop_mesh(radius: f32, height: f32, sides: u32) -> Mesh {
+    Cylinder::new(radius, height)
+        .mesh()
+        .resolution(sides)
+        .build()
+}
+
 /// Repeats of the weave across one garment.
 ///
 /// A cuboid's faces and a capsule's shell both carry UVs from zero to one, so
@@ -531,16 +640,10 @@ pub fn build_assets(
         // into a texture, and an icosphere's seams run wherever they like.
         // See `crate::mood::face::head_mesh` for why it is turned on its side.
         head: meshes.add(crate::mood::face::head_mesh(body::HEAD_RADIUS)),
-        arm: meshes.add(Capsule3d {
-            radius: 0.058,
-            half_length: body::ARM_LENGTH * 0.5 - 0.058,
-        }),
-        leg: meshes.add(Capsule3d {
-            radius: 0.078,
-            half_length: body::LEG_LENGTH * 0.5 - 0.078,
-        }),
-        hand: meshes.add(Sphere::new(body::HAND_RADIUS)),
-        hair: meshes.add(Sphere::new(body::HAIR_RADIUS)),
+        arm: meshes.add(limb_mesh(0.058, body::ARM_LENGTH)),
+        leg: meshes.add(limb_mesh(0.078, body::LEG_LENGTH)),
+        hand: meshes.add(blob_mesh(body::HAND_RADIUS)),
+        hair: meshes.add(blob_mesh(body::HAIR_RADIUS)),
         shoe: meshes.add(rounded_box(Vec3::new(
             0.105,
             body::SHOE_HEIGHT,
@@ -578,7 +681,7 @@ pub fn build_assets(
             .into_iter()
             .map(|color| materials.add(cloth(color)))
             .collect(),
-        cup: meshes.add(Cylinder::new(body::CUP_RADIUS, 0.035)),
+        cup: meshes.add(prop_mesh(body::CUP_RADIUS, 0.035, PROP_SIDES)),
         phones_bar: meshes.add(Cuboid::new(
             (body::HEAD_RADIUS + 0.02) * 2.0,
             body::PHONES_BAR_HEIGHT,
@@ -589,7 +692,7 @@ pub fn build_assets(
             perceptual_roughness: 0.35,
             ..default()
         }),
-        paper_cup: meshes.add(Cylinder::new(0.045, 0.095)),
+        paper_cup: meshes.add(prop_mesh(0.045, 0.095, PROP_SIDES)),
         paper: materials.add(StandardMaterial {
             base_color: Color::srgb(0.85, 0.80, 0.70),
             perceptual_roughness: 0.9,
@@ -601,9 +704,9 @@ pub fn build_assets(
             perceptual_roughness: 0.7,
             ..default()
         }),
-        cane: meshes.add(Cylinder::new(0.018, body::CANE_HALF * 2.0)),
-        wheel: meshes.add(Cylinder::new(body::WHEEL_RADIUS, 0.03)),
-        castor: meshes.add(Cylinder::new(body::CASTOR_RADIUS, 0.025)),
+        cane: meshes.add(prop_mesh(0.018, body::CANE_HALF * 2.0, STICK_SIDES)),
+        wheel: meshes.add(prop_mesh(body::WHEEL_RADIUS, 0.03, WHEEL_SIDES)),
+        castor: meshes.add(prop_mesh(body::CASTOR_RADIUS, 0.025, PROP_SIDES)),
         seat: meshes.add(Cuboid::new(
             body::SEAT_HALF_WIDTH * 2.0,
             body::SEAT_THICKNESS,
@@ -615,11 +718,13 @@ pub fn build_assets(
             0.05,
         )),
         // The performers' tools. Boxes and cylinders, like everything the
-        // cast owns: at pedestrian distance a silhouette does all the work.
+        // cast owns: at pedestrian distance a silhouette does all the work —
+        // and the cylinders are cut to as many sides as their silhouette
+        // actually needs, which for a 35 mm camera lens is eight.
         guitar_body: meshes.add(Cuboid::new(0.26, 0.34, 0.09)),
         guitar_neck: meshes.add(Cuboid::new(0.05, 0.38, 0.04)),
         camera_body: meshes.add(Cuboid::new(0.17, 0.11, 0.09)),
-        camera_lens: meshes.add(Cylinder::new(0.035, 0.07)),
+        camera_lens: meshes.add(prop_mesh(0.035, 0.07, PROP_SIDES)),
         tray: meshes.add(Cuboid::new(0.48, 0.05, 0.30)),
         ware: meshes.add(Cuboid::new(0.09, 0.07, 0.09)),
     }
@@ -1189,6 +1294,71 @@ mod tests {
         assert!(
             foot_z > body::CASTOR_AHEAD,
             "the feet reach out past the castors to {foot_z:.2}"
+        );
+    }
+
+    /// Triangles in a built mesh: what a part actually costs the GPU, rather
+    /// than what the primitive's name suggests it costs.
+    fn triangles(mesh: &Mesh) -> usize {
+        match mesh.indices() {
+            Some(indices) => indices.len() / 3,
+            None => mesh.count_vertices() / 3,
+        }
+    }
+
+    #[test]
+    fn a_plain_citizen_costs_a_quarter_of_what_it_used_to() {
+        // 8400 triangles, of which 4096 were four limbs at `Capsule3d`'s
+        // default 32x16 meshing, 1440 two hands at `Sphere`'s default
+        // icosphere, and 1088 one head at Bevy's default UV sphere. The
+        // buildings behind them are 60-triangle boxes, which is most of why
+        // the city read as angular: nearly everything round in the frame was
+        // a person, and the budget had gone into smoothing four featureless
+        // tubes that are 40 pixels tall on screen.
+        //
+        // Pinned rather than bounded, so that a part added at a primitive's
+        // default resolution shows up here as a failing test instead of
+        // showing up in a month as a frame rate.
+        let torso = triangles(&rounded_box(Vec3::new(0.36, body::TORSO_HEIGHT, 0.22)));
+        let head = triangles(&crate::mood::face::head_mesh(body::HEAD_RADIUS));
+        let hair = triangles(&blob_mesh(body::HAIR_RADIUS));
+        let hand = triangles(&blob_mesh(body::HAND_RADIUS));
+        let arm = triangles(&limb_mesh(0.058, body::ARM_LENGTH));
+        let leg = triangles(&limb_mesh(0.078, body::LEG_LENGTH));
+        let shoe = triangles(&rounded_box(Vec3::new(
+            0.105,
+            body::SHOE_HEIGHT,
+            body::SHOE_LENGTH,
+        )));
+
+        // The torso and the shoes are the one part of the figure that was
+        // already right: a superellipsoid off `uv(16, 12)`, 352 triangles,
+        // spent on the only silhouette a figure has at any distance.
+        assert_eq!((torso, shoe), (352, 352));
+        assert_eq!((head, hair, hand), (440, 180, 180));
+        assert_eq!((arm, leg), (120, 120));
+
+        let citizen = torso + head + hair + 2 * (arm + leg + hand + shoe);
+        assert_eq!(citizen, 2516, "the cast has put weight back on");
+    }
+
+    #[test]
+    fn nothing_round_in_the_wardrobe_is_still_meshed_at_thirty_two_sides() {
+        // `Cylinder`'s default is 124 triangles whatever its radius, and a
+        // wheelchair paid it four times over — 496 triangles of furniture on
+        // a figure whose entire body is 2516 — while a 36 mm cane paid it for
+        // a stick that is a line at every distance it is seen from.
+        assert_eq!(
+            triangles(&prop_mesh(body::WHEEL_RADIUS, 0.03, WHEEL_SIDES)),
+            60
+        );
+        assert_eq!(
+            triangles(&prop_mesh(body::CASTOR_RADIUS, 0.025, PROP_SIDES)),
+            28
+        );
+        assert_eq!(
+            triangles(&prop_mesh(0.018, body::CANE_HALF * 2.0, STICK_SIDES)),
+            20
         );
     }
 

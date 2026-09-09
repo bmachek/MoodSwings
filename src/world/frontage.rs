@@ -51,7 +51,15 @@ use super::texture::{FacadeClass, byte, fbm, hash01, painted, smoothstep01};
 
 /// How far the frontage's larger pieces are drawn: pipes, boards, troughs,
 /// parasols, tables.
-pub const RANGE: f32 = 90.0;
+///
+/// Ninety metres was under the length of the street it stands in. Six detail
+/// horizons all expired inside a hundred metres — this one, the name plates at
+/// seventy-five, the window interiors at a hundred and ten, the copings at two
+/// hundred and thirty, and the shell's own at eighty — so the middle distance,
+/// which in a town in a valley is most of the picture, was a field of blank
+/// prisms. They are one budget rather than six constants and have been pushed
+/// out together.
+pub const RANGE: f32 = 150.0;
 
 /// And the small ones — bicycles, chairs, blossom. Five meshes each and none
 /// of them a shape at any distance.

@@ -57,8 +57,11 @@ pub const WALL: f32 = 0.30;
 
 /// How far away an interior is drawn at all, before `lod_scale`. Just past
 /// the full-detail shell handover: once the doored shell has given way to
-/// the coarse one there is no opening to see it through.
-pub const RANGE: f32 = 110.0;
+/// the coarse one there is no opening to see it through — and while it has
+/// one, an unfurnished room is a hole you can see the far side of the town
+/// through. That coupling is held at compile time at the foot of this file,
+/// which is why this number moved when `shell::NEAR` did.
+pub const RANGE: f32 = 200.0;
 
 /// The lining's own thickness. Visual only.
 const LINING: f32 = 0.10;

@@ -247,13 +247,35 @@ pub fn build_assets(meshes: &mut Assets<Mesh>) -> StreetsideKit {
     }
 }
 
-/// A unit quad standing on the ground, facing local +Z.
+/// How much of the top of a kerb is chamfered off, in metres: how far back the
+/// top edge is set from the face, and how far down the face the chamfer
+/// starts.
+///
+/// A real kerbstone has a bullnose or a chamfer of twenty to forty millimetres
+/// and every one of them in this town had a razor arris instead. It is the
+/// object the camera is nearest to for the entire game — a pavement edge is a
+/// metre from the eye when you walk down one — and an infinitely thin edge
+/// does not catch light, it aliases: at any distance it reads as a line drawn
+/// on the road rather than as a stone with a top and a side.
+///
+/// Fifty by fifty, which is at the generous end of real and is what survives
+/// being seen from a car going past.
+pub const BULLNOSE: f32 = 0.05;
+
+/// The upright of a kerb, standing on the ground and facing local +Z, with the
+/// top edge chamfered back away from whatever it faces.
 ///
 /// `Rectangle` would very nearly do, but it is centred on its own middle, and a
 /// kerb is placed by the ground it stands on rather than by its waist. Half a
 /// kerb height of offset in every transform is the sort of thing that is right
 /// until the first time somebody scales one.
+///
+/// The chamfer is in *metres* on the depth axis and a fraction on the height
+/// one, which is not an inconsistency: the transform scales this by
+/// `(run, SIDEWALK_HEIGHT, 1.0)`, so the depth axis is already at true size
+/// and the height axis is not.
 fn upright_face() -> Mesh {
+    let drop = BULLNOSE / SIDEWALK_HEIGHT;
     Mesh::new(
         bevy::render::mesh::PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::default(),
@@ -261,18 +283,48 @@ fn upright_face() -> Mesh {
     .with_inserted_attribute(
         Mesh::ATTRIBUTE_POSITION,
         vec![
+            // The face.
             [-0.5, 0.0, 0.0],
             [0.5, 0.0, 0.0],
-            [0.5, 1.0, 0.0],
-            [-0.5, 1.0, 0.0],
+            [0.5, 1.0 - drop, 0.0],
+            [-0.5, 1.0 - drop, 0.0],
+            // And the chamfer, running up and back to the top edge. Back is
+            // local −Z, which is away from whatever the face looks at: for the
+            // kerb that is away from the road, so the top edge lands under the
+            // near edge of the footway rather than out over the gutter.
+            [0.5, 1.0, -BULLNOSE],
+            [-0.5, 1.0, -BULLNOSE],
         ],
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, {
+        // The chamfer's own normal, at forty-five degrees between the face
+        // and the sky. Its two vertices are separate from the face's, so
+        // the arris stays an arris rather than being smoothed into a
+        // sausage.
+        let slope = Vec3::new(0.0, 1.0, 1.0).normalize().to_array();
+        vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            slope,
+            slope,
+        ]
+    })
     .with_inserted_attribute(
         Mesh::ATTRIBUTE_UV_0,
-        vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        vec![
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, drop],
+            [0.0, drop],
+            [1.0, 0.0],
+            [0.0, 0.0],
+        ],
     )
-    .with_inserted_indices(bevy::render::mesh::Indices::U32(vec![0, 1, 2, 0, 2, 3]))
+    .with_inserted_indices(bevy::render::mesh::Indices::U32(vec![
+        0, 1, 2, 0, 2, 3, 3, 2, 4, 3, 4, 5,
+    ]))
 }
 
 /// One quad of carriageway per street, and one per junction.
@@ -741,7 +793,10 @@ fn strips(
             continue;
         }
 
-        let across = side * half;
+        // The walking surface starts at the *back* of the kerb's chamfer, not
+        // at the kerb line: laid to the kerb line it covers the chamfer, and a
+        // chamfer nobody can see is four triangles.
+        let across = side * (half + BULLNOSE);
         let back_across = side * (half + SIDEWALK_WIDTH);
         // The four corners, as (across, along) from the middle of the street.
         let corners = [
@@ -753,8 +808,8 @@ fn strips(
         // UVs run across the pavement and along the street, in true metres, so
         // a slab is a slab whatever the street does.
         let uvs = [
-            Vec2::new(0.0, a_kerb),
-            Vec2::new(0.0, length - b_kerb),
+            Vec2::new(BULLNOSE, a_kerb),
+            Vec2::new(BULLNOSE, length - b_kerb),
             Vec2::new(SIDEWALK_WIDTH, length - b_back),
             Vec2::new(SIDEWALK_WIDTH, a_back),
         ]
@@ -1032,6 +1087,20 @@ pub fn spawn_edge(
             continue;
         };
 
+        // How high this pavement's surface is: a few millimetres proud of the
+        // nominal kerb height to settle the depth test, and a slot of its own
+        // on top of that. Two pavements really do overlap — on the outside of
+        // a bend both of them run *past* the node, so the wedge between them
+        // is covered twice, about two thousand times over in this town.
+        // Coplanar, that wedge was one of the surfaces the player watched
+        // flicker.
+        //
+        // The kerb faces below are scaled to the same number rather than to
+        // `SIDEWALK_HEIGHT`, or the four millimetres between the two shows as
+        // a sliver of daylight down the whole length of every gutter.
+        let top = super::layer::FOOTWAY
+            + super::layer::slot(id.0 * 2 + index as u32, super::layer::FOOTWAY_SLOTS);
+
         // The walking surface. Its mesh is already cut to shape and already
         // sits in the street's own frame, so all it wants is the middle of the
         // street and the way the street runs.
@@ -1039,19 +1108,7 @@ pub fn spawn_edge(
             ChunkOf(chunk),
             Mesh3d(strip.footway.clone()),
             MeshMaterial3d(ribbons.slabs.clone()),
-            // A few millimetres proud of the kerb, and a slot of its own on top
-            // of that. Two pavements really do overlap: on the outside of a
-            // bend both of them run *past* the node, so the wedge between them
-            // is covered twice, about two thousand times over in this town.
-            // Coplanar, that wedge was one of the surfaces the player watched
-            // flicker.
-            Transform::from_xyz(
-                middle.x,
-                super::layer::FOOTWAY
-                    + super::layer::slot(id.0 * 2 + index as u32, super::layer::FOOTWAY_SLOTS),
-                middle.y,
-            )
-            .with_rotation(Quat::from_rotation_y(yaw)),
+            Transform::from_xyz(middle.x, top, middle.y).with_rotation(Quat::from_rotation_y(yaw)),
             visibility.clone(),
         ));
 
@@ -1077,7 +1134,7 @@ pub fn spawn_edge(
                 MeshMaterial3d(kerb.clone()),
                 Transform::from_xyz(at.x, 0.0, at.y)
                     .with_rotation(Quat::from_rotation_y(facing.x.atan2(facing.y)))
-                    .with_scale(Vec3::new(run.1, SIDEWALK_HEIGHT, 1.0)),
+                    .with_scale(Vec3::new(run.1, top, 1.0)),
                 visibility.clone(),
             ));
         }

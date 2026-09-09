@@ -32,8 +32,10 @@
 //! regenerated whenever the player walks back into them, and a counter would
 //! re-roll a different roof each time.
 
+use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -63,6 +65,30 @@ const CELL: f32 = 7.0;
 /// about a metre on screen these read as noise on the roofline, and the
 /// parapet variation carries the silhouette from there out.
 pub const CLUTTER_RANGE: f32 = 420.0;
+
+/// The radius each round piece is *typically* drawn at, in metres.
+///
+/// These decide nothing but how many sides the piece's shared unit cylinder
+/// gets — the mesh is unit and [`Placement::size`] scales it — so they are the
+/// midpoints of the ranges [`Piece::size`] draws from rather than a size
+/// anything actually is. Keep them in step with those ranges: a tank that
+/// quietly grew to three metres would still be drawn with a tank's sixteen
+/// sides, which is this pass's mistake made again in the other direction.
+const VENT_RADIUS: f32 = 0.35;
+const TANK_RADIUS: f32 = 1.2;
+const AERIAL_RADIUS: f32 = 0.06;
+
+/// A unit cylinder — radius 1, height 2 — at the resolution `radius` earns.
+///
+/// The radius is passed separately because the mesh cannot know it: every
+/// round piece on every roof shares one of these and is scaled to size by its
+/// own transform.
+fn unit_cylinder(radius: f32) -> Mesh {
+    Cylinder::new(1.0, 2.0)
+        .mesh()
+        .resolution(super::props::cylinder_sides(radius))
+        .build()
+}
 
 /// One thing that ended up on a roof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,15 +357,111 @@ pub fn plan(seed: u64, footprint: Rect, class: FacadeClass) -> Vec<Placement> {
     placements
 }
 
+/// How much narrower a plant unit is at the lid than at the deck.
+///
+/// A plain [`Cuboid`] made every air-handling unit in the city a perfect
+/// extrusion, and a roofscape of perfect extrusions is most of what reads as
+/// "generated" from a window three streets away: real plant is a sheet-metal
+/// case whose panels are folded in at the top so rain runs off the lid rather
+/// than down the seams. A seventh is enough that the near vertical edge and
+/// the far one diverge on screen, which is the whole cue — and it is free,
+/// because a frustum is still six quads and twelve triangles, exactly what the
+/// cuboid cost.
+///
+/// A tenth was tried first and does not read at all past about twenty metres;
+/// a quarter reads as a skip rather than as machinery.
+const PLANT_TAPER: f32 = 0.14;
+
+/// A unit box with its lid drawn in by `taper` on all four sides.
+///
+/// Built at half-extents of one in every axis, exactly like the [`Cuboid`] it
+/// replaces, so a [`Placement`]'s half-extents still scale it directly and the
+/// whole city's plant is still one mesh.
+///
+/// Flat-shaded with four vertices per face rather than eight shared corners:
+/// the fold where a panel meets the lid is a hard edge on a real steel case,
+/// and averaged corner normals would round it into something inflatable. That
+/// costs 24 vertices where a smooth frustum needs 8, and no triangles at all.
+fn tapered_box(taper: f32) -> Mesh {
+    let lid_scale = 1.0 - taper;
+    // The deck ring, and the lid ring directly above it. Both run the same way
+    // round, so the sides can be walked as consecutive pairs.
+    let deck = [
+        Vec3::new(-1.0, -1.0, -1.0),
+        Vec3::new(-1.0, -1.0, 1.0),
+        Vec3::new(1.0, -1.0, 1.0),
+        Vec3::new(1.0, -1.0, -1.0),
+    ];
+    let lid = deck.map(|c| Vec3::new(c.x * lid_scale, 1.0, c.z * lid_scale));
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(24);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(24);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(24);
+    let mut indices: Vec<u32> = Vec::with_capacity(36);
+    {
+        // One planar quad, wound anticlockwise seen from outside. A tapered
+        // side is still planar — its two horizontal edges are parallel, just
+        // different lengths — so one normal per face is exact rather than an
+        // approximation.
+        let mut quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3| {
+            let normal = (b - a).cross(d - a).normalize();
+            let first = positions.len() as u32;
+            for (corner, uv) in [
+                (a, [0.0, 1.0]),
+                (b, [1.0, 1.0]),
+                (c, [1.0, 0.0]),
+                (d, [0.0, 0.0]),
+            ] {
+                positions.push(corner.to_array());
+                normals.push(normal.to_array());
+                uvs.push(uv);
+            }
+            indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+        };
+
+        for i in 0..4 {
+            let next = (i + 1) % 4;
+            quad(deck[i], deck[next], lid[next], lid[i]);
+        }
+        quad(lid[0], lid[1], lid[2], lid[3]);
+        // The underside is never seen — it is flat on the deck — but a mesh
+        // with a hole in it shadows like a mesh with a hole in it.
+        quad(deck[3], deck[2], deck[1], deck[0]);
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
 /// The shared meshes and materials every roof draws from.
 ///
-/// Two meshes and two materials for the whole city's roofscape, so however much
-/// of it is resident it stays a handful of batches — the same bargain the
+/// Five meshes and three materials for the whole city's roofscape, so however
+/// much of it is resident it stays a handful of batches — the same bargain the
 /// street furniture makes.
+///
+/// The round pieces were one shared unit cylinder at Bevy's default resolution
+/// of 32, which is 124 triangles, and that one mesh had to serve a 1.2 m water
+/// tank *and* a 6 cm aerial mast. Sized for the tank it was ruinous on the
+/// mast; sized for the mast it would have facetted the tank. Splitting it into
+/// three costs two more mesh handles — nothing, they are shared by the whole
+/// city — and lets each take the resolution its own radius can show, via
+/// [`super::props::cylinder_sides`].
 #[derive(Resource)]
 pub struct RoofKit {
-    box_mesh: Handle<Mesh>,
-    cylinder: Handle<Mesh>,
+    /// Air handling: a box with its lid drawn in, see [`tapered_box`].
+    plant: Handle<Mesh>,
+    /// The stair head, which stays a true box: it is a built structure with
+    /// rendered walls, and a tapered stair core would read as a bunker.
+    stair_head: Handle<Mesh>,
+    vent: Handle<Mesh>,
+    tank: Handle<Mesh>,
+    aerial: Handle<Mesh>,
     /// Galvanised: light, rough, slightly metallic.
     steel: Handle<StandardMaterial>,
     /// Painted render, for stair heads and lift overruns.
@@ -352,11 +474,17 @@ pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> RoofKit {
+    // Unit extents in every axis, so a placement's half-extents scale it
+    // directly and one mesh serves every piece of its kind on every roof. The
+    // three cylinders differ only in resolution: they are asked for at the
+    // *typical* radius their `Piece::size` draws, because the mesh is unit and
+    // the scale is what decides how big any one of them ends up.
     RoofKit {
-        // Unit extents in every axis, so a placement's half-extents scale it
-        // directly and one mesh serves every box on every roof.
-        box_mesh: meshes.add(Cuboid::new(2.0, 2.0, 2.0)),
-        cylinder: meshes.add(Cylinder::new(1.0, 2.0)),
+        plant: meshes.add(tapered_box(PLANT_TAPER)),
+        stair_head: meshes.add(Cuboid::new(2.0, 2.0, 2.0)),
+        vent: meshes.add(unit_cylinder(VENT_RADIUS)),
+        tank: meshes.add(unit_cylinder(TANK_RADIUS)),
+        aerial: meshes.add(unit_cylinder(AERIAL_RADIUS)),
         steel: materials.add(StandardMaterial {
             base_color: Color::srgb(0.56, 0.57, 0.58),
             perceptual_roughness: 0.62,
@@ -380,8 +508,11 @@ pub fn build_assets(
 impl RoofKit {
     fn mesh(&self, piece: Piece) -> &Handle<Mesh> {
         match piece {
-            Piece::Vent | Piece::Tank | Piece::Aerial => &self.cylinder,
-            Piece::Plant | Piece::StairHead => &self.box_mesh,
+            Piece::Plant => &self.plant,
+            Piece::StairHead => &self.stair_head,
+            Piece::Vent => &self.vent,
+            Piece::Tank => &self.tank,
+            Piece::Aerial => &self.aerial,
         }
     }
 
@@ -674,5 +805,77 @@ mod tests {
             parapet(seed, FacadeClass::Tower).thickness
                 > parapet(seed, FacadeClass::House).thickness
         );
+    }
+
+    /// The plant unit is the one piece here that is hand-built rather than a
+    /// primitive, so nothing else would notice it going wrong: a flipped
+    /// winding is an invisible box, a missing face is a hole in a shadow, and
+    /// a taper of zero is silently the extrusion it replaced.
+    #[test]
+    fn a_plant_unit_is_a_closed_frustum_at_a_cuboids_price() {
+        let mesh = tapered_box(PLANT_TAPER);
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!("the plant unit lost its indices");
+        };
+        assert_eq!(
+            indices.len() / 3,
+            12,
+            "the taper is only free while it stays six quads"
+        );
+
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the plant unit lost its positions");
+        };
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
+            panic!("the plant unit lost its normals");
+        };
+        assert_eq!(positions.len(), 24, "the folds stopped being hard edges");
+
+        // Unit half-extents at the deck, so a `Placement`'s size still scales
+        // it exactly the way it scaled the cuboid, and narrower at the lid, so
+        // it is not an extrusion.
+        let deck = positions
+            .iter()
+            .filter(|p| p[1] < 0.0)
+            .fold(0.0f32, |w, p| w.max(p[0].abs()));
+        let lid = positions
+            .iter()
+            .filter(|p| p[1] > 0.0)
+            .fold(0.0f32, |w, p| w.max(p[0].abs()));
+        assert!((deck - 1.0).abs() < 1e-6, "the deck is {deck} across");
+        assert!(lid < deck, "the lid is {lid} against a deck of {deck}");
+        assert!(lid > 0.5, "a lid at {lid} is a pyramid, not a plant unit");
+
+        // Every face looks out. Wound the other way round the whole unit is
+        // culled and a roof grows an invisible box.
+        for (position, normal) in positions.iter().zip(normals) {
+            let out = Vec3::from_array(*position);
+            let normal = Vec3::from_array(*normal);
+            assert!((normal.length() - 1.0).abs() < 1e-5);
+            assert!(
+                normal.dot(out) > 0.0,
+                "a face at {out:?} points {normal:?}, back into the box"
+            );
+        }
+    }
+
+    /// A tank is nine times the radius of a vent stack and twenty times the
+    /// radius of a mast, and all three used to share one 124-triangle cylinder
+    /// sized for none of them.
+    #[test]
+    fn each_round_piece_is_drawn_at_its_own_radius() {
+        use crate::world::props::cylinder_sides;
+        assert!(cylinder_sides(AERIAL_RADIUS) < cylinder_sides(VENT_RADIUS));
+        assert!(cylinder_sides(VENT_RADIUS) < cylinder_sides(TANK_RADIUS));
+        // Sanity against the ranges these stand in for: a midpoint that has
+        // drifted outside its own range means `Piece::size` moved and this
+        // did not.
+        assert!((0.22..0.48).contains(&VENT_RADIUS));
+        assert!((0.9..1.5).contains(&TANK_RADIUS));
+        assert_eq!(AERIAL_RADIUS, 0.06);
     }
 }

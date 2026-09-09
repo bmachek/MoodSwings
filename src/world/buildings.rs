@@ -54,7 +54,7 @@ const PLINTH_PROUD: f32 = 0.11;
 /// It is eleven centimetres deep. Past a couple of hundred metres that is well
 /// under a pixel, and all it contributes is another edge for the anti-aliasing
 /// to chew on.
-const PLINTH_RANGE: f32 = 260.0;
+const PLINTH_RANGE: f32 = 400.0;
 
 /// Roughly how wide a paving slab or a patch of grass should be, in metres.
 const GROUND_TILE: f32 = 2.6;
@@ -82,6 +82,11 @@ const CLASS_COUNT: usize = FacadeClass::ALL.len();
 #[derive(Resource)]
 pub struct CityAssets {
     pub unit_cube: Handle<Mesh>,
+    /// The same cube with its vertical arrises taken off — see
+    /// [`chamfered_cube_mesh`]. For anything a player sees the corner of: the
+    /// plinth at their feet, the capping slab against the sky, the far box a
+    /// whole district is drawn as, and the church.
+    pub stone_cube: Handle<Mesh>,
     /// A 1x1 quad in the XZ plane, laid over each block as its walking surface.
     unit_quad: Handle<Mesh>,
     /// Indexed by `(district_index * PALETTE_SIZE + palette) * CLASS_COUNT + class`.
@@ -106,8 +111,8 @@ pub struct CityAssets {
     /// ground is the one surface in the city big enough to need variation above
     /// the size of its own texture. See `world::ground`.
     grass: Vec<Handle<super::ground::GroundMaterial>>,
-    /// A four-sided unit cone — the church spire's pyramid, built once here
-    /// because chunks respawn and a mesh added per spawn would leak.
+    /// An eight-sided unit cone — the church spire, built once here because
+    /// chunks respawn and a mesh added per spawn would leak.
     spire: Handle<Mesh>,
 }
 
@@ -353,6 +358,113 @@ fn unit_cube_mesh() -> Mesh {
         Mesh::ATTRIBUTE_UV_0,
         faces.iter().map(|(_, _, uv)| *uv).collect::<Vec<_>>(),
     )
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// How many faces a spire's helm has — see the note where it is built.
+pub const SPIRE_SIDES: u32 = 8;
+
+/// How much is taken off a stone corner, as a fraction of the box it is on.
+///
+/// A fraction rather than a length because these cubes are shared and scaled
+/// by their transforms, and it works here for one reason: every use of the
+/// chamfered cube is scaled by a *footprint* on both horizontal axes, so a
+/// building twelve metres across gets a hundred-millimetre chamfer and a
+/// five-metre one gets forty. Both are the right order for weathered masonry.
+/// The vertical axis is not chamfered at all, which is what makes that safe —
+/// a capping slab is a hundred and twenty millimetres thick and a fraction of
+/// *that* would be nothing.
+pub const CHAMFER: f32 = 0.008;
+
+/// A unit cube with its four vertical arrises taken off.
+///
+/// Every vertical corner in this city was a mathematically perfect ninety
+/// degrees with a one-pixel specular terminator down it. Real masonry corners
+/// are quoined, rounded, or at the very least weathered; a razor arris is the
+/// single strongest "this is a box" cue there is, it survives every level of
+/// detail, and on the plain far box it is the *only* thing left to look at.
+///
+/// Twenty-eight triangles instead of twelve, on one shared mesh, so it costs
+/// no draw call and nothing per building. The horizontal arrises are left
+/// square: a chamfer on those would have to be a length rather than a
+/// fraction — see [`CHAMFER`] — and the objects that want one (a coping, a
+/// cornice) are built at true size by their own modules anyway.
+///
+/// UVs match [`unit_cube_mesh`] exactly, so a facade painted for one lands the
+/// same way on the other: each side face runs U along its own horizontal axis
+/// and V from the bottom edge up.
+fn chamfered_cube_mesh(chamfer: f32) -> Mesh {
+    let c = chamfer.clamp(0.0, 0.25);
+    // The eight corners of the plan, anticlockwise from the +Z face.
+    let ring = [
+        Vec2::new(0.5 - c, 0.5),
+        Vec2::new(-0.5 + c, 0.5),
+        Vec2::new(-0.5, 0.5 - c),
+        Vec2::new(-0.5, -0.5 + c),
+        Vec2::new(-0.5 + c, -0.5),
+        Vec2::new(0.5 - c, -0.5),
+        Vec2::new(0.5, -0.5 + c),
+        Vec2::new(0.5, 0.5 - c),
+    ];
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(48);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(48);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(48);
+    let mut indices: Vec<u32> = Vec::with_capacity(84);
+
+    // The eight uprights: four walls and four chamfers, each with its own
+    // vertices so an arris stays an arris rather than being smoothed away.
+    for index in 0..8 {
+        let (a, b) = (ring[index], ring[(index + 1) % 8]);
+        let edge = b - a;
+        // Outward, because the ring runs one way round and the plan is convex.
+        let out = Vec2::new(edge.y, -edge.x).normalize_or_zero();
+        // U runs along the face, the way `unit_cube_mesh` runs it: rightwards
+        // seen from outside, which is the outward normal turned a quarter turn.
+        let along = Vec2::new(-out.y, out.x);
+        let base = positions.len() as u32;
+        for (corner, top) in [(a, false), (a, true), (b, true), (b, false)] {
+            let y = if top { 0.5 } else { -0.5 };
+            positions.push([corner.x, y, corner.y]);
+            normals.push([out.x, 0.0, out.y]);
+            uvs.push([0.5 + corner.dot(along), if top { 1.0 } else { 0.0 }]);
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    // And the two caps, as fans from the middle.
+    for top in [true, false] {
+        let y = if top { 0.5 } else { -0.5 };
+        let up = if top { 1.0 } else { -1.0 };
+        let middle = positions.len() as u32;
+        positions.push([0.0, y, 0.0]);
+        normals.push([0.0, up, 0.0]);
+        uvs.push([0.5, 0.5]);
+        for corner in ring {
+            positions.push([corner.x, y, corner.y]);
+            normals.push([0.0, up, 0.0]);
+            uvs.push([
+                0.5 + corner.x,
+                if top { 0.5 - corner.y } else { 0.5 + corner.y },
+            ]);
+        }
+        for index in 0..8u32 {
+            let (a, b) = (middle + 1 + index, middle + 1 + (index + 1) % 8);
+            if top {
+                indices.extend([middle, b, a]);
+            } else {
+                indices.extend([middle, a, b]);
+            }
+        }
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
     .with_inserted_indices(Indices::U32(indices))
 }
 
@@ -644,6 +756,7 @@ pub fn build_assets(
         // shader agrees with; hand-written tangents are how normal maps end up
         // lit from the wrong side on two faces out of six.
         unit_cube: meshes.add(with_tangents(unit_cube_mesh())),
+        stone_cube: meshes.add(with_tangents(chamfered_cube_mesh(CHAMFER))),
         unit_quad: meshes.add(with_tangents(
             Plane3d::default().mesh().size(1.0, 1.0).build(),
         )),
@@ -670,7 +783,15 @@ pub fn build_assets(
         )),
         paving,
         grass,
-        spire: meshes.add(Cone::new(1.0, 1.0).mesh().resolution(4).build()),
+        // Eight sides, not four. A four-sided cone is a pyramid, and it
+        // costs six triangles; the whole town has five spires between them,
+        // and they are the landmarks every skyline framing is *of*. Eight
+        // costs eight more triangles in the entire city and is what a
+        // Bavarian church tower actually carries — an octagonal helm on a
+        // square tower, with the diagonal faces set back over the corners.
+        spire: meshes.add(with_tangents(
+            Cone::new(1.0, 1.0).mesh().resolution(SPIRE_SIDES).build(),
+        )),
     }
 }
 
@@ -744,7 +865,7 @@ impl CityAssets {
         self.roof[roof_bucket(extent)].clone()
     }
 
-    /// The unit pyramid the church spires scale from.
+    /// The unit cone the church spires scale from.
     pub fn spire(&self) -> Handle<Mesh> {
         self.spire.clone()
     }
@@ -1402,7 +1523,7 @@ fn spawn_building(
     // are reordered.
     let mut far_box = commands.spawn((
         ChunkOf(chunk),
-        Mesh3d(assets.unit_cube.clone()),
+        Mesh3d(assets.stone_cube.clone()),
         MeshMaterial3d(material),
         wall,
         VisibilityRange {
@@ -1508,7 +1629,7 @@ fn spawn_building(
     if !gabled {
         commands.spawn((
             ChunkOf(chunk),
-            Mesh3d(assets.unit_cube.clone()),
+            Mesh3d(assets.stone_cube.clone()),
             MeshMaterial3d(assets.roof_material(size.x.max(size.y))),
             stand(
                 height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
@@ -1531,7 +1652,7 @@ fn spawn_building(
     if door_shell.is_none() {
         commands.spawn((
             ChunkOf(chunk),
-            Mesh3d(assets.unit_cube.clone()),
+            Mesh3d(assets.stone_cube.clone()),
             MeshMaterial3d(assets.kerb.clone()),
             stand(
                 SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5,
