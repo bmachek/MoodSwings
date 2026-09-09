@@ -51,6 +51,24 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 use super::buildings::with_tangents;
 use super::texture::{self, FacadeClass, Pane};
 
+/// How thick a window frame is, as a fraction of the opening.
+///
+/// A sash is about eighty millimetres on a window a metre and a half across,
+/// which is a twentieth. Rather more here, because the thing this is for is a
+/// *silhouette* at pavement distance and a twentieth of an opening is under a
+/// pixel at thirty metres — the shell's whole argument about reveals, applied
+/// to the reveal's contents.
+const FRAME: f32 = 0.075;
+
+/// And how far in front of the glass it sits, as a fraction of the reveal.
+const FRAME_STAND: f32 = 0.45;
+
+/// Where the bar across a window goes, up the opening.
+///
+/// Two thirds, not a half. A German casement is a tall light over a short one
+/// and the transom sits high; centred it reads as a shop door.
+const TRANSOM: f32 = 0.62;
+
 /// How far a pane is set back behind the wall, as a fraction of one bay.
 const REVEAL: f32 = 0.045;
 
@@ -263,6 +281,42 @@ impl Shell {
         }
         self.indices
             .extend([base, base + 1, base + 2, base + 2, base + 3, base]);
+    }
+
+    /// The frame in one opening: a border, a transom and a mullion.
+    ///
+    /// Five quads, all of them at one depth in the reveal, and all of them
+    /// coloured from a band of wall — see [`Shell::band`]. Not a box: the frame
+    /// stands two centimetres in front of the glass, and the edge of that is a
+    /// thing nobody has ever seen on a building from a pavement.
+    fn window_frame(&mut self, face: Face, u: Span, v: Span, reveal: f32, masonry: Span) {
+        let depth = reveal * FRAME_STAND;
+        let (wide, tall) = (u.1 - u.0, v.1 - v.0);
+        let (bar_u, bar_v) = (wide * FRAME, tall * FRAME);
+        // The border.
+        self.band(face, (u.0, u.0 + bar_u), v, depth, masonry);
+        self.band(face, (u.1 - bar_u, u.1), v, depth, masonry);
+        self.band(face, u, (v.0, v.0 + bar_v), depth, masonry);
+        self.band(face, u, (v.1 - bar_v, v.1), depth, masonry);
+        // The transom, and the mullion under it. Together they make the pane a
+        // window with three lights in it rather than one sheet of glass, which
+        // is what every window on a street like this actually is.
+        let bar = v.0 + tall * TRANSOM;
+        self.band(
+            face,
+            u,
+            (bar - bar_v * 0.5, bar + bar_v * 0.5),
+            depth,
+            masonry,
+        );
+        let middle = (u.0 + u.1) * 0.5;
+        self.band(
+            face,
+            (middle - bar_u * 0.5, middle + bar_u * 0.5),
+            (v.0, bar),
+            depth,
+            masonry,
+        );
     }
 
     /// A rectangle parallel to the wall, `depth` in from it, taking its colour
@@ -600,6 +654,23 @@ fn shell(class: FacadeClass, detail: Detail, variant: u32, doored: bool) -> Mesh
                 // that is guaranteed not to be glass, and what everything
                 // standing proud of the facade here is coloured from.
                 let masonry = ((cu0, cu1), (cv0, v0));
+
+                // The frame, standing in the reveal in front of the glass.
+                //
+                // Until this, an opening was a hole with a painted colour in
+                // the back of it: reveal, sill, and then flat glass edge to
+                // edge. Real glazing is a *border* — a sash, a frame, a
+                // transom, a bar down the middle — and it is the single
+                // loudest thing missing from a facade seen from a pavement,
+                // because it is what turns a dark rectangle into a window.
+                //
+                // Coloured from the spandrel rather than from where it stands,
+                // the same trick `proud` uses and for the same reason: a strip
+                // sampled over the glass comes back painted with the glass,
+                // and a frame the colour of its own pane is not a frame.
+                if !pane.ground {
+                    mesh.window_frame(face, (u0, u1), (v0, v1), reveal, masonry.1);
+                }
 
                 if balcony_at(class, column, row, variant) {
                     let width = (u0 - proud, u1 + proud);
