@@ -176,6 +176,15 @@ pub fn is_capture_mode() -> bool {
     std::env::args().any(|a| a == "--screenshot")
 }
 
+/// True when a capture asked for the map to be open.
+///
+/// Read off the command line rather than off the parsed [`CaptureRequest`],
+/// for the same reason [`is_capture_mode`] is: the answer is wanted while the
+/// plugins are being installed, which is before any resource exists.
+pub fn wants_map() -> bool {
+    std::env::args().any(|a| a == "--map")
+}
+
 /// Parses capture arguments. Returns `None` for a normal interactive run.
 pub fn parse_args() -> Option<CaptureRequest> {
     let args: Vec<String> = std::env::args().collect();
