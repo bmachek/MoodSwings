@@ -48,7 +48,7 @@
 //! should show is *one* surface, not four ribbons overlapping at angles with
 //! a different paving on each.
 //!
-//! The whole stack is under thirty-five millimetres, which matters because
+//! The whole stack is under forty millimetres, which matters because
 //! traffic rides on the ground collider rather than on the visible road: a car
 //! is drawn with its tyres at the collider's top face, so every millimetre the
 //! carriageway is raised is a millimetre of tyre buried in it.

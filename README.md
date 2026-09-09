@@ -541,9 +541,18 @@ on the same bay of the same floor.
 
 | Level | Out to | What it is |
 |---|---|---|
-| LOD0 | 80 m | Reveals, jambs, sills, balconies, awnings, every course |
-| LOD1 | 250 m | The horizontal courses only |
-| LOD2 | beyond | The plain box, and the collider |
+| LOD0 | 170 m | Reveals, jambs, sills, balconies, awnings, every course |
+| LOD1 | 460 m | The horizontal courses only |
+| LOD2 | beyond | The chamfered box, and the collider |
+
+Those two numbers used to be eighty and two hundred and fifty, which were tuned
+against a grid city. A Landshut street canyon is two hundred metres long and the
+view across the Isar is six hundred, so past the first few houses the town *was*
+the coarse shell — sixty triangles for a house, a hundred and thirty for a
+three-storey block. Everything in `world::shell` was being spent on the two
+buildings nearest the camera and thrown away on the four hundred behind them.
+It is paid for out of the cast: a pedestrian used to cost about eight and a half
+thousand triangles, seven houses' worth, for a figure forty pixels tall.
 
 All three levels carry the same transform and measure from the entity's origin
 rather than from a bounding box, so all three measure the *same* distance and
@@ -1032,6 +1041,16 @@ in the world.
   no legs; they are seats with faces that do the wave off a clock. Nobody
   walks in through a turnstile, and the fixture on the scoreboard will never
   progress past nil-nil, which is at least thematically consistent.
+
+- The town has hills round it and no hill in it. `world::terrain` displaces the
+  ground, but only where nothing is built — the height is exactly zero inside a
+  corridor rasterised from the road graph, because about thirty spawners write
+  a world y directly and every one of them means "the ground here is at zero".
+  So the streets are level, the back land rolls by centimetres, and the
+  landscape is out past where the player can walk. Landshut happens to want
+  exactly that, being a town on a valley floor; a hill town would want the
+  other thing, and would want every one of those thirty spawners rewritten
+  first.
 
 - The cultural quarters recolour; they do not rebuild. Klein-Neapel and the
   Fernost-Viertel wear their own palettes, force their own restaurants and

@@ -114,7 +114,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the variation that keeps open ground from being one green (`ground`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -215,7 +215,25 @@ one segment of one.
 
 ### The traps
 
-Four things here have bitten more than once and none of them fail loudly:
+Six things here have bitten more than once and none of them fail loudly:
+
+- **The ground is only flat where the town is.** `world::terrain` displaces it,
+  and about thirty spawners write a world y directly (`SIDEWALK_HEIGHT`,
+  `resting_height(spec)`, a bare `0.0`) meaning "the ground here is at zero".
+  That stays true only because `Terrain::height` returns *exactly* zero inside
+  a corridor rasterised from the road graph. Anything new that places geometry
+  well away from a street has to ask `Terrain` for the height, and anything
+  that widens where the town builds has to widen `terrain::LEVEL_REACH` with
+  it. A test walks every edge in Landshut and asserts the corridor.
+- **Nothing flat may be laid at the same height as anything else flat.**
+  `world::layer` owns the whole ground stack in whole millimetres, with a slot
+  per instance. The depth buffer is not the constraint — it resolves microns —
+  the constraint is that a world coordinate is an `f32` and this town runs to
+  1700 m, where the spacing between representable numbers is 200 µm. Two
+  surfaces closer than that come out at the same depth, TAA's per-frame jitter
+  picks the winner, and the result flickers. Add a layer to that table rather
+  than picking a number beside the spawner.
+
 
 - **Restitution is a property of a contact.** A body held off the ground by a
   spring — a floating character controller, a car on raycast suspension — never

@@ -1122,38 +1122,27 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                 .with_scale(Vec3::new(slab.x, 1.0, slab.z)),
                 NotShadowCaster,
             ));
-            // Shorter than a block is wide on purpose. A yard deep enough to
-            // reach the next street *does* reach it, and then covers its
-            // carriageway — which is what happened at seventeen metres: green
-            // ground with lane markings painted on it and cars parked on the
-            // grass.
-            const YARD: f32 = 13.0;
-            let behind = site.centre - site.outward() * (site.span.y * 0.5 + YARD * 0.5);
-            // Grass or paving, per building: an old town's back land is both,
-            // and one material across the whole of it reads as a golf course.
-            let yard = (
-                ChunkOf(chunk),
-                Mesh3d(assets.unit_quad.clone()),
-                // Under the road, not over it — see `world::layer`, which
-                // owns the order. Wherever a yard and a street want the same
-                // square metre the street wins, which is the way round that
-                // cannot look like a bug. The slot is because a yard thirteen
-                // metres deep overlaps the yard behind it as often as not.
-                Transform::from_xyz(
-                    behind.x,
-                    super::layer::YARD
-                        + super::layer::slot((seed >> 32) as u32, super::layer::YARD_SLOTS),
-                    behind.y,
-                )
-                .with_rotation(Quat::from_rotation_y(site.yaw))
-                .with_scale(Vec3::new(site.span.x + 3.0, 1.0, YARD)),
-                NotShadowCaster,
-            );
-            if seed & 1 == 0 {
-                commands.spawn((yard, MeshMaterial3d(assets.lawn(site.span.x))));
-            } else {
-                commands.spawn((yard, MeshMaterial3d(assets.paving(site.span.x))));
-            }
+            // No yard quad behind it any more, and that is a reversal worth
+            // writing down. There used to be one: a thirteen-metre slab of
+            // lawn or paving laid behind every building, on the argument that
+            // a real town read off a map has no blocks at all — the buildings
+            // line the streets and the middle is whatever is left — and the
+            // ground under the whole world is the asphalt the roads are made
+            // of, so the middle of every block came out as bare carriageway.
+            //
+            // The second half of that stopped being true when the streetside
+            // ground became grass with a town mask on it. This loop only ever
+            // runs for an unpaved block, which is only ever a town read off a
+            // map, and `ground.wgsl` shades exactly that ground from exactly
+            // that mask: the strip behind a pavement comes out as worn grit
+            // broken with earth, at the scale a courtyard actually varies at.
+            //
+            // What the quads were still contributing was their *edges*. Two
+            // thousand six hundred axis-aligned rectangles, each thirteen
+            // metres deep with a razor boundary against the ground, stamped
+            // one per building — which from any height is the single most
+            // artificial thing in the picture and is a large part of what
+            // "everything looks angular" was pointing at.
         }
     }
 
