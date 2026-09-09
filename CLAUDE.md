@@ -67,6 +67,14 @@ so an unpinned shot drifts its own sky between runs. `--city` builds a given
 `CityStyle` instead of the persisted one, which is the only way to shoot a
 postcard the player has not selected. Full flag table is in README.md.
 
+`--film <dir>` records instead of posing: a numbered frame every time the
+encoder is free, for as long as the run lasts. Paired with `--patrol`, which
+drives the player, it is the game playing itself with a camera on it, and the
+frames assemble into a video with `ffmpeg`. It is the only instrument that
+catches what is wrong only while the game is *running* — the first take found
+an audio-source leak, two parked cars inside each other and a patrol that could
+not walk round a building.
+
 `--fps-log` reports median, p95 and worst frame time — over the *warmup* frames,
 and the default warmup is short enough that it is timing a half-built scene.
 Always pass `--frames 200` for a number worth quoting: the same street framing
@@ -111,7 +119,7 @@ bevy_egui, saves are RON.
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
 | `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
-| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself, the animals among their feet, pigeon flocks that scatter (`pigeon`), umbrellas when it rains (`brolly`), a citizen who has stopped to play and the ring the city's mood gathers round them (`busker`) |
+| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself, the animals among their feet, pigeon flocks that scatter (`pigeon`), umbrellas when it rains (`brolly`), a citizen who has stopped to play and the ring the city's mood gathers round them (`busker`), the one point everything ambient is kept around (`focus`), somewhere to be (`errands`), and stepping off a kerb (`crossing`) |
 | `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |

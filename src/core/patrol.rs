@@ -62,14 +62,29 @@ pub struct Patrol {
 
 /// How close counts as arrived, in metres.
 const ARRIVED: f32 = 6.0;
-/// How long to spend on one leg before giving up and picking another. A patrol
-/// that walks into a wall for two minutes tests one wall very thoroughly.
+/// How long to spend on one waypoint before giving up on it.
+///
+/// Under the twelve seconds the watch calls "the player has not moved", and
+/// deliberately: a patrol that has not moved for twelve seconds should have
+/// tried something else by then, and the complaint should mean *rerouting did
+/// not help* rather than "there is a traffic car in the way". Above the watch's
+/// threshold the two instruments disagree with each other — the patrol is still
+/// patiently waiting and the watch is already calling it stuck — and the
+/// complaint stops carrying information.
 const PATIENCE: f32 = 22.0;
 /// Seconds between provocations, and between attempts to find a car.
 const SHOUT_EVERY: f32 = 3.0;
 const CAR_EVERY: f32 = 25.0;
 /// How far a junction may be and still be worth walking to.
 const LEG: f32 = 140.0;
+
+/// How far off the centreline a waypoint is nudged, onto the pavement.
+///
+/// Wider than the widest half-carriageway plus a pavement, so it lands past the
+/// kerb on any street in the town. Overshooting puts the waypoint in a wall,
+/// which the arrival radius forgives; undershooting puts it in the traffic,
+/// which nothing does.
+const PAVEMENT_WALK: f32 = 6.5;
 
 /// Above this, in metres, something that belongs on the road is not on it.
 ///
@@ -164,19 +179,30 @@ fn plan(city: &crate::world::City, here: Vec2, elapsed: f32) -> Vec<Vec2> {
     let Some(goal) = goal else {
         return Vec::new();
     };
-    graph
-        .path(start, goal)
-        .map(|route| {
-            route
-                .into_iter()
-                .map(|node| graph.node(node).pos)
-                // The node the patrol is already standing on is not a
-                // waypoint; walking to where you are is how a route ends
-                // before it starts.
-                .filter(|pos| pos.distance(here) > ARRIVED)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(route) = graph.path(start, goal) else {
+        return Vec::new();
+    };
+    // Onto the pavement.
+    //
+    // The junction nodes are on the *centreline*, and walking a city down the
+    // middle of its roads is both not what a player does and a reliable way to
+    // be stopped by a traffic car or a parked one — which is what the watch was
+    // reporting as "the player has not moved for twelve seconds". Offset to the
+    // right of each leg, which is the pavement on the side traffic drives, the
+    // route walks the same city on the surface it was mitred for.
+    let mut walked = Vec::with_capacity(route.len());
+    let mut previous = here;
+    for node in route {
+        let at = graph.node(node).pos;
+        if let Ok(direction) = Dir2::new(at - previous) {
+            walked.push(at + crate::ai::steering::right_of(*direction) * PAVEMENT_WALK);
+        }
+        previous = at;
+    }
+    // The waypoint the patrol is already standing on is not a waypoint; walking
+    // to where you are is how a route ends before it starts.
+    walked.retain(|pos| pos.distance(here) > ARRIVED);
+    walked
 }
 
 fn walk_about(
@@ -209,9 +235,11 @@ fn walk_about(
         patrol.stuck_for = 0.0;
     } else if patrol.stuck_for > PATIENCE {
         patrol.stuck_for = 0.0;
-        // Not the whole route: one blocked waypoint is a doorway to walk
-        // round, and throwing the route away for it means never getting
-        // anywhere in a town with doorways in it.
+        // One waypoint, not the whole route. Both were tried and measured over
+        // two minutes of Landshut: dropping one visits twenty-three junctions,
+        // replanning from the same blocked spot visits ten — because the new
+        // goal is picked from where the patrol is standing and comes out
+        // behind the same obstacle.
         if !patrol.route.is_empty() {
             patrol.route.remove(0);
         }

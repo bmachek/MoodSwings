@@ -50,6 +50,13 @@ use crate::world::weather::Weather;
 /// `world::interior` is the one place that already had this right, and says so.
 const WINDOW_GLOW: f32 = 3.0;
 
+/// And what a window is lit to when it is broad daylight outside.
+///
+/// Against a sunlit render at about two thirds of the white point, an eighth
+/// reads as a room seen through glass — darker than the wall around it, which
+/// is right, and not black, which it was.
+const DAYLIT_PANE: f32 = 0.12;
+
 #[derive(Resource, Debug, Clone)]
 pub struct TimeOfDay {
     /// Hours since midnight, 0..24.
@@ -480,7 +487,13 @@ fn light_windows(
 
     // Against how bright it is *outside*, not against the clock: an office
     // turns its lights on for a dark afternoon as well as for the evening.
-    let level = 1.0 - brightness(clock.hours, weather.cover);
+    // Never quite zero. At noon this went to nothing and every window in the
+    // city became a flat dark rectangle — which is what glass looks like from
+    // *inside* a lit room, and the exact opposite of what it looks like from a
+    // sunlit street. A pane in daylight is a dim room plus a reflection of the
+    // street, and the room half of that is what this floor is: a shopfront that
+    // reads as having something behind it rather than as a hole in the wall.
+    let level = (1.0 - brightness(clock.hours, weather.cover)).max(DAYLIT_PANE);
     if applied.is_some_and(|last: f32| (last - level).abs() < 0.01) {
         return;
     }

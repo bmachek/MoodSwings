@@ -216,6 +216,28 @@ afforded.
 | `--mood F` | Hold every face in the city at this mood, −1 to 1 |
 | `--fps-log` | Log median, p95 and worst frame time alongside the shot |
 | `--city S` | Build this `CityStyle` instead of the persisted one (`landshuepf`, `newdork`, …) |
+| `--film DIR` | Write a numbered frame into `DIR` instead of one still — see below |
+| `--film-every N` / `--film-frames N` | How often to write, and how many |
+
+### Filming a run
+
+A still cannot be wrong about a shadow and cannot be wrong about anything that
+only happens while the game is *running*: a citizen walking through a wall, a
+car climbing a kerb it should have stopped at, a crowd stepping off a kerb in
+formation, a chunk popping in. `--film` records instead of posing, and paired
+with `--patrol` — which drives the player — it is the game playing itself with
+a camera on it:
+
+```sh
+cargo run --release -- --screenshot shots/film/unused.png \
+    --film shots/film --film-frames 700 --follow --patrol 200 --city landshuepf
+ffmpeg -framerate 20 -i shots/film/%05d.png -c:v libx264 -pix_fmt yuv420p out.mp4
+```
+
+Frames are written one at a time — encoding a 1600x900 PNG takes longer than a
+frame does, so a filmed run plays at about ten a second and the clock is the
+game's rather than the recorder's. The first take of this found three defects
+in ten minutes, two of which no still framing and no unit test could have seen.
 
 ## Licence
 

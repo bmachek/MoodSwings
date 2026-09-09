@@ -17,7 +17,13 @@ pub const WHEEL_COUNT: usize = 4;
 /// inside a static box — which Avian resolves the only way it can, and which
 /// the patrol once caught as a parked car leaving the ground at thirteen
 /// metres a second.
-const KERB_DAYLIGHT: f32 = 0.02;
+///
+/// Six centimetres rather than the two it started at. Two is enough on paper —
+/// the box floor lands at 0.30 against a 0.28 kerb — and it is not enough in
+/// practice, because a car settles onto whatever is under it and a couple of
+/// centimetres of suspension travel is all it takes to close the gap. The
+/// patrol caught exactly that, once, a hundred seconds into a run.
+const KERB_DAYLIGHT: f32 = 0.06;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VehicleClass {
