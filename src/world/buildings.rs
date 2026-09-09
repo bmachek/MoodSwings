@@ -58,6 +58,22 @@ const PLINTH_RANGE: f32 = 260.0;
 
 /// Roughly how wide a paving slab or a patch of grass should be, in metres.
 const GROUND_TILE: f32 = 2.6;
+
+/// And roughly how wide one repeat of a flat roof's chippings should be.
+///
+/// A metre and a half. The roof used to carry a *fixed repeat count* — six,
+/// over whatever size of unit cube it was scaled onto — so a ten-metre house
+/// got a repeat every one and a half metres and a forty-metre block got one
+/// every seven. At seven metres a gravel photograph is not gravel, it is a
+/// smear with streaks in it, and from any rooftop or any aerial that is the
+/// largest surface in the frame. The same bucket machinery the paving already
+/// uses fixes it: pick the tiling that lands nearest the true size.
+const ROOF_GRAIN: f32 = 1.6;
+
+/// Tilings a flat roof may be drawn at. Wider than [`GROUND_BUCKETS`] at both
+/// ends, because a roof runs from a four-metre outhouse to a forty-metre slab
+/// and a paved apron never does.
+const ROOF_BUCKETS: [f32; 5] = [3.0, 6.0, 10.0, 16.0, 26.0];
 /// Tiling factors block tops are quantised to, so they can share materials.
 const GROUND_BUCKETS: [f32; 4] = [8.0, 12.0, 17.0, 24.0];
 
@@ -73,7 +89,8 @@ pub struct CityAssets {
     /// The same colours as `building`, as plain paint with no windows on it.
     /// Indexed by `district_index * PALETTE_SIZE + palette`.
     plain: Vec<Handle<StandardMaterial>>,
-    roof: Handle<StandardMaterial>,
+    /// One per entry in [`ROOF_BUCKETS`].
+    roof: Vec<Handle<StandardMaterial>>,
     /// The kerb face, tiled for a band a quarter of a metre tall.
     kerb: Handle<StandardMaterial>,
     park_kerb: Handle<StandardMaterial>,
@@ -401,6 +418,16 @@ fn concrete_slab(
 
 /// Nearest tiling factor that puts ground tiles near [`GROUND_TILE`] across a
 /// surface `extent` metres wide.
+fn roof_bucket(extent: f32) -> usize {
+    let wanted = (extent / ROOF_GRAIN).max(1.0);
+    ROOF_BUCKETS
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (*a - wanted).abs().total_cmp(&(*b - wanted).abs()))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
 fn ground_bucket(extent: f32) -> usize {
     let wanted = (extent / GROUND_TILE).max(1.0);
     GROUND_BUCKETS
@@ -581,28 +608,35 @@ pub fn build_assets(
         }));
     }
 
-    let mut tar = StandardMaterial {
-        // Roofs are only ever seen from a distance, so one tiling suits all.
-        uv_transform: Affine2::from_scale(Vec2::splat(6.0)),
-        ..default()
-    };
-    match library.get(super::material::set::ROOF) {
-        Some(scanned) => {
-            scanned.apply(&mut tar);
-            // The tint is not optional, and leaving it off was the single
-            // loudest mistake in any aerial framing of this city. The scanned
-            // set is pale gravel photographed in daylight, and `apply` leaves
-            // the base colour at white — so every flat roof in the city came
-            // out at fifty percent albedo. From above, a city of snow. A tar
-            // and chippings roof is nearer twelve, which is what this is.
-            tar.base_color = ROOF_TINT;
+    // One per bucket. "Roofs are only ever seen from a distance, so one tiling
+    // suits all" is what this said, and it is the one thing about a roof that
+    // is not true from a rooftop or from the air — which is where a roof is
+    // looked at. See [`ROOF_GRAIN`].
+    let mut roofs = Vec::with_capacity(ROOF_BUCKETS.len());
+    for tiling in ROOF_BUCKETS {
+        let mut tar = StandardMaterial {
+            uv_transform: Affine2::from_scale(Vec2::splat(tiling)),
+            ..default()
+        };
+        match library.get(super::material::set::ROOF) {
+            Some(scanned) => {
+                scanned.apply(&mut tar);
+                // The tint is not optional, and leaving it off was the single
+                // loudest mistake in any aerial framing of this city. The scanned
+                // set is pale gravel photographed in daylight, and `apply` leaves
+                // the base colour at white — so every flat roof in the city came
+                // out at fifty percent albedo. From above, a city of snow. A tar
+                // and chippings roof is nearer twelve, which is what this is.
+                tar.base_color = ROOF_TINT;
+            }
+            None => {
+                tar.base_color = Color::srgb(0.38, 0.38, 0.40);
+                tar.base_color_texture = Some(images.add(texture::roof()));
+                tar.normal_map_texture = Some(images.add(texture::roof_normal()));
+                tar.perceptual_roughness = 0.96;
+            }
         }
-        None => {
-            tar.base_color = Color::srgb(0.38, 0.38, 0.40);
-            tar.base_color_texture = Some(images.add(texture::roof()));
-            tar.normal_map_texture = Some(images.add(texture::roof_normal()));
-            tar.perceptual_roughness = 0.96;
-        }
+        roofs.push(materials.add(tar));
     }
 
     CityAssets {
@@ -615,7 +649,7 @@ pub fn build_assets(
         )),
         building,
         plain,
-        roof: materials.add(tar),
+        roof: roofs,
         kerb: materials.add(concrete_slab(
             library,
             images,
@@ -702,9 +736,12 @@ impl CityAssets {
         self.concrete.clone()
     }
 
-    /// The tarred-roof material, for anything that wants to read as roofing.
-    pub fn roof_material(&self) -> Handle<StandardMaterial> {
-        self.roof.clone()
+    /// The tarred-roof material for a surface this many metres across.
+    ///
+    /// Takes a size, because a fixed repeat count on a unit cube is a repeat
+    /// that changes size with the building — see [`ROOF_GRAIN`].
+    pub fn roof_material(&self, extent: f32) -> Handle<StandardMaterial> {
+        self.roof[roof_bucket(extent)].clone()
     }
 
     /// The unit pyramid the church spires scale from.
@@ -1456,7 +1493,7 @@ fn spawn_building(
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(assets.roof.clone()),
+            MeshMaterial3d(assets.roof_material(size.x.max(size.y))),
             stand(
                 height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
                 Vec3::new(
@@ -1769,6 +1806,26 @@ mod tests {
                 y > 0.0,
                 v > 0.5,
                 "side vertex {vertex} has V running against Y"
+            );
+        }
+    }
+
+    /// A roof's chippings are the same size on every roof.
+    ///
+    /// They were not: the tiling was a fixed six repeats over whatever size of
+    /// unit cube the roof happened to be, so a four-metre outhouse got a
+    /// repeat every seventy centimetres and a forty-metre block got one every
+    /// seven metres. Seven metres of gravel photograph magnified is a smear
+    /// with streaks in it, and a flat roof is the largest surface in any
+    /// aerial. Held to within a factor of two of the true grain, which is as
+    /// close as five buckets get over a ten-to-one range of roofs.
+    #[test]
+    fn a_roof_is_the_same_gravel_whatever_size_it_is() {
+        for extent in [4.0f32, 7.0, 11.0, 18.0, 26.0, 40.0, 60.0] {
+            let repeat = extent / ROOF_BUCKETS[roof_bucket(extent)];
+            assert!(
+                (ROOF_GRAIN * 0.5..=ROOF_GRAIN * 2.0).contains(&repeat),
+                "a {extent}m roof repeats every {repeat:.2}m against a {ROOF_GRAIN}m grain"
             );
         }
     }

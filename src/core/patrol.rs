@@ -42,8 +42,16 @@ use crate::player::on_foot::Player;
 pub struct Patrol {
     pub seconds: f32,
     elapsed: f32,
-    /// Where it is walking to now, and how long it has been trying.
-    target: Option<Vec2>,
+    /// The route it is walking, nearest waypoint first, and how long it has
+    /// been trying to reach the next one.
+    ///
+    /// A route rather than a point, and that is the difference between a
+    /// patrol that walks the city and one that walks into a wall. It used to
+    /// pick the nearest junction within a hundred and forty metres and hold
+    /// forward at it — which works on an empty grid and does not work at all on
+    /// a town read off a map, where the straight line between two junctions
+    /// goes through four houses. A hundred seconds of it reached one junction.
+    route: Vec<Vec2>,
     stuck_for: f32,
     /// Ticks since the last taunt and the last attempt at a car.
     since_shout: f32,
@@ -102,7 +110,7 @@ impl Plugin for PatrolPlugin {
         app.insert_resource(Patrol {
             seconds,
             elapsed: 0.0,
-            target: None,
+            route: Vec::new(),
             stuck_for: 0.0,
             since_shout: 0.0,
             since_car: 0.0,
@@ -121,6 +129,56 @@ impl Plugin for PatrolPlugin {
 }
 
 /// Steers the synthetic player, and provokes the neighbours.
+/// A route through the city, as junctions to walk to in order.
+///
+/// A*, over the same road graph the traffic and the crowd use. Straight-line
+/// targets are what this replaced, and the reason is that a town read off a map
+/// has buildings between its junctions: the patrol would pick the nearest node,
+/// hold forward, walk into a terrace and stand there for its whole twenty-two
+/// seconds of patience before picking another node behind the same terrace.
+/// Over a hundred seconds it reached one junction, which is not a patrol of a
+/// city, it is a very thorough test of one wall.
+///
+/// The destination is stepped through the node list by elapsed time rather than
+/// drawn, so a patrol covers different ground the longer it runs without
+/// touching a generation stream.
+fn plan(city: &crate::world::City, here: Vec2, elapsed: f32) -> Vec<Vec2> {
+    let graph = &city.graph;
+    let Some(start) = graph.nearest_node(here) else {
+        return Vec::new();
+    };
+    let nodes = graph.node_count().max(1);
+    let step = (elapsed * 11.0) as usize;
+    // Somewhere worth walking to: far enough to cross a few streets, near
+    // enough that the route is not the whole town.
+    let mut goal = None;
+    for offset in 0..nodes.min(160) {
+        let index = (step + offset * 37) % nodes;
+        let id = crate::world::roadgraph::NodeId(index as u32);
+        let away = graph.node(id).pos.distance(here);
+        if (LEG * 0.4..LEG).contains(&away) {
+            goal = Some(id);
+            break;
+        }
+    }
+    let Some(goal) = goal else {
+        return Vec::new();
+    };
+    graph
+        .path(start, goal)
+        .map(|route| {
+            route
+                .into_iter()
+                .map(|node| graph.node(node).pos)
+                // The node the patrol is already standing on is not a
+                // waypoint; walking to where you are is how a route ends
+                // before it starts.
+                .filter(|pos| pos.distance(here) > ARRIVED)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn walk_about(
     time: Res<Time>,
     city: Option<Res<crate::world::City>>,
@@ -139,38 +197,32 @@ fn walk_about(
 
     let here = Vec2::new(at.translation.x, at.translation.z);
 
-    // Pick somewhere to go, and pick again on arrival or on giving up.
-    let arrived = patrol
-        .target
-        .is_some_and(|target| here.distance(target) < ARRIVED);
-    if arrived {
+    // Tick off the waypoint it is standing on, and give up on one it cannot
+    // reach — a car parked across a pavement, a hedge, a flight of steps.
+    if patrol
+        .route
+        .first()
+        .is_some_and(|next| here.distance(*next) < ARRIVED)
+    {
+        patrol.route.remove(0);
         patrol.visited += 1;
-    }
-    if patrol.target.is_none() || arrived || patrol.stuck_for > PATIENCE {
         patrol.stuck_for = 0.0;
-        // The next junction along, chosen by walking the graph rather than by
-        // teleporting: a patrol is only worth running if it goes through the
-        // city the way a player does, streaming chunks in and out behind it.
-        let step = (patrol.elapsed * 7.0) as usize;
-        let nodes = city.graph.node_count();
-        let mut best: Option<(f32, Vec2)> = None;
-        for offset in 0..nodes.min(96) {
-            let index = (step + offset * 17) % nodes.max(1);
-            let pos = city
-                .graph
-                .node(crate::world::roadgraph::NodeId(index as u32))
-                .pos;
-            let distance = here.distance(pos);
-            if distance > ARRIVED * 2.0
-                && distance < LEG
-                && best.is_none_or(|(best, _)| distance < best)
-            {
-                best = Some((distance, pos));
-            }
+    } else if patrol.stuck_for > PATIENCE {
+        patrol.stuck_for = 0.0;
+        // Not the whole route: one blocked waypoint is a doorway to walk
+        // round, and throwing the route away for it means never getting
+        // anywhere in a town with doorways in it.
+        if !patrol.route.is_empty() {
+            patrol.route.remove(0);
         }
-        patrol.target = best.map(|(_, pos)| pos);
     } else {
         patrol.stuck_for += dt;
+    }
+
+    // Out of route: plan a new one, along the road graph rather than straight
+    // through the buildings between here and there.
+    if patrol.route.is_empty() {
+        patrol.route = plan(&city, here, patrol.elapsed);
     }
 
     // Steer. `Move` is in the player's own frame — forward is -Z rotated by the
@@ -178,8 +230,8 @@ fn walk_about(
     // so aiming the *camera* at the target and holding forward is both simpler
     // and closer to what a player does.
     let mut heading = Vec2::Y;
-    if let Some(target) = patrol.target {
-        let to = target - here;
+    if let Some(target) = patrol.route.first() {
+        let to = *target - here;
         if to.length_squared() > 1e-4 {
             heading = to.normalize();
         }
@@ -201,7 +253,11 @@ fn walk_about(
 
     // Sprint on the long legs, which is also the only thing that exercises the
     // bounce controller at speed.
-    if patrol.target.is_some_and(|t| here.distance(t) > 25.0) {
+    if patrol
+        .route
+        .first()
+        .is_some_and(|next| here.distance(*next) > 25.0)
+    {
         actions.press(&Action::Sprint);
     } else {
         actions.release(&Action::Sprint);

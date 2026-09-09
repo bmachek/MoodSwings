@@ -47,7 +47,8 @@ impl Plugin for AudioPlugin {
         // A screenshot is taken by a process nobody is listening to, and the
         // capture run is scripted rather than played.
         if crate::core::capture::is_capture_mode() {
-            app.insert_resource(GlobalVolume::new(Volume::SILENT));
+            app.insert_resource(GlobalVolume::new(Volume::SILENT))
+                .add_systems(Update, hush);
             return;
         }
 
@@ -60,6 +61,25 @@ impl Plugin for AudioPlugin {
                 ride_the_gain.in_set(crate::core::schedule::GameSet::Ui),
             )
             .add_plugins(sfx::SfxPlugin);
+    }
+}
+
+/// Throws away every sound a capture run makes, on the frame it is made.
+///
+/// Silencing the mixer is not enough, and the difference only shows in a run
+/// long enough to accumulate: `cap_one_shots` — the choir that keeps the
+/// number of live one-shots bounded — lives in [`sfx::SfxPlugin`], and that
+/// plugin is exactly what a capture run does not install. So every footfall,
+/// grumble, boing and taunt the crowd made was spawned and never capped, and a
+/// filmed seventy seconds of Landshut ended with thirty-eight thousand sources
+/// handed to a mixer that was rendering all of them at zero volume.
+///
+/// It went unseen for as long as a capture was one posed frame. `--film` is
+/// what put a capture run on the clock for minutes at a time, and the patrol's
+/// own watch caught it on the first take — which is what both of them are for.
+fn hush(mut commands: Commands, fresh: Query<Entity, Added<PlaybackSettings>>) {
+    for sound in &fresh {
+        commands.entity(sound).despawn();
     }
 }
 

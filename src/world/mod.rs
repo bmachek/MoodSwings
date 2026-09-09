@@ -397,6 +397,15 @@ fn setup_ground(
         let reach = config.world.half_extent + ENVELOPE + BACKLAND + 60.0;
         let started = std::time::Instant::now();
         let mask = images.add(urban_mask(&city, reach));
+        // And what the town's floor is made of. The scanned grit if it was
+        // downloaded and the painted roof grain if it was not — both are the
+        // same thing at the scale a yard is seen from, which is a surface of
+        // small stones. Sampled in the grass's own UVs, so it needs no second
+        // tiling and no second set of coordinates.
+        let yard = library
+            .get(material::set::ROOF)
+            .map(|scanned| scanned.color.clone())
+            .unwrap_or_else(|| images.add(texture::roof()));
         info!(
             "town mask rasterised in {:.1}ms at {}²",
             started.elapsed().as_secs_f32() * 1000.0,
@@ -410,7 +419,7 @@ fn setup_ground(
             // quad is kilometres across — see `world::ground`.
             MeshMaterial3d(grounds.add(ground::GroundMaterial {
                 base: landscape(&library, images.as_mut()),
-                extension: ground::GroundBreakup::plain(mask, reach),
+                extension: ground::GroundBreakup::plain(mask, yard, reach),
             })),
             Transform::from_xyz(0.0, 0.0, 0.0),
         ));

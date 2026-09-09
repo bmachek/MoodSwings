@@ -2,6 +2,7 @@
 
 use avian3d::prelude::*;
 use bevy::camera::visibility::VisibilityRange;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use rand::RngExt;
 
@@ -646,6 +647,10 @@ const BAY_BEND_CLEAR: f32 = 0.8;
 /// And the daylight left between two cars in a row.
 const BAY_GAP: f32 = 0.35;
 
+/// Cell of the parked-car occupancy grid, in metres. A little over the longest
+/// body, so a candidate only ever has to look at nine cells.
+const PARK_CELL: f32 = 8.0;
+
 /// Scatters parked cars along the kerbs so there is always something to steal.
 pub fn spawn_parked_vehicles(
     mut commands: Commands,
@@ -656,6 +661,17 @@ pub fn spawn_parked_vehicles(
 ) {
     let mut rng = stream_for(config.world_seed, stream::VEHICLE_SPAWNS);
     let mut spawned = 0;
+    // Where every car already stands, bucketed so a candidate only compares
+    // itself with the handful that could possibly be near it.
+    //
+    // A row is laid per street and the bays inside one row cannot overlap, but
+    // two *streets* can: at a bend the same kerb carries on round it, and both
+    // edges start their rows a metre or two from the node they share. The
+    // patrol caught the result on the first second of a run — two parked cars
+    // two metres apart leaving the ground at fourteen metres a second, which is
+    // Avian resolving an overlap the only way it can.
+    let mut taken: HashMap<(i32, i32), Vec<(Vec2, f32)>> = HashMap::default();
+    let mut clashes = 0usize;
 
     for edge in city.graph.edges() {
         use crate::ai::steering::Parking;
@@ -758,6 +774,30 @@ pub fn spawn_parked_vehicles(
             let along =
                 head + bay as f32 * BAY_LENGTH + nose + rng.random_range(0.0..slack.max(1e-3));
             let position = a + *direction * along + normal * offset * side;
+            // Is anything already standing here? Circles rather than boxes: two
+            // cars nose to tail are a row and two cars a body's width apart are
+            // a collision, and the difference between them is a distance.
+            let reach = spec.half_extents.z + BAY_GAP * 0.5;
+            let cell = (
+                (position.x / PARK_CELL).floor() as i32,
+                (position.y / PARK_CELL).floor() as i32,
+            );
+            let clash = (-1..=1).any(|dx| {
+                (-1..=1).any(|dz| {
+                    taken
+                        .get(&(cell.0 + dx, cell.1 + dz))
+                        .is_some_and(|others| {
+                            others
+                                .iter()
+                                .any(|(at, theirs)| position.distance(*at) < reach + theirs)
+                        })
+                })
+            });
+            if clash {
+                clashes += 1;
+                continue;
+            }
+            taken.entry(cell).or_default().push((position, reach));
             // Nose along the street, facing the way traffic on that side runs.
             let facing = if side > 0.0 { *direction } else { -*direction };
             let heading = heading_towards(facing);
@@ -828,7 +868,7 @@ pub fn spawn_parked_vehicles(
         }
     }
 
-    info!("{spawned} vehicles parked around the city");
+    info!("{spawned} vehicles parked around the city, {clashes} spots given up as taken");
 }
 
 #[cfg(test)]

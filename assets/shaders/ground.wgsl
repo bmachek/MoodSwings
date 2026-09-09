@@ -83,6 +83,8 @@ struct GroundSettings {
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> ground: GroundSettings;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var town: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var town_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var yard: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var yard_sampler: sampler;
 
 // The three surfaces the grass is allowed to stop being, in linear albedo.
 //
@@ -141,6 +143,17 @@ fn fbm(p: vec2<f32>) -> f32 {
 fn spread(value: f32) -> f32 {
     return clamp((value - 0.5) * 1.9 + 0.5, 0.0, 1.0);
 }
+
+// What the grit scan has to be multiplied by to be a yard rather than a
+// quarry. `Gravel023` is white chippings in the sun with a mean linear albedo
+// of 0.70 — the brightest map in the library by three times — and the same
+// argument `ground::TURF_TINT` makes about grass applies to it twice over.
+const GRIT_TINT: vec3<f32> = vec3(0.20, 0.185, 0.165);
+
+// Metres of yard one repeat of it covers. In world space rather than in the
+// mesh's UVs, for the reason the rest of this file is: the ground restarts its
+// coordinates every cell, and a surface sampled in them would carry the seam.
+const YARD_TILE: f32 = 2.1;
 
 fn vary(input: PbrInput) -> PbrInput {
     var pbr_input = input;
@@ -201,7 +214,16 @@ fn vary(input: PbrInput) -> PbrInput {
     // that a courtyard forty metres across has something happening across it —
     // one constant is what a slab is, and a slab between two streets is the
     // failure this replaced, turned inside out.
-    let floor = mix(GRIT, EARTH, smoothstep(0.40, 0.80, close) * 0.55);
+    // What the floor is made of, and it is a *photograph* rather than a
+    // constant. The first pass mixed towards the three fixed albedos below and
+    // nothing else, and a colour is not a surface: the only image bound was
+    // grass, so the moment the mask said "town" a courtyard forty metres across
+    // became one smooth beige plane with a soft edge round it — which reads
+    // worse than the meadow it replaced, because meadow at least had a
+    // photograph under it. Sampled in the ground's own UVs, so it tiles at the
+    // same few metres the grass does.
+    let grit = textureSample(yard, yard_sampler, here / YARD_TILE).rgb * GRIT_TINT;
+    let floor = mix(grit, mix(GRIT, EARTH, smoothstep(0.40, 0.80, close) * 0.55), 0.35);
     // And not everywhere. The land behind a terrace is yards *and* gardens, and
     // a town whose whole back land is one gravel is exactly as wrong as one
     // whose whole back land is one lawn — which is what the first pass with the

@@ -90,7 +90,7 @@ pub fn spawn(
     let half = width * 0.72;
     solid(
         commands,
-        assets.roof_material(),
+        assets.roof_material(half.max(nave_depth)),
         Vec3::new(0.0, nave_h + 0.2, nave_z),
         Vec3::new(half, half, nave_depth * 0.98),
         Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
@@ -108,7 +108,9 @@ pub fn spawn(
     // shadow, painted in geometry because the tower wears no facade.
     solid(
         commands,
-        assets.roof_material(),
+        // The doorway is a slab of shadow rather than roofing; the tiling only
+        // has to be small enough not to smear.
+        assets.roof_material(2.0),
         Vec3::new(0.0, 1.6, tower_z + tower_side * 0.5 + 0.03),
         Vec3::new(1.9, 3.2, 0.08),
         Quat::IDENTITY,
@@ -121,7 +123,7 @@ pub fn spawn(
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.spire()),
-        MeshMaterial3d(assets.roof_material()),
+        MeshMaterial3d(assets.roof_material(tower_side.max(spire_h))),
         Transform::from_translation(place(Vec3::new(0.0, tower_h + spire_h * 0.5, tower_z)))
             // A four-sided cone stands with an edge forward; an eighth turn
             // puts a *face* forward, which is how a spire sits on a tower.

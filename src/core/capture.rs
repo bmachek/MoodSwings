@@ -117,6 +117,31 @@ pub struct CaptureRequest {
     /// be photographed without editing anybody's options file. Accepts the
     /// enum name or the label ("--city landshuepf", "--city Landshüpf").
     pub city: Option<crate::core::config::CityStyle>,
+    /// Writes a numbered frame into this directory every so many frames, for
+    /// as long as the run lasts, instead of one still.
+    ///
+    /// A still cannot be wrong about a shadow and cannot be wrong about
+    /// anything that only happens while the game is *running*: a citizen
+    /// walking through a wall, a car climbing a kerb it should have stopped
+    /// at, a crowd all stepping off a kerb in formation, a shadow that swims,
+    /// a chunk popping in. Those are the defects a posed frame is structurally
+    /// unable to catch, and they are most of what is left once the still
+    /// framings are clean.
+    ///
+    /// Paired with `--patrol`, which drives the player, this is the game
+    /// playing itself with a camera running — and the frames assemble into a
+    /// video with `ffmpeg`.
+    pub film: Option<Film>,
+}
+
+/// Where a filmed run writes, and how often.
+#[derive(Debug, Clone)]
+pub struct Film {
+    pub dir: PathBuf,
+    /// One frame written every this many rendered.
+    pub every: u32,
+    /// And how many to write before quitting.
+    pub count: u32,
 }
 
 #[derive(Resource)]
@@ -127,6 +152,15 @@ struct CaptureProgress {
     frame: u32,
     triggered: bool,
     saved: Arc<AtomicBool>,
+    /// Frames written by a filmed run, and whether one is still being written.
+    ///
+    /// One at a time: `save_to_disk` encodes and writes a 1600x900 PNG inside
+    /// its observer, which takes rather longer than a frame, and issuing the
+    /// next screenshot before the last has landed simply queues encodes until
+    /// the process runs out of memory. Waiting costs a filmed run its frame
+    /// rate and nothing else — the clock is the game's, not the recorder's.
+    filmed: u32,
+    writing: Arc<AtomicBool>,
     /// Frame durations in milliseconds, oldest first.
     ///
     /// Kept whole rather than reduced to a running mean because the number that
@@ -197,6 +231,15 @@ pub fn parse_args() -> Option<CaptureRequest> {
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
+        film: value_of("--film").map(|dir| Film {
+            dir: PathBuf::from(dir),
+            every: value_of("--film-every")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6),
+            count: value_of("--film-frames")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(240),
+        }),
         city: value_of("--city").map(|name| {
             crate::core::config::CityStyle::ALL
                 .into_iter()
@@ -222,12 +265,17 @@ impl Plugin for CapturePlugin {
         {
             let _ = std::fs::create_dir_all(parent);
         }
+        if let Some(film) = &request.film {
+            let _ = std::fs::create_dir_all(&film.dir);
+        }
 
         app.insert_resource(request)
             .insert_resource(CaptureProgress {
                 frame: 0,
                 triggered: false,
                 saved: Arc::new(AtomicBool::new(false)),
+                filmed: 0,
+                writing: Arc::new(AtomicBool::new(false)),
                 frame_times: Vec::new(),
             })
             .add_systems(PreStartup, apply_capture_overrides)
@@ -365,6 +413,40 @@ fn drive_capture(
         // it saturates on precisely the slow frames a budget is decided by, and
         // reports them all as an identical 250.00 ms.
         progress.frame_times.push(time.delta_secs() * 1000.0);
+    }
+
+    // A filmed run writes frames for as long as it lasts and never takes the
+    // single still. It is the same offscreen target and the same encoder; what
+    // changes is that nothing is posed and nothing is frozen, so what lands on
+    // disk is the game as it actually runs.
+    if let Some(film) = &request.film {
+        if progress.frame < request.warmup_frames {
+            return;
+        }
+        if progress.filmed >= film.count {
+            info!(
+                "film complete: {} frames in {}",
+                progress.filmed,
+                film.dir.display()
+            );
+            exit.write(AppExit::Success);
+            return;
+        }
+        if !progress.frame.is_multiple_of(film.every.max(1)) {
+            return;
+        }
+        if progress.writing.load(Ordering::SeqCst) {
+            return;
+        }
+        let path = film.dir.join(format!("{:05}.png", progress.filmed));
+        progress.filmed += 1;
+        progress.writing.store(true, Ordering::SeqCst);
+        let done = progress.writing.clone();
+        commands
+            .spawn(Screenshot::image(target.0.clone()))
+            .observe(save_to_disk(path))
+            .observe(move |_: On<ScreenshotCaptured>| done.store(false, Ordering::SeqCst));
+        return;
     }
 
     if !progress.triggered && progress.frame >= request.warmup_frames {

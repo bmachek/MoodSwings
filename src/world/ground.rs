@@ -169,17 +169,34 @@ pub struct GroundBreakup {
     #[texture(101)]
     #[sampler(102)]
     pub town: Option<Handle<Image>>,
+    /// What the town's own floor is made of.
+    ///
+    /// The first pass at this varied the ground's *colour* by the mask and
+    /// nothing else, and a colour is not a surface: the only texture bound was
+    /// grass, so a courtyard forty metres across came out as a large smooth
+    /// beige plane with a soft edge on it — which reads worse than the meadow
+    /// it replaced, because meadow at least has a photograph under it. Grit is
+    /// a photograph too, and mixing towards it rather than towards a constant
+    /// is the difference between a yard and a stain.
+    ///
+    /// Sampled in the same UVs as the grass, so it tiles at the same few
+    /// metres and needs no second set of coordinates.
+    #[texture(103)]
+    #[sampler(104)]
+    pub yard: Option<Handle<Image>>,
 }
 
 impl GroundBreakup {
-    /// The open ground, with the town rasterised into it.
-    pub fn plain(town: Handle<Image>, half_extent: f32) -> Self {
+    /// The open ground, with the town rasterised into it and something for its
+    /// floor to be made of.
+    pub fn plain(town: Handle<Image>, yard: Handle<Image>, half_extent: f32) -> Self {
         Self {
             settings: GroundSettings {
                 half_extent,
                 ..GroundSettings::plain()
             },
             town: Some(town),
+            yard: Some(yard),
         }
     }
 
@@ -188,6 +205,7 @@ impl GroundBreakup {
         Self {
             settings: GroundSettings::patch(),
             town: None,
+            yard: None,
         }
     }
 }
