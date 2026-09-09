@@ -42,7 +42,7 @@ use bevy::prelude::*;
 
 use crate::core::config::GameConfig;
 use crate::player::camera::CameraRig;
-use crate::world::streetlights::StreetLight;
+use crate::world::streetlights::LampBeam;
 use crate::world::timeofday::{Sun, TimeOfDay, daylight};
 use crate::world::weather::Weather;
 
@@ -64,12 +64,35 @@ use super::quality::{Upscaling, Volumetrics};
 const DENSITY_CLEAR: f32 = 0.0011;
 /// What a solid overcast adds. Closes a long avenue down without closing the
 /// street you are standing in.
-const DENSITY_COVER: f32 = 0.0055;
+///
+/// Less than half what it was, and the reason is that it was never the only
+/// haze over that avenue. Bevy's atmosphere applies an aerial-perspective LUT
+/// over the same distances — physically derived, and it knows where the sun is,
+/// which this does not — so an overcast day was hazed twice by two independent
+/// models. At the old 0.0055 a building three hundred metres away kept 41% of
+/// its contrast and one at five hundred kept 23%, *before* the atmosphere had
+/// its turn. That is the grey band across the middle of the gen-street framing,
+/// and it is most of what "washed out" meant. The guard test only ever checked
+/// a hundred and twenty metres, so the two hundred to five hundred band where a
+/// townscape actually lives was never pinned; it is now.
+const DENSITY_COVER: f32 = 0.0022;
 /// And rain on top of that.
-const DENSITY_RAIN: f32 = 0.0040;
+const DENSITY_RAIN: f32 = 0.0025;
 /// Ground mist before the sun gets to work. The largest single term, because a
 /// misty dawn is the one weather where the air is genuinely the subject.
 const DENSITY_MIST: f32 = 0.0080;
+/// The density at which the air is thick enough to carry its own shafts.
+///
+/// Named rather than left as `DENSITY_CLEAR + DENSITY_COVER`, which is what
+/// [`light_boost`] used to divide by. That expression happened to equal "a wet
+/// overcast" while those two constants had their old values, and stopped
+/// meaning anything the moment either moved — halving the overcast term halved
+/// the point at which the shaft cheat was supposed to have faded out, so a
+/// rainstorm would have gone back to being faked. This is the sum of clear air,
+/// a solid overcast and hard rain: the worst weather the city has that is not
+/// also a dawn mist.
+const HONEST_DENSITY: f32 = DENSITY_CLEAR + DENSITY_COVER + DENSITY_RAIN;
+
 /// And the most the three of them together are allowed to come to.
 ///
 /// A cap rather than a sum, because the terms overlap in reality — rain clears
@@ -164,7 +187,7 @@ fn mist(hours: f32) -> f32 {
 /// reads at the night exposure, and a lamp cone is quoted up for the same
 /// reason. See `world::streetlights`.
 fn light_boost(density: f32) -> f32 {
-    let thickness = (density / (DENSITY_CLEAR + DENSITY_COVER)).clamp(0.0, 1.0);
+    let thickness = (density / HONEST_DENSITY).clamp(0.0, 1.0);
     7.0f32.lerp(1.5, thickness)
 }
 
@@ -237,7 +260,7 @@ fn sync_volumetrics(
     config: Res<GameConfig>,
     cameras: Query<Entity, With<super::RenderStack>>,
     sun: Query<Entity, With<Sun>>,
-    lamps: Query<Entity, With<StreetLight>>,
+    lamps: Query<Entity, With<LampBeam>>,
     mut applied: Local<Option<(Volumetrics, Upscaling)>>,
 ) {
     let settings = &config.graphics;
@@ -378,6 +401,36 @@ mod tests {
         }
     }
 
+    /// A hundred and twenty metres is the street. The band that decides whether
+    /// a *town* reads as a town is the two hundred to five hundred metres a
+    /// skyline stands at, and nothing was checking it — which is how the
+    /// overcast term came to be applied on top of the atmosphere's own aerial
+    /// perspective at a strength that would have been reasonable if it were
+    /// the only haze in the frame. The bounds are a floor rather than the
+    /// current answer: as written the three come out at 0.55, 0.37 and 0.35.
+    #[test]
+    fn a_townscape_survives_the_middle_distance() {
+        let overcast = density(1.0, 0.0, 12.0);
+        assert!(
+            through(300.0, overcast) > 0.50,
+            "an overcast noon leaves {} of a building 300 m away",
+            through(300.0, overcast)
+        );
+        assert!(
+            through(500.0, overcast) > 0.33,
+            "an overcast noon leaves {} of a skyline 500 m away",
+            through(500.0, overcast)
+        );
+        // And in the worst weather the city has, a shape at three hundred
+        // metres is still a shape rather than a rumour.
+        let storm = density(1.0, 1.0, 12.0);
+        assert!(
+            through(300.0, storm) > 0.33,
+            "a storm leaves {} of a building 300 m away",
+            through(300.0, storm)
+        );
+    }
+
     /// The density is capped by what a ray aimed at the sky passes through, and
     /// that is the ceiling — which is why the ceiling is a fog layer's depth
     /// rather than a tower's height.
@@ -388,11 +441,17 @@ mod tests {
         assert!(through(CEILING, density(1.0, 1.0, 12.0)) > 0.45);
     }
 
+    /// Weather still has to be visible in the air, even after the overcast term
+    /// was halved for double-counting with the atmosphere's aerial perspective.
+    /// Three times clear was the old margin and it is exactly three now, so the
+    /// bound is two and a half — the thing being guarded is that cover and rain
+    /// each move the number, not the size of the move, which is what the
+    /// transmittance tests above are for.
     #[test]
     fn weather_thickens_the_air() {
         let clear = density(0.0, 0.0, 12.0);
         assert!(
-            density(1.0, 0.0, 12.0) > clear * 3.0,
+            density(1.0, 0.0, 12.0) > clear * 2.5,
             "overcast is not thick"
         );
         assert!(density(1.0, 1.0, 12.0) > density(1.0, 0.0, 12.0), "rain");

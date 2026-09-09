@@ -81,6 +81,28 @@ fn rect(pane: Pane) -> Vec4 {
 }
 
 /// The grain half of a facade material.
+///
+/// Five maps, and the last three are recent. The colour and the normal were
+/// here from the start; the roughness and the occlusion were downloaded with
+/// them, sat on disk unopened, and were the reason a wall in this city had one
+/// gloss from the mortar joint to the middle of the brick. See `dress` in the
+/// shader for what each one is allowed to do.
+///
+/// Every one is an `Option` because the scanned sets are an optional download
+/// (see [`super::material`]) — but a *missing* texture binds Bevy's white
+/// fallback, and white is not a no-op for a normal map. `for_district` zeroes
+/// the strength and the relief when there is no set rather than relying on the
+/// texture to be neutral.
+///
+/// # One sampler for all five
+///
+/// Only `color` declares a sampler; the shader reads every other map through
+/// it. That is not tidiness, it is a hard limit: Metal allows sixteen samplers
+/// in a fragment stage, `StandardMaterial` alone declares most of them, and a
+/// sampler each for the three new maps took the facade pipeline to seventeen
+/// and stopped it being created at all. Sharing costs nothing here — all five
+/// maps are tiled, filtered and anisotropic in exactly the same way, and three
+/// of them come out of the same photogrammetry set as the first.
 #[derive(Asset, AsBindGroup, Reflect, Clone, Default)]
 pub struct FacadeGrain {
     #[uniform(100)]
@@ -89,8 +111,16 @@ pub struct FacadeGrain {
     #[sampler(102)]
     pub color: Option<Handle<Image>>,
     #[texture(103)]
-    #[sampler(104)]
     pub normal: Option<Handle<Image>>,
+    #[texture(105)]
+    pub roughness: Option<Handle<Image>>,
+    #[texture(107)]
+    pub occlusion: Option<Handle<Image>>,
+    /// The shared micro-detail map, painted rather than scanned, so this one is
+    /// there whether or not anything was downloaded. See
+    /// [`super::texture::detail`].
+    #[texture(109)]
+    pub detail: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for FacadeGrain {
@@ -177,27 +207,40 @@ pub fn grain_for(district: super::citygen::District, slot: usize) -> &'static st
 /// because what the eye measures is the course height against the storey — and
 /// a quarter turn breaks the last of the resemblance. Both are free: numbers in
 /// a uniform that already exists, so the city's material count does not move.
+///
+/// The strengths were raised across the board when the roughness and the
+/// occlusion maps were finally bound. They had been held down because the
+/// colour map was the *only* thing the scan was allowed to say, so every bit of
+/// contrast it asked for had to be paid out of the district's own colour — and
+/// past about 0.7 a brick wall stopped being the colour the palette said it
+/// was. With the gloss variation and the baked occlusion carrying the relief
+/// instead, the same visible detail costs far less of the albedo, and the
+/// numbers can go where the photograph actually is.
 const DRESS: [(f32, f32, bool); 6] = [
-    (1.75, 0.72, false),
-    (2.40, 0.62, true),
-    (2.05, 0.80, true),
-    (3.00, 0.66, false),
+    (1.75, 0.86, false),
+    (2.40, 0.74, true),
+    (2.05, 0.92, true),
+    (3.00, 0.78, false),
     // The two the sixth palette slot brought with it. They matter most in a
     // rendered town, where every slot draws the same plaster and the dressing
     // is the only thing left telling one wall from the next.
-    (2.20, 0.55, false),
-    (1.55, 0.74, true),
+    (2.20, 0.68, false),
+    (1.55, 0.88, true),
 ];
 
 impl FacadeGrain {
     /// The grain for one district, or a bare extension if it was never
     /// downloaded — in which case the shader multiplies by a white texture and
     /// the painted facade shows through untouched.
+    /// `detail` is the shared micro-detail map, which is painted rather than
+    /// downloaded and is therefore never absent — it is the one part of a
+    /// facade's material that a fresh clone gets in full.
     pub fn for_district(
         library: &MaterialLibrary,
         style: crate::core::config::CityStyle,
         district: super::citygen::District,
         palette: usize,
+        detail: Handle<Image>,
     ) -> Self {
         // A rendered town has one wall and six colours; every other town has a
         // wall per district and per slot. See `CityStyle::rendered`.
@@ -207,15 +250,35 @@ impl FacadeGrain {
             grain_for(district, palette)
         });
         let (tile, strength, swap) = DRESS[palette % DRESS.len()];
+        let default = FacadeSettings::default();
         Self {
             settings: FacadeSettings {
                 tile,
-                strength,
+                // Nothing scanned means nothing to say. An absent texture binds
+                // Bevy's white fallback, and while white is harmless as a
+                // colour modulation — it normalises against its own mean, which
+                // is also white — a white *normal* map decodes to (1, 1, 1),
+                // which is a constant forty-five degree tilt applied to every
+                // wall in the city. It never crashed and never looked broken
+                // enough to chase; it just lit the fallback city from a
+                // direction that does not exist.
+                strength: if scanned.is_some() { strength } else { 0.0 },
+                relief: if scanned.is_some() {
+                    default.relief
+                } else {
+                    0.0
+                },
                 swap: if swap { 1.0 } else { 0.0 },
-                ..FacadeSettings::default()
+                ..default
             },
             color: scanned.map(|s| s.color.clone()),
             normal: scanned.map(|s| s.normal.clone()),
+            roughness: scanned.map(|s| s.roughness.clone()),
+            // Two of the eleven sets ship without an occlusion map. White is
+            // the right fallback for this one — it is a multiplier — so the
+            // `Option` inside the `Option` can flatten.
+            occlusion: scanned.and_then(|s| s.occlusion.clone()),
+            detail: Some(detail),
         }
     }
 

@@ -114,6 +114,13 @@ pub enum Upscaling {
     /// Temporal anti-aliasing at native resolution.
     Taa,
     /// DLSS super resolution, rendering below native and reconstructing up.
+    ///
+    /// Reachable through the dev panel and through a save file, and selected by
+    /// no preset: nothing in this codebase attaches Bevy's `Dlss` component
+    /// yet, and an upscaler that is asked for and never attached is worse than
+    /// one that is not offered — it takes TAA off on the way past. The day the
+    /// component is attached in `render::sync_camera_stack`, Ultra can name it
+    /// again and [`GraphicsSettings::downgrade`] stops rewriting it.
     Dlss,
 }
 
@@ -136,6 +143,13 @@ pub struct GraphicsSettings {
     /// Short screen-space rays that put a shadow back where the shadow map's
     /// texel is too coarse to have one — under a bollard, under a wheel.
     pub contact_shadows: bool,
+    /// How far those rays reach, in metres. A separate number from the flag
+    /// because the default — thirty centimetres — is shorter than the things
+    /// it exists to plant: it reaches a third of a wheel and a fifth of a lamp
+    /// column's base flare, so a car sat on the road with nothing under it.
+    /// Cost scales with the step count, not with the length, so the longer ray
+    /// is very nearly free.
+    pub contact_shadow_length: f32,
     pub ssao: Option<AoQuality>,
     /// Screen-space reflections. Requires the deferred path.
     pub ssr: bool,
@@ -149,9 +163,17 @@ pub struct GraphicsSettings {
     /// Multiplies every LOD switching distance. Below one, detail is dropped
     /// closer to the camera; above one it is held further out.
     pub lod_scale: f32,
-    /// Raytraced direct and indirect lighting, replacing SSAO and SSR.
+    /// Raytraced direct and indirect lighting, *on top of* SSAO and SSR — see
+    /// [`QualityPreset::settings`] for why it no longer replaces them.
     pub raytracing: bool,
     pub upscaling: Upscaling,
+    /// Contrast-adaptive sharpening strength, 0 for none.
+    ///
+    /// Paired with [`Self::upscaling`] rather than with the tier: every
+    /// temporal resolve hands back a softer image than it was given, and a
+    /// sharpen afterwards is what every renderer that ships TAA does about it.
+    /// A tier with no temporal pass has nothing to put back and asks for zero.
+    pub sharpening: f32,
 }
 
 impl Default for GraphicsSettings {
@@ -171,6 +193,7 @@ impl QualityPreset {
                 cascades: 2,
                 soft_shadows: false,
                 contact_shadows: false,
+                contact_shadow_length: 0.0,
                 ssao: Some(AoQuality::Low),
                 ssr: false,
                 volumetrics: Volumetrics::Off,
@@ -182,16 +205,34 @@ impl QualityPreset {
                 // No history buffer at all: on the hardware this tier is for,
                 // TAA's resolve costs more than the aliasing it removes.
                 upscaling: Upscaling::Off,
+                // And nothing softened the image, so there is nothing to
+                // sharpen. CAS over an un-resolved frame only sharpens the
+                // aliasing.
+                sharpening: 0.0,
             },
             Self::Medium => GraphicsSettings {
                 requested: self,
                 shadow_map_size: 2048,
                 shadow_distance: 500.0,
                 cascades: 3,
-                soft_shadows: false,
+                // On at Medium, and it is the cheapest thing on this row.
+                // Percentage-closer soft shadows are a compiled-in bevy
+                // feature already paid for, and this is the tier with three
+                // cascades over five hundred metres — a coarse map with a
+                // razor edge on it reads far worse than a coarse map with a
+                // penumbra, because the penumbra is what hides the stair-step
+                // along a shadow terminator.
+                soft_shadows: true,
                 contact_shadows: true,
+                contact_shadow_length: 0.7,
                 ssao: Some(AoQuality::Medium),
-                ssr: false,
+                // On at Medium too. `reflections()` caps the roughness window
+                // below car paint, so the march only ever runs on standing
+                // water, wet pavement and glass — and those are the only
+                // surfaces in the city that can put a pixel above white in
+                // daylight. The deferred path and the blue-noise texture are
+                // paid for at every tier regardless.
+                ssr: true,
                 volumetrics: Volumetrics::Fog,
                 motion_blur: false,
                 depth_of_field: false,
@@ -199,6 +240,7 @@ impl QualityPreset {
                 lod_scale: 0.85,
                 raytracing: false,
                 upscaling: Upscaling::Taa,
+                sharpening: 0.4,
             },
             Self::High => GraphicsSettings {
                 requested: self,
@@ -207,6 +249,7 @@ impl QualityPreset {
                 cascades: 4,
                 soft_shadows: true,
                 contact_shadows: true,
+                contact_shadow_length: 1.1,
                 ssao: Some(AoQuality::High),
                 ssr: true,
                 volumetrics: Volumetrics::FogAndLights,
@@ -216,6 +259,10 @@ impl QualityPreset {
                 lod_scale: 1.0,
                 raytracing: false,
                 upscaling: Upscaling::Taa,
+                // Below Bevy's 0.6 default on purpose: a city is high-frequency
+                // to begin with — a facade is a grid of window reveals — and
+                // 0.6 rings along every one of them.
+                sharpening: 0.4,
             },
             Self::Ultra => GraphicsSettings {
                 requested: self,
@@ -224,17 +271,44 @@ impl QualityPreset {
                 cascades: 4,
                 soft_shadows: true,
                 contact_shadows: true,
-                // Raytraced lighting computes its own occlusion; a second
+                contact_shadow_length: 1.1,
+                // These used to be `None` and `false`, on the reasoning that
+                // raytraced lighting computes its own occlusion and a second
                 // screen-space estimate on top of it double-darkens corners.
-                ssao: None,
-                ssr: false,
+                // The reasoning is sound and the premise was not: nothing in
+                // this codebase ever attached `SolariLighting`, so
+                // `raytracing: true` was a flag three places read and no pass
+                // honoured. Under the default build `downgrade` put both back
+                // and it never showed; anyone building `--features raytracing`
+                // on capable hardware got an Ultra with no occlusion term, no
+                // reflections and no raytracing — strictly flatter than High.
+                //
+                // So the flag now *adds* rather than replaces, and the day a
+                // raytraced pass lands it is that pass's job to decide what to
+                // switch off. A preset table that promises something no system
+                // delivers is worse than a preset table that promises less.
+                ssao: Some(AoQuality::Ultra),
+                ssr: true,
                 volumetrics: Volumetrics::FogAndLights,
                 motion_blur: true,
                 depth_of_field: true,
                 lens: true,
                 lod_scale: 1.3,
                 raytracing: true,
-                upscaling: Upscaling::Dlss,
+                // Not `Dlss`, and that is a correction rather than a choice.
+                // Selecting it made `render::sync_camera_stack` take TAA *off*
+                // and put nothing on in its place — the DLSS component was
+                // always going to be attached "in the raytracing pass once that
+                // lands", and it never landed. Meanwhile `shadows` picks the
+                // temporal shadow filter for Dlss and `volumetrics` jitters the
+                // raymarch for it, both of which are only correct because
+                // something resolves the per-frame variation. So on a machine
+                // built `--features dlss` the top playable tier ran with no
+                // anti-aliasing at all over a crawling shadow filter and a
+                // crawling raymarch. A preset may not name an accumulator
+                // nothing attaches; see [`Upscaling::Dlss`].
+                upscaling: Upscaling::Taa,
+                sharpening: 0.3,
             },
             Self::Photo => GraphicsSettings {
                 requested: self,
@@ -243,8 +317,9 @@ impl QualityPreset {
                 cascades: 4,
                 soft_shadows: true,
                 contact_shadows: true,
-                ssao: None,
-                ssr: false,
+                contact_shadow_length: 1.1,
+                ssao: Some(AoQuality::Ultra),
+                ssr: true,
                 volumetrics: Volumetrics::FogAndLights,
                 // Both are shutter effects, and a still has no shutter. They
                 // would only smear the thing the shot exists to show.
@@ -259,6 +334,10 @@ impl QualityPreset {
                 // A still can afford to accumulate honestly rather than
                 // reconstruct from a lower resolution.
                 upscaling: Upscaling::Taa,
+                // Lighter still. A still is looked at closely, and the halo a
+                // sharpen leaves along a high-contrast edge is exactly the sort
+                // of artefact that cannot be argued away at full size.
+                sharpening: 0.25,
             },
         }
     }
@@ -292,17 +371,25 @@ impl GraphicsSettings {
     ///
     /// The rule is that a missing capability falls back to the nearest thing
     /// that produces a comparable picture, not to nothing: without ray queries
-    /// the lighting returns to screen-space reflections *and* the ambient
-    /// occlusion that Ultra had switched off, because otherwise dropping
-    /// raytracing would leave corners with no occlusion term at all and the
-    /// scene would come out flatter than High.
+    /// the lighting keeps the screen-space reflections *and* the ambient
+    /// occlusion, because otherwise dropping raytracing would leave corners
+    /// with no occlusion term at all and the scene would come out flatter than
+    /// High. That used to be a repair — Ultra switched both off and this put
+    /// them back — and is now merely a guarantee, because the preset table no
+    /// longer switches them off in the first place.
     pub fn downgrade(mut self, caps: Capabilities) -> Self {
         if self.raytracing && !caps.raytracing {
             self.raytracing = false;
             self.ssr = true;
             self.ssao = self.ssao.or(Some(AoQuality::High));
         }
-        if self.upscaling == Upscaling::Dlss && !caps.dlss {
+        // Unconditional, not `&& !caps.dlss`: the hardware half was never the
+        // problem. Nothing attaches Bevy's `Dlss` component, so selecting it
+        // removes TAA and inserts nothing — see [`Upscaling::Dlss`]. This
+        // catches a setting arriving from a save file; `sync_camera_stack`
+        // catches one arriving from the dev panel, because this runs once at
+        // startup and the panel writes whenever a slider moves.
+        if self.upscaling == Upscaling::Dlss {
             self.upscaling = Upscaling::Taa;
         }
         self
@@ -367,6 +454,12 @@ mod tests {
                 upper.contact_shadows || !lower.contact_shadows,
                 "{tier} dropped contact shadows"
             );
+            assert!(
+                upper.contact_shadow_length >= lower.contact_shadow_length,
+                "{tier} shortened the contact shadow ray"
+            );
+            assert!(upper.ssao >= lower.ssao, "{tier} dropped ambient occlusion");
+            assert!(upper.ssr || !lower.ssr, "{tier} dropped reflections");
             assert!(upper.lens || !lower.lens, "{tier} dropped the lens stack");
         }
     }
@@ -393,14 +486,88 @@ mod tests {
         assert!(QualityPreset::Photo.settings().lod_scale.is_infinite());
     }
 
+    /// Against the resolved settings a real camera gets, not against the
+    /// `raytracing` flag. The flag version of this test passed for as long as
+    /// Ultra and Photo shipped with no occlusion term at all, because it took
+    /// `raytracing: true` as a promise that something would compute one — and
+    /// nothing did.
     #[test]
     fn a_scene_always_has_an_occlusion_term_of_some_kind() {
         for preset in QualityPreset::ALL {
-            let settings = preset.settings();
-            assert!(
-                settings.ssao.is_some() || settings.raytracing,
-                "{} has neither ambient occlusion nor raytracing",
+            for caps in [Capabilities::default(), Capabilities::all()] {
+                let settings = preset.settings().downgrade(caps);
+                assert!(
+                    settings.ssao.is_some(),
+                    "{} has no ambient occlusion with caps {caps:?}",
+                    preset.name()
+                );
+            }
+        }
+    }
+
+    /// Every accumulator a preset can name has to be one something attaches.
+    /// `Upscaling::Dlss` is not: `render::sync_camera_stack` takes TAA off for
+    /// it and puts nothing on, while the shadow filter and the volumetric
+    /// jitter both switch to their temporal variants — a frame of crawling
+    /// noise with no resolve. Same shape as
+    /// `motion_vectors_are_requested_by_every_pass_that_reads_them`.
+    #[test]
+    fn no_preset_names_a_temporal_pass_that_nothing_attaches() {
+        for preset in QualityPreset::ALL {
+            assert_ne!(
+                preset.settings().upscaling,
+                Upscaling::Dlss,
+                "{} asks for DLSS, which nothing attaches",
                 preset.name()
+            );
+        }
+    }
+
+    /// And if one arrives from a save file anyway, it is walked back rather
+    /// than believed.
+    #[test]
+    fn dlss_is_walked_back_wherever_it_comes_from() {
+        let mut settings = QualityPreset::Ultra.settings();
+        settings.upscaling = Upscaling::Dlss;
+        for caps in [Capabilities::default(), Capabilities::all()] {
+            assert_eq!(settings.clone().downgrade(caps).upscaling, Upscaling::Taa);
+        }
+    }
+
+    /// A temporal resolve softens; a tier that runs one and never sharpens
+    /// afterwards is shipping a blur. The converse matters too — sharpening a
+    /// frame nothing resolved only sharpens its aliasing.
+    #[test]
+    fn every_tier_that_resolves_temporally_sharpens_afterwards() {
+        for preset in QualityPreset::ALL {
+            let settings = preset.settings();
+            let temporal = settings.upscaling != Upscaling::Off;
+            assert_eq!(
+                settings.sharpening > 0.0,
+                temporal,
+                "{} runs upscaling {:?} with sharpening {}",
+                preset.name(),
+                settings.upscaling,
+                settings.sharpening,
+            );
+            assert!((0.0..=1.0).contains(&settings.sharpening));
+        }
+    }
+
+    /// The contact-shadow ray has to be long enough to reach from a wheel to
+    /// the road. Bevy's default is 30 cm, which is a third of a wheel.
+    #[test]
+    fn a_contact_shadow_ray_reaches_the_ground_from_the_things_it_plants() {
+        for preset in QualityPreset::ALL {
+            let settings = preset.settings();
+            if !settings.contact_shadows {
+                continue;
+            }
+            assert!(
+                settings.contact_shadow_length >= 0.6,
+                "{} plants nothing taller than {} m",
+                preset.name(),
+                settings.contact_shadow_length
             );
         }
     }
@@ -422,7 +589,9 @@ mod tests {
 
     #[test]
     fn losing_dlss_leaves_a_temporal_pass_behind() {
-        let settings = QualityPreset::Ultra.settings().downgrade(Capabilities {
+        let mut asked = QualityPreset::Ultra.settings();
+        asked.upscaling = Upscaling::Dlss;
+        let settings = asked.downgrade(Capabilities {
             raytracing: true,
             dlss: false,
         });

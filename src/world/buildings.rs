@@ -429,6 +429,12 @@ pub fn build_assets(
         District::Park,
     ];
 
+    // One micro-detail map for the whole city, painted rather than downloaded.
+    // Every other map a wall carries is sized to the wall; this one is sized to
+    // the last two metres, where all of them run out at once. See
+    // `texture::detail`.
+    let detail = images.add(texture::detail());
+
     // One set of facade maps per height class, shared by every district that
     // has a building of that height.
     let facades: Vec<_> = FacadeClass::ALL
@@ -477,8 +483,13 @@ pub fn build_assets(
             // The grain is the district's, but how it is dressed — scale, and
             // whether it is turned — belongs to the palette slot, so a street
             // of one district is not a street of one photograph.
-            let grain =
-                super::facade::FacadeGrain::for_district(library, style, grain_district, slot);
+            let grain = super::facade::FacadeGrain::for_district(
+                library,
+                style,
+                grain_district,
+                slot,
+                detail.clone(),
+            );
             for (&class, (base, emissive, surface, normal)) in FacadeClass::ALL.iter().zip(&facades)
             {
                 building.push(facades_out.add(super::facade::FacadeMaterial {
@@ -518,7 +529,16 @@ pub fn build_assets(
             ..default()
         };
         match library.get(super::material::set::PAVEMENT) {
-            Some(scanned) => scanned.apply(&mut slabs),
+            Some(scanned) => {
+                scanned.apply(&mut slabs);
+                // And the joints between the slabs, which a normal map cannot
+                // give at the angle a pavement is actually looked at: from
+                // standing height the ground is grazing, and a grazing normal
+                // map is a flat plane. One repeat of the maps covers about
+                // `GROUND_TILE`, whichever bucket this is — that is what the
+                // bucketing is for. See `ScannedSet::deepen`.
+                scanned.deepen(&mut slabs, 0.016, GROUND_TILE);
+            }
             None => {
                 slabs.base_color = Color::srgb(0.50, 0.50, 0.52);
                 slabs.base_color_texture = Some(paving_texture.clone());
@@ -538,15 +558,25 @@ pub fn build_assets(
             ..default()
         };
         match library.get(super::material::set::GRASS) {
-            Some(scanned) => scanned.apply(&mut lawn),
+            Some(scanned) => {
+                scanned.apply(&mut lawn);
+                // The same tint the world plain takes, and for the same reason
+                // `ROOF_TINT` exists: `apply` leaves `base_color` white, so an
+                // untinted scan is drawn at the photograph's own albedo. A park
+                // that skipped this was a lime rectangle in a city that no
+                // longer is one — see `ground::TURF_TINT`.
+                lawn.base_color = super::ground::TURF_TINT;
+            }
             None => {
-                lawn.base_color = Color::srgb(0.29, 0.43, 0.24);
+                lawn.base_color = super::ground::TURF_PAINT;
                 lawn.base_color_texture = Some(grass_texture.clone());
                 lawn.perceptual_roughness = 1.0;
             }
         }
         grass.push(grounds.add(super::ground::GroundMaterial {
             base: lawn,
+            // `patch`, via `Default`: a lawn is tens of metres across and its
+            // variation has to be sized to it — see `world::ground`.
             extension: super::ground::GroundBreakup::default(),
         }));
     }

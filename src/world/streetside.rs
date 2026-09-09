@@ -77,6 +77,37 @@ const HOLE: f32 = 0.26;
 /// And how wide one is.
 const HOLE_WIDTH: (f32, f32) = (5.0, 16.0);
 
+/// How deep the ground a hole in the frontage puts on show runs before the
+/// middle of the block takes over.
+///
+/// A little under the shallowest plot the marcher hands out, so a forecourt
+/// laid across a gap never reaches past the back wall of the houses either
+/// side of it. What is beyond that is the inside of the block, and that is the
+/// ground shader's job — see `world::urban_mask`.
+const FORECOURT: f32 = 9.5;
+
+/// Anything narrower than this is a passage between two houses, not a yard,
+/// and putting a gate across it would only draw attention to a hole three
+/// metres wide.
+const FORECOURT_MIN: f32 = 3.6;
+
+/// A boundary's proportions: how tall a wall or a hedge across a gap stands,
+/// and how thick it is.
+///
+/// Chest height at the top of the range. Higher and a street of gaps becomes a
+/// street of walls, which is a different town from the one on the map; lower
+/// and it stops hiding the ground it is there to hide.
+const BOUNDARY_HEIGHT: (f32, f32) = (0.85, 1.45);
+const BOUNDARY_THICK: f32 = 0.34;
+
+/// How often a gap is left as a plain opening — a driveway, an entry, the way
+/// through to somebody's yard.
+///
+/// A third, because that is roughly how often a hole in a real terrace is one.
+/// Nought would fence the whole town off from itself, which is worse than the
+/// bare meadow this replaced: at least meadow admits you can walk through it.
+const OPENING: f32 = 0.32;
+
 /// Cell of the occupancy grid, in metres. About the size of one building, so a
 /// candidate only ever has to look at nine cells.
 const CELL: f32 = 20.0;
@@ -112,6 +143,63 @@ const CORE: f32 = 0.22;
 const INNER: f32 = 0.55;
 
 /// Meshes shared by every pavement in the town.
+/// A stretch of street frontage the marcher handed to nobody.
+///
+/// The holes are not a defect — see the note at the top of this module about
+/// what the inside of a real block looks like — but for as long as the marcher
+/// recorded nothing, a hole meant the world plain ran straight up to the kerb,
+/// which is the one thing a hole in a real town is never. It is a wall, a gate,
+/// a yard entrance or a hardstanding. So the hole is now a thing rather than a
+/// `continue`, and this is what it carries.
+#[derive(Clone, Copy)]
+pub struct Gap {
+    /// Middle of the run, on the building line — the back edge of the pavement.
+    centre: Vec2,
+    /// The way a building here would have faced: local +Z back across the
+    /// pavement, local +X along the street.
+    yaw: f32,
+    /// Away from the street, in the ground plane.
+    outward: Vec2,
+    /// How wide it runs along the street.
+    span: f32,
+    /// What stands on the boundary, if anything.
+    boundary: Option<Boundary>,
+    /// How tall that is.
+    height: f32,
+}
+
+/// What somebody put across the gap.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Boundary {
+    /// Rendered blockwork, the same grey the pavement is.
+    Wall,
+    /// Clipped, and the same leaves the parks are — see `world::vegetation`.
+    Hedge,
+}
+
+/// Every gap in the town's frontage, filed by `EdgeId`.
+///
+/// A resource because it is decided in `generate_city` and spent in
+/// `setup_ground`, which are two systems with a sync point between them; the
+/// meshes it turns into live in [`Ribbons`] with everything else that is built
+/// once and streamed many times.
+#[derive(Resource, Default, Clone)]
+pub struct Frontage {
+    gaps: Vec<Vec<Gap>>,
+}
+
+impl Frontage {
+    /// How many holes the marcher left, over the whole town. Log line and test
+    /// hook; nothing in the game asks.
+    pub fn len(&self) -> usize {
+        self.gaps.iter().map(Vec::len).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.gaps.iter().all(Vec::is_empty)
+    }
+}
+
 #[derive(Resource)]
 pub struct StreetsideKit {
     /// One upright unit face: a metre wide, a metre tall, standing on `y = 0`
@@ -192,6 +280,31 @@ pub struct Ribbons {
     /// once both its ends have been given back to the crossings.
     strips: Vec<[Option<Strip>; 2]>,
     slabs: Handle<StandardMaterial>,
+    /// What fills the holes in the frontage, filed by `EdgeId`.
+    ///
+    /// One mesh each rather than one shared shape scaled to fit, for the reason
+    /// the road ribbons are: a mesh carries its own size in its UVs, and a
+    /// gravel yard sixteen metres wide drawn with a one-repeat quad is not
+    /// gravel, it is a photograph of gravel stretched over a yard. The hedge
+    /// version of that is worse — the repeat comes out eight times wider than
+    /// it is tall, and through an alpha mask a hedge becomes a venetian blind.
+    /// They are built at startup, in [`build_ribbons`], and never in the
+    /// streaming path.
+    courts: Vec<Vec<Court>>,
+    court: Handle<StandardMaterial>,
+    /// What a boundary is made of, built and planted.
+    wall: Handle<StandardMaterial>,
+    hedge: Handle<StandardMaterial>,
+}
+
+/// The meshes one hole in the frontage turns into.
+struct Court {
+    /// The forecourt quad, sized to the hole.
+    ground: Handle<Mesh>,
+    /// The box across the back of the pavement, sized and tiled for whichever
+    /// kind of boundary it is. `None` where the gap is an opening.
+    boundary: Option<Handle<Mesh>>,
+    gap: Gap,
 }
 
 /// One pavement, as the two meshes it is drawn with and the box it is felt as.
@@ -533,11 +646,16 @@ fn plan(corners: &[Vec2; 4], uvs: &[Vec2; 4]) -> Mesh {
 }
 
 /// Builds the carriageway of a whole town, once.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ribbons(
     layout: &CityLayout,
+    frontage: &Frontage,
     meshes: &mut Assets<Mesh>,
     paving: [Handle<super::road::RoadMaterial>; 4],
     slabs: Handle<StandardMaterial>,
+    court: Handle<StandardMaterial>,
+    wall: Handle<StandardMaterial>,
+    hedge: Handle<StandardMaterial>,
 ) -> Ribbons {
     let fans = fans(layout);
     let strips = (0..layout.graph.edge_count())
@@ -565,14 +683,93 @@ pub fn build_ribbons(
             )))
         })
         .collect();
+    // One quad per hole, sized to the hole. Landshut leaves about three
+    // thousand of them, which is the same order as the pavement strips this
+    // function already builds and a twentieth of what a chunk spawns.
+    let courts = (0..layout.graph.edge_count())
+        .map(|i| {
+            frontage
+                .gaps
+                .get(i)
+                .map(|gaps| {
+                    gaps.iter()
+                        .map(|gap| Court {
+                            ground: meshes.add(super::buildings::with_tangents(ribbon(
+                                gap.span, FORECOURT, GRIT_TILE,
+                            ))),
+                            boundary: gap.boundary.map(|kind| {
+                                meshes.add(boundary_box(
+                                    Vec3::new(gap.span, gap.height, BOUNDARY_THICK),
+                                    match kind {
+                                        // Blockwork somebody rendered
+                                        // themselves, and a hedge's own clumps,
+                                        // are not the same size and never look
+                                        // right at the same repeat.
+                                        Boundary::Wall => 1.2,
+                                        Boundary::Hedge => 0.45,
+                                    },
+                                ))
+                            }),
+                            gap: *gap,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
     Ribbons {
         roads,
         junction: meshes.add(super::buildings::with_tangents(ribbon(1.0, 1.0, TILE))),
         paving,
         strips,
         slabs,
+        courts,
+        court,
+        wall,
+        hedge,
     }
 }
+
+/// A box whose UVs are its own size in metres, divided by `tile`.
+///
+/// `Cuboid`'s own mesh gives every face one repeat, which is right for a cube
+/// and wrong for everything else: stretched to eight metres by one, the repeat
+/// comes out eight times wider than it is tall. Rewriting the UVs off the
+/// positions costs nothing — the normal says which two axes the face lies in,
+/// and there are twenty-four vertices.
+fn boundary_box(size: Vec3, tile: f32) -> Mesh {
+    let mut mesh = Cuboid::from_size(size).mesh().build();
+    let positions: Vec<[f32; 3]> = mesh
+        .attribute(Mesh::ATTRIBUTE_POSITION)
+        .and_then(|values| values.as_float3())
+        .map(|slice| slice.to_vec())
+        .unwrap_or_default();
+    let normals: Vec<[f32; 3]> = mesh
+        .attribute(Mesh::ATTRIBUTE_NORMAL)
+        .and_then(|values| values.as_float3())
+        .map(|slice| slice.to_vec())
+        .unwrap_or_default();
+    let uvs: Vec<[f32; 2]> = positions
+        .iter()
+        .zip(normals.iter())
+        .map(|(at, normal)| {
+            let (u, v) = if normal[1].abs() > 0.5 {
+                (at[0], at[2])
+            } else if normal[0].abs() > 0.5 {
+                (at[2], at[1])
+            } else {
+                (at[0], at[1])
+            };
+            [u / tile, v / tile]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    super::buildings::with_tangents(mesh)
+}
+
+/// Metres of yard one repeat of the grit covers. The same number the gravelled
+/// carriageways use, so a forecourt and a gravel lane are the same gravel.
+const GRIT_TILE: f32 = super::GRIT_TILE;
 
 /// The lowest a carriageway is laid, in metres above the ground, and how much
 /// height the widest street in the town is allowed to claim over the narrowest.
@@ -711,6 +908,78 @@ pub fn spawn_edge(
                 .with_rotation(Quat::from_rotation_y(yaw)),
             avian3d::prelude::RigidBody::Static,
             avian3d::prelude::Collider::cuboid(SIDEWALK_WIDTH, SIDEWALK_HEIGHT, strip.body.1),
+        ));
+    }
+
+    fill_gaps(commands, ribbons, id, chunk, &visibility);
+}
+
+/// How high a forecourt is laid.
+///
+/// *Under* the road bed, not over it. A gap is held nine metres clear of a
+/// crossing but only half a metre clear of a bend, and a ribbon runs half its
+/// own width past every node it ends at — so a forecourt beside a kink in a
+/// street can find itself under the neighbouring carriageway. Laid lower, the
+/// carriageway simply wins the depth test and the forecourt is not there;
+/// laid higher, the two would fight, and a shimmering rectangle of gravel over
+/// a road is a great deal more obvious than a missing yard.
+const COURT_HEIGHT: f32 = 0.004;
+
+/// Fills the holes the marcher left in one street's frontage.
+///
+/// A gravelled forecourt, and across the back of the pavement a wall, a hedge
+/// or nothing. Everything here is a mesh built at startup — the forecourt quads
+/// in [`build_ribbons`], the wall and the hedge as one shared unit cube each —
+/// so however many times a chunk comes back, nothing is added to
+/// `Assets<Mesh>`.
+fn fill_gaps(
+    commands: &mut Commands,
+    ribbons: &Ribbons,
+    id: super::roadgraph::EdgeId,
+    chunk: IVec2,
+    visibility: &bevy::camera::visibility::VisibilityRange,
+) {
+    let Some(courts) = ribbons.courts.get(id.0 as usize) else {
+        return;
+    };
+    for court in courts {
+        let gap = &court.gap;
+        let turn = Quat::from_rotation_y(gap.yaw);
+        // The quad runs back from the building line, away from the street. Its
+        // local +Z faces the street, so half its depth *against* +Z is the
+        // middle of it.
+        let middle = gap.centre + gap.outward * (FORECOURT * 0.5);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(court.ground.clone()),
+            MeshMaterial3d(ribbons.court.clone()),
+            Transform::from_xyz(middle.x, COURT_HEIGHT, middle.y).with_rotation(turn),
+            visibility.clone(),
+        ));
+
+        let (Some(mesh), Some(kind)) = (court.boundary.as_ref(), gap.boundary) else {
+            continue;
+        };
+        let material = match kind {
+            Boundary::Wall => &ribbons.wall,
+            Boundary::Hedge => &ribbons.hedge,
+        };
+        // On the line itself, so it reads as the back of the pavement rather
+        // than as a fence somebody put up in a field. The box is already the
+        // right size and is centred on its own middle in all three axes, hence
+        // the half-height and the half thickness here and no scale at all on
+        // the transform — which also keeps Avian out of the argument about
+        // whether a collider follows one.
+        let at = gap.centre + gap.outward * (BOUNDARY_THICK * 0.5);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(at.x, gap.height * 0.5, at.y).with_rotation(turn),
+            // Solid, because a wall you walk through is worse than no wall.
+            avian3d::prelude::RigidBody::Static,
+            avian3d::prelude::Collider::cuboid(gap.span, gap.height, BOUNDARY_THICK),
+            visibility.clone(),
         ));
     }
 }
@@ -857,16 +1126,27 @@ fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<Oblong>> {
 /// by [`spawn_edge`] instead — which is what lets every downstream spawner,
 /// from the facade shells to the geraniums, take a real town without knowing
 /// there is one.
-pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> Vec<Block> {
+pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Frontage) {
     let mut rng = crate::core::rng::stream_for(seed, crate::core::rng::stream::BUILDINGS);
+    // A second stream, and it has to be second. What goes across a gap is
+    // decided *inside* the walk down each street, so drawing it from the
+    // marcher's own stream would shift every frontage after it — the exact
+    // failure `core::rng` opens with, and it would rebuild the whole town from
+    // an unchanged seed.
+    let mut yards = crate::core::rng::stream_for(seed, crate::core::rng::stream::YARDS);
     let mut blocks = Vec::new();
+    // Named for what it holds rather than for the type, because a few lines
+    // down `frontage` is already the width of one plot.
+    let mut holes = Frontage {
+        gaps: vec![Vec::new(); layout.graph.edge_count()],
+    };
     // Middles of everything placed so far, bucketed by cell. A candidate only
     // looks at its own cell and the eight around it.
     let mut taken: HashMap<(i32, i32), Vec<(Vec2, f32)>> = HashMap::default();
     let roads = corridors(layout);
     let scale = style.lot_scale();
 
-    for edge in layout.graph.edges() {
+    for (index, edge) in layout.graph.edges().enumerate() {
         let a = layout.graph.node(edge.a).pos;
         let b = layout.graph.node(edge.b).pos;
         let Ok(direction) = Dir2::new(b - a) else {
@@ -899,7 +1179,40 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> Vec<Block> {
 
             while along < run + head {
                 if rng.random_range(0.0..1.0) < HOLE {
-                    along += rng.random_range(HOLE_WIDTH.0..HOLE_WIDTH.1);
+                    let span = rng.random_range(HOLE_WIDTH.0..HOLE_WIDTH.1);
+                    // The hole is a place, not a skipped iteration. Recorded
+                    // here and surfaced by `spawn_edge`, because a gap in a
+                    // real terrace is a gate, a yard or a hardstanding and the
+                    // one thing it is never is mown meadow abutting a kerb.
+                    let centre = a + *direction * (along + span * 0.5) + normal * (side * line);
+                    let gap = Gap {
+                        centre,
+                        yaw,
+                        outward: normal * side,
+                        span,
+                        boundary: if yards.random_range(0.0..1.0) < OPENING {
+                            None
+                        } else if yards.random_range(0.0..1.0) < 0.45 {
+                            Some(Boundary::Hedge)
+                        } else {
+                            Some(Boundary::Wall)
+                        },
+                        height: yards.random_range(BOUNDARY_HEIGHT.0..BOUNDARY_HEIGHT.1),
+                    };
+                    along += span;
+                    // Wide enough to be a yard, and not standing in a street
+                    // that happens to run behind this one. The corridor test is
+                    // the same one a building takes, for the same reason: a
+                    // plot at a real town's angles sits at some arbitrary angle
+                    // to every road but its own.
+                    let yard = Oblong {
+                        centre: centre + gap.outward * (FORECOURT * 0.5),
+                        axis: *direction,
+                        half: Vec2::new(span, FORECOURT) * 0.5,
+                    };
+                    if span >= FORECOURT_MIN && !in_a_road(&roads, &yard) {
+                        holes.gaps[index].push(gap);
+                    }
                     continue;
                 }
                 let frontage = rng.random_range(FRONTAGE.0..FRONTAGE.1) * scale;
@@ -936,27 +1249,15 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> Vec<Block> {
                 if clash {
                     continue;
                 }
-                // And is it standing in a road? Not the one it faces — that one
-                // it is placed against on purpose — but any *other* street that
-                // happens to run behind or beside it. An OSM town is full of
-                // them: a lane ending a few metres off a main road, two streets
-                // meeting at thirty degrees, a footway threading a block. The
-                // frontage of a plot squares up to its own street and therefore
-                // sits at some arbitrary angle to every other one, which is why
-                // this is a rotated-rectangle test and not a box overlap.
+                // And is it standing in a road? See [`in_a_road`] — not the
+                // street it faces, which it is placed against on purpose, but
+                // any other one that happens to run behind or beside it.
                 let plot = Oblong {
                     centre,
                     axis: *direction,
                     half: Vec2::new(frontage, depth) * 0.5,
                 };
-                let paved = (-1..=1).any(|dx| {
-                    (-1..=1).any(|dz| {
-                        roads.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
-                            near.iter().any(|road| plot.clashes_with(road, IN_THE_ROAD))
-                        })
-                    })
-                });
-                if paved {
+                if in_a_road(&roads, &plot) {
                     continue;
                 }
                 taken.entry(cell).or_default().push((centre, radius));
@@ -991,7 +1292,31 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> Vec<Block> {
         }
     }
 
-    blocks
+    (blocks, holes)
+}
+
+/// Is this rectangle standing in a street?
+///
+/// Not the one it faces — that one it is placed against on purpose — but any
+/// *other* street that happens to run behind or beside it. An OSM town is full
+/// of them: a lane ending a few metres off a main road, two streets meeting at
+/// thirty degrees, a footway threading a block. The frontage of a plot squares
+/// up to its own street and therefore sits at some arbitrary angle to every
+/// other one, which is why this is a rotated-rectangle test and not a box
+/// overlap.
+fn in_a_road(roads: &HashMap<(i32, i32), Vec<Oblong>>, shape: &Oblong) -> bool {
+    let cell = (
+        (shape.centre.x / CELL).floor() as i32,
+        (shape.centre.y / CELL).floor() as i32,
+    );
+    (-1..=1).any(|dx| {
+        (-1..=1).any(|dz| {
+            roads.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
+                near.iter()
+                    .any(|road| shape.clashes_with(road, IN_THE_ROAD))
+            })
+        })
+    })
 }
 
 /// What gets built on a given street.
@@ -1302,10 +1627,36 @@ mod tests {
             graph,
             canal: None,
         };
-        let blocks = lots(&layout, 1, CityStyle::Landshuepf);
+        let (blocks, holes) = lots(&layout, 1, CityStyle::Landshuepf);
         assert!(!blocks.is_empty(), "nothing was built at all");
+        assert!(!holes.is_empty(), "a town with no gaps in its frontage");
 
         let roads = corridors(&layout);
+        // The forecourts laid across those gaps are held to exactly the same
+        // rule the houses are: a yard in the carriageway is worse than a green
+        // wedge, because a green wedge does not have a kerb through it.
+        for gaps in &holes.gaps {
+            for gap in gaps {
+                let yard = Oblong {
+                    centre: gap.centre + gap.outward * (FORECOURT * 0.5),
+                    // `yaw` turns +Z back across the pavement, so local +X is
+                    // the way the street runs.
+                    axis: Vec2::new(gap.yaw.cos(), -gap.yaw.sin()),
+                    half: Vec2::new(gap.span, FORECOURT) * 0.5,
+                };
+                for near in roads.values() {
+                    for road in near {
+                        assert!(
+                            !yard.clashes_with(road, IN_THE_ROAD),
+                            "a forecourt at {} is standing in the road",
+                            yard.centre
+                        );
+                    }
+                }
+                assert!(gap.span >= FORECOURT_MIN, "a yard narrower than a passage");
+            }
+        }
+
         for block in &blocks {
             let building = &block.buildings[0];
             let yaw = building.facing.expect("a lot faces its street");

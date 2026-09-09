@@ -8,6 +8,14 @@
 //! Shadows are off for these deliberately: shadow-casting point lights are one
 //! of the most expensive things in a renderer, and at night a pool of unshadowed
 //! pools of light is what sells the look anyway.
+//!
+//! They are *cones*, though, and they were spheres. A lamp head hanging under
+//! an arm at seven and a half metres radiated as much light up into the facade
+//! behind it as down onto the road, so a night street had exactly one lighting
+//! gradient — inverse square — and no shape: the wall was lit as evenly as the
+//! carriageway, which is the one thing a street lantern is designed not to do.
+//! A [`SpotLight`] pointed down the arm costs the same as the point light it
+//! replaced and puts the light where the fitting puts it.
 
 use bevy::prelude::*;
 
@@ -32,6 +40,27 @@ const KERB_SET_BACK: f32 = 0.7;
 const LAMP_SPACING: f32 = 32.0;
 /// Sodium-vapour warmth.
 const LAMP_COLOR: Color = Color::srgb(1.0, 0.82, 0.55);
+/// The half-angle of the lamp's beam, in radians, and where it starts to fall
+/// off.
+///
+/// Wide for a spotlight and narrow for a sphere. At the lamp's seven and a half
+/// metres a sixty-eight degree cone lays a pool about nineteen metres across,
+/// which covers the carriageway and the near pavement and stops well short of
+/// the eaves — and the inner angle is where it is so that most of that pool is
+/// full strength and only its rim feathers.
+const LAMP_OUTER: f32 = 1.19;
+const LAMP_INNER: f32 = 0.62;
+/// How bright the lamp's own glass is, per channel, as a multiple of the
+/// frame's white point.
+///
+/// Not a radiance, however much it looks like one — the deferred g-buffer drops
+/// the alpha that would make emissive exposure-dependent, so these are numbers
+/// the tonemapper sees directly at any hour. See `timeofday::WINDOW_GLOW`, which
+/// is the same units and had the same wrong comment over it. Named rather than
+/// written at the use site so the test below can hold them against
+/// `render::BLOOM_THRESHOLD`: an envelope that does not clear it is a lamp with
+/// no glare around it, which is most of what a lamp is at night.
+const LAMP_ENVELOPE: Vec3 = Vec3::new(13.0, 9.4, 5.0);
 
 /// How many shopfronts can be spilling light at once.
 ///
@@ -44,10 +73,29 @@ const SHOP_RANGE: f32 = 11.0;
 /// Warmer than the street lamp and much weaker. Sodium is orange; a shop is
 /// lit with something closer to white and is behind glass.
 const SHOP_COLOR: Color = Color::srgb(1.0, 0.90, 0.74);
+/// How much of its night presence a shop keeps in full sun.
+///
+/// Not zero, which is what it was. A sixth is invisible against a hundred
+/// thousand lux on the carriageway and clearly visible two metres inside a
+/// doorway and under an awning, which is the only place it is meant to be seen.
+/// It is also the whole of the warm-against-cool split between an interior and
+/// the daylight outside it, which is one of the most recognisable modern-street
+/// cues there is.
+const SHOP_DAY_FLOOR: f32 = 0.16;
 
 /// One of the pooled lights that stands in for a lit shop window.
 #[derive(Component)]
 pub struct ShopGlow;
+
+/// The child of a lamp that carries the actual cone.
+///
+/// A [`SpotLight`] shines along its own entity's -Z, and the lamp entity's
+/// rotation is already spoken for: it is a yaw that puts the column and the arm
+/// back over the kerb. Rather than re-deriving every child's local transform in
+/// a frame tipped on its side, the beam is one more child with a single
+/// rotation of its own, and the lamp above it keeps meaning what it meant.
+#[derive(Component)]
+pub struct LampBeam;
 
 #[derive(Component)]
 pub struct StreetLight;
@@ -158,16 +206,27 @@ fn spawn_pool(
         commands.spawn((
             Name::new(format!("Street Light {i}")),
             StreetLight,
-            PointLight {
-                color: LAMP_COLOR,
-                intensity: 0.0,
-                range: 62.0,
-                shadow_maps_enabled: false,
-                ..default()
-            },
             // Parked far below the world until assigned a lamp post.
             Transform::from_xyz(0.0, -1000.0, 0.0),
+            Visibility::default(),
             children![
+                (
+                    Name::new("Beam"),
+                    LampBeam,
+                    SpotLight {
+                        color: LAMP_COLOR,
+                        intensity: 0.0,
+                        range: 62.0,
+                        shadow_maps_enabled: false,
+                        outer_angle: LAMP_OUTER,
+                        inner_angle: LAMP_INNER,
+                        ..default()
+                    },
+                    // A quarter turn about X takes the entity's -Z from
+                    // straight ahead to straight down, and leaves its X — the
+                    // axis the parent's yaw is expressed in — alone.
+                    Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                ),
                 (
                     Mesh3d(head.clone()),
                     MeshMaterial3d(glass.clone()),
@@ -225,17 +284,29 @@ fn spawn_shop_glow(mut commands: Commands) {
 /// so the lights go to the fixtures rather than the other way round.
 fn reposition_shop_glow(
     clock: Res<TimeOfDay>,
+    weather: Res<super::weather::Weather>,
     fronts: Query<&GlobalTransform, With<super::interior::Shopfront>>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
     mut glows: Query<(&mut Transform, &mut PointLight), With<ShopGlow>>,
 ) {
-    let night = 1.0 - daylight(clock.hours);
-    if night <= 0.01 {
-        for (_, mut light) in &mut glows {
-            light.intensity = 0.0;
-        }
-        return;
-    }
+    // A floor plus a night ramp, rather than a night ramp and nothing else.
+    //
+    // This used to return early with every shop dark whenever the sun was up,
+    // which meant that between about seven and five — most of the hours anyone
+    // plays — no shopfront in the city emitted anything, and the interior
+    // behind the glass was lit by the sky fill alone. Real shops are lit all
+    // day, and the warm-against-cool split between an interior and the daylight
+    // on the pavement outside it is one of the most recognisable cues a modern
+    // street scene has. A fifth of its night presence is invisible against a
+    // hundred thousand lux on the carriageway and perfectly visible two metres
+    // inside a doorway and under an awning.
+    //
+    // Against `brightness` rather than `daylight`, the same distinction
+    // `timeofday::light_windows` already makes: a shop turns its lights up for
+    // a dark afternoon as well as for the evening, and the sun's elevation
+    // alone cannot tell it there is an overcast.
+    let level = SHOP_DAY_FLOOR
+        + (1.0 - SHOP_DAY_FLOOR) * (1.0 - super::timeofday::brightness(clock.hours, weather.cover));
     let Ok(camera) = cameras.single() else {
         return;
     };
@@ -255,7 +326,7 @@ fn reposition_shop_glow(
 
     // Much weaker than a street lamp: this is one shop window, and the point of
     // it is the two metres of pavement under it rather than the road.
-    let intensity = 110_000.0 * night;
+    let intensity = 110_000.0 * level;
     let mut placed = 0;
     for (mut transform, mut light) in &mut glows {
         match nearest.get(placed) {
@@ -319,7 +390,7 @@ fn set_lamp_brightness(
     clock: Res<TimeOfDay>,
     glass: Res<LampGlass>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut lamps: Query<&mut PointLight, With<StreetLight>>,
+    mut lamps: Query<&mut SpotLight, With<LampBeam>>,
 ) {
     // Lamps come up through dusk and go out through dawn.
     let night = 1.0 - daylight(clock.hours);
@@ -327,12 +398,26 @@ fn set_lamp_brightness(
     // exposure — see `render::adapt_exposure`. Physically this is a floodlight rather
     // than a street lamp, which is the usual bargain: real sodium lamps look
     // like nothing at all once the camera has opened up for a moonlit sky.
+    //
+    // Unchanged by the move from a point light to a cone: Bevy quotes a spot
+    // light's intensity in lumens over the whole sphere as well, so the same
+    // number lands the same pool and the cone only decides what is *outside*
+    // it.
     let intensity = 1_250_000.0 * night;
     for mut lamp in &mut lamps {
         lamp.intensity = intensity;
     }
     if let Some(mut material) = materials.get_mut(&glass.0) {
-        material.emissive = LinearRgba::rgb(13.0 * night, 9.4 * night, 5.0 * night);
+        // Well over the white point, and it always was — what it never had was
+        // anything to bloom into. Under the old thresholdless bloom every pixel
+        // in the frame was veiled equally, so a lamp thirteen times over white
+        // and a wall a fifth of the way to it came back with the same halo,
+        // which is to say neither had one. See `render::BLOOM_THRESHOLD`.
+        material.emissive = LinearRgba::rgb(
+            LAMP_ENVELOPE.x * night,
+            LAMP_ENVELOPE.y * night,
+            LAMP_ENVELOPE.z * night,
+        );
     }
 }
 
@@ -346,6 +431,36 @@ mod tests {
         let yaw = Quat::from_rotation_y(post.inward.y.atan2(-post.inward.x));
         let arm = yaw * Vec3::new(ARM_REACH, 0.0, 0.0);
         Vec2::new(head.x + arm.x, head.y + arm.z)
+    }
+
+    /// A street lantern's glass is one of the few things in a night frame that
+    /// should genuinely clip, and clipping over the bloom threshold is what
+    /// puts a halo round it. Warm on the way past: a sodium lamp that clips to
+    /// neutral white is a lamp with its colour graded out of it.
+    #[test]
+    fn a_lamp_envelope_clips_over_the_bloom_threshold() {
+        const _: () = assert!(LAMP_ENVELOPE.x > LAMP_ENVELOPE.y);
+        const _: () = assert!(LAMP_ENVELOPE.y > LAMP_ENVELOPE.z);
+        // Through the same ramp the lamps themselves come up on, so this is
+        // what the envelope actually reads at midnight rather than what the
+        // constant says.
+        let night = 1.0 - daylight(0.0);
+        let lit = LAMP_ENVELOPE.x * night;
+        assert!(
+            lit > crate::render::BLOOM_THRESHOLD,
+            "the envelope reads {lit} against a white point of 1.0"
+        );
+    }
+
+    /// The cone has to cover the road and stop short of the eaves, which is the
+    /// whole reason it is a cone: a sphere at seven and a half metres lights the
+    /// facade behind it as evenly as the carriageway in front.
+    #[test]
+    fn the_beam_covers_the_carriageway_and_not_the_facade() {
+        const _: () = assert!(LAMP_INNER < LAMP_OUTER);
+        let radius = LAMP_HEIGHT * LAMP_OUTER.tan();
+        assert!(radius > 9.0, "a {radius} m pool does not cross a street");
+        assert!(radius < 26.0, "a {radius} m pool is a floodlight");
     }
 
     #[test]

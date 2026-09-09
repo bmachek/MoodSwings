@@ -38,6 +38,7 @@ use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 
 use crate::core::config::GameConfig;
 use crate::player::camera::CameraRig;
+use crate::render::quality::QualityPreset;
 use crate::world::timeofday::{TimeOfDay, daylight, sun_elevation};
 use crate::world::weather::Weather;
 
@@ -61,10 +62,18 @@ use crate::world::weather::Weather;
 ///
 /// so a line `c(x) = k·x + (1-k)·anchor` yields `target = (k-1)·(x - anchor)`:
 /// zero correction for a correctly exposed frame, and `1-k` stops of correction
-/// for every stop the frame is away from one. At 0.72 a scene four stops darker
-/// than the clock expected is lifted by a bit over a stop — an eye adjusting,
-/// not a light switch.
-const METER_AUTHORITY: f32 = 0.72;
+/// for every stop the frame is away from one. At 0.85 a scene four stops darker
+/// than the clock expected is lifted by about six tenths of a stop — an eye
+/// adjusting, not a light switch.
+///
+/// It was 0.72, and 28% of every deviation turned out to be more authority than
+/// the argument above supports. The base exposure is *already* driven by how
+/// bright it is outside, so what is left for the meter to find is genuine
+/// difference between framings — and correcting 28% of that is a contrast
+/// compressor operating *between* shots, on top of the one bloom was operating
+/// inside them: five very different framings all landed within seven codes of
+/// each other's mean. A street is allowed to be brighter than a courtyard.
+const METER_AUTHORITY: f32 = 0.85;
 
 /// The average log luminance of a correctly exposed frame, in the units the
 /// histogram measures.
@@ -149,10 +158,15 @@ fn sync_post(
     config: Res<GameConfig>,
     curve: Res<MeteringCurve>,
     cameras: Query<Entity, With<super::RenderStack>>,
-    mut applied: Local<Option<(bool, bool, bool)>>,
+    mut applied: Local<Option<(bool, bool, bool, QualityPreset)>>,
 ) {
     let settings = &config.graphics;
-    let wanted = (settings.motion_blur, settings.depth_of_field, settings.lens);
+    let wanted = (
+        settings.motion_blur,
+        settings.depth_of_field,
+        settings.lens,
+        settings.requested,
+    );
     if *applied == Some(wanted) && !cameras.is_empty() {
         return;
     }
@@ -218,14 +232,22 @@ fn sync_post(
         // Auto exposure has no tier of its own: it is a correction to the
         // exposure the clock already set, and it is wanted at every tier that
         // can run a compute shader.
+        //
+        // Except Photo, which is not a tier so much as a camera. A still has no
+        // eye to adapt, and the whole point of `--screenshot` is that two shots
+        // can be compared — which a per-frame meter destroys, because it makes
+        // every frame's exposure a function of what happens to be in it.
         match &curve.0 {
-            Some(curve) => {
+            Some(curve) if settings.requested != QualityPreset::Photo => {
                 camera.insert(AutoExposure {
                     range: -METER_RANGE..=METER_RANGE,
-                    // Ignore the darkest and brightest tenth. A lit window at
-                    // night and a patch of sky in a street are both outliers,
-                    // and both would otherwise drag the whole frame after them.
-                    filter: 0.10..=0.90,
+                    // Ignore the darkest and brightest fifth. A lit window at
+                    // night and a patch of sky at the end of a street are both
+                    // outliers, and both would otherwise drag the whole frame
+                    // after them — a tenth was not enough to stop the sky
+                    // doing it, because in a street framing the sky is more
+                    // than a tenth of the picture.
+                    filter: 0.20..=0.80,
                     // Faster into the light than out of it, the way eyes are.
                     speed_brighten: 2.4,
                     speed_darken: 0.9,
@@ -233,7 +255,7 @@ fn sync_post(
                     ..default()
                 });
             }
-            None => {
+            _ => {
                 camera.remove::<AutoExposure>();
             }
         }
@@ -276,9 +298,28 @@ pub fn temperature(hours: f32, cover: f32) -> f32 {
 /// Cloud flattens it, and so does the dark: past dusk the eye is running on rods
 /// and has hardly any colour vision left, and a fully saturated night is the
 /// single most common thing that makes a game look like a game.
-pub fn saturation(hours: f32, cover: f32) -> f32 {
+///
+/// Applied globally, and it stays global only for cloud. The *night* half of it
+/// moved into [`shadow_saturation`], because desaturating a night frame globally
+/// takes the colour out of the sodium lamps at exactly the same rate as out of
+/// the shadows, and that is backwards: sodium is the one thing in a night street
+/// that keeps its colour. It is why a yellow, a pink and a blue-grey building
+/// all came back the same pastel.
+pub fn saturation(cover: f32) -> f32 {
+    (1.08 - 0.20 * cover.clamp(0.0, 1.0)).clamp(0.55, 1.15)
+}
+
+/// And how much survives in the shadows specifically.
+///
+/// This is the half of [`saturation`] that belongs to the dark. Rod vision has
+/// almost no colour in it, and what the eye is running on rods for at night is
+/// the parts of the street *no lamp reaches* — which is the shadows, not the
+/// lamps themselves. Pushing it down here and leaving the highlights alone is
+/// the difference between a night that reads as night and a night that reads as
+/// a grey afternoon.
+pub fn shadow_saturation(hours: f32) -> f32 {
     let night = 1.0 - daylight(hours);
-    (1.08 - 0.20 * cover.clamp(0.0, 1.0) - 0.20 * night).clamp(0.55, 1.15)
+    (1.0 - 0.30 * night).clamp(0.55, 1.0)
 }
 
 /// How much the grade steepens a clear, sunlit frame.
@@ -311,7 +352,7 @@ fn grade(hours: f32, cover: f32) -> ColorGrading {
             // A touch of magenta at dusk, which is what the sky actually does
             // once the sun is under the horizon and is worth exaggerating.
             tint: 0.010 * (1.0 - (sun_elevation(hours) / 0.18).abs().min(1.0)).max(0.0),
-            post_saturation: saturation(hours, cover.clamp(0.0, 1.0)),
+            post_saturation: saturation(cover.clamp(0.0, 1.0)),
             ..default()
         },
         // Lifted, and only here. Crushed blacks are what a night scene has
@@ -327,16 +368,37 @@ fn grade(hours: f32, cover: f32) -> ColorGrading {
             // apart. At the same steepening as the midtones it took a shaded
             // street from cool to navy.
             contrast: 1.0 + 0.45 * SUN_CONTRAST * sun - 0.10 * flat,
+            saturation: shadow_saturation(hours),
             ..default()
         },
         midtones: ColorGradingSection {
             contrast: 1.0 + SUN_CONTRAST * sun - 0.12 * flat,
+            // Gamma rather than more contrast, and the two are not
+            // interchangeable. Contrast in Bevy is per channel about a pivot,
+            // so steepening it pushes a colour's channels apart — the reason
+            // the shadow section above had to be pulled back. Gamma is the *n*
+            // in the ASC CDL formula and shapes the toe without touching hue,
+            // which is what is wanted here: above one it deepens the step from
+            // the shadows into the midtones in clear sun, and below one it
+            // opens the same step out under an overcast, where the light really
+            // does arrive from everywhere and the toe really is soft.
+            gamma: 1.0 + 0.07 * sun - 0.05 * flat,
             ..default()
         },
-        // Pulled down under cloud so a white sky stops just short of clipping,
-        // which is where the flat look of an overcast day comes from.
         highlights: ColorGradingSection {
-            gain: 1.0 - 0.08 * flat,
+            // Pulled down under cloud so a white sky stops just short of
+            // clipping, which is where the flat look of an overcast day comes
+            // from — and pushed *up* in clear sun, which is the half that was
+            // missing. A hard sun is a high-contrast light and the top of the
+            // frame is where that shows; the tonemapper has the headroom for it
+            // and TonyMcMapface holds its hue as it rolls off, which is the
+            // whole reason it is the curve here.
+            gain: 1.0 + 0.13 * sun - 0.08 * flat,
+            // And the highlights keep their colour when the shadows lose
+            // theirs. At night these are the lamps, the lit windows and the
+            // shopfronts — the only saturated things left in the city, and the
+            // last things that should be greyed.
+            saturation: 1.0 + 0.06 * night,
             ..default()
         },
     }
@@ -421,7 +483,7 @@ mod tests {
                 "hour {hours} did not cool under cloud"
             );
             assert!(
-                saturation(hours, 1.0) < saturation(hours, 0.0),
+                saturation(1.0) < saturation(0.0),
                 "hour {hours} kept its colour under cloud"
             );
         }
@@ -440,10 +502,45 @@ mod tests {
 
     #[test]
     fn night_keeps_some_colour_but_not_all_of_it() {
-        let noon = saturation(12.0, 0.0);
-        let night = saturation(1.0, 0.0);
+        let noon = shadow_saturation(12.0);
+        let night = shadow_saturation(1.0);
         assert!(night < noon, "a night as colourful as noon reads as a game");
-        assert!(night > 0.7, "and one with no colour reads as a bug");
+        assert!(night > 0.6, "and one with no colour reads as a bug");
+    }
+
+    /// The correction the global desaturation needed. Rod vision has no colour
+    /// in the parts of a street no lamp reaches; it has plenty in the lamp. A
+    /// grade that takes the orange out of sodium at the same rate it takes the
+    /// colour out of a shadow is desaturating exactly the wrong half.
+    #[test]
+    fn the_night_greys_its_shadows_and_leaves_its_lamps_alone() {
+        let night = grade(1.0, 0.0);
+        let noon = grade(12.0, 0.0);
+        assert!(
+            night.shadows.saturation < noon.shadows.saturation - 0.15,
+            "the night shadows kept their colour"
+        );
+        assert!(
+            night.highlights.saturation > noon.highlights.saturation,
+            "the sodium was greyed along with the shadows"
+        );
+        assert!(night.highlights.saturation > night.shadows.saturation);
+    }
+
+    /// The half of the overcast rule that was never written. Cloud pulls the
+    /// highlights down so a white sky stops short of clipping; a hard sun has
+    /// to push them the other way, or the frame has a ceiling under white and
+    /// nothing to roll off — which is what "flat" meant in the first place.
+    #[test]
+    fn a_clear_sun_lifts_the_top_of_the_frame_and_an_overcast_lowers_it() {
+        assert!(
+            grade(12.0, 0.0).highlights.gain > 1.05,
+            "no sunlit highlight"
+        );
+        assert!(grade(12.0, 1.0).highlights.gain < 1.0, "an overcast clips");
+        // And after dark neither applies: there is no sun to steepen and no
+        // white sky to hold down.
+        assert!((grade(1.0, 0.0).highlights.gain - 1.0).abs() < 1e-6);
     }
 
     /// Everything downstream multiplies by these. A grade that leaves the range
@@ -465,6 +562,11 @@ mod tests {
                     assert!((0.0..=0.05).contains(&section.lift));
                     assert!((0.8..=1.2).contains(&section.contrast));
                     assert!((0.8..=1.2).contains(&section.gain));
+                    // Gamma is an exponent, so it leaves the plausible range
+                    // much faster than a multiplier does: a tenth either way is
+                    // already a strong toe.
+                    assert!((0.85..=1.15).contains(&section.gamma));
+                    assert!((0.5..=1.2).contains(&section.saturation));
                 }
             }
         }

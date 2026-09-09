@@ -21,8 +21,33 @@ use crate::core::config::GameConfig;
 use crate::world::buildings::CityAssets;
 use crate::world::weather::Weather;
 
-/// How bright a lit window is at full dark, in the nits `emissive` is measured
-/// in — the same scale the tracer and explosion flashes use.
+/// How bright a lit window is at full dark, as a multiple of the frame's white
+/// point.
+///
+/// Not nits, and the comment here said nits for a long time — "the same scale
+/// the tracer and explosion flashes use". It is worth writing down exactly why
+/// that is wrong, because the arithmetic that follows from it is off by four
+/// orders of magnitude and the mistake is invisible until something is set to a
+/// plausible-looking radiance and the whole city turns white.
+///
+/// In Bevy's *forward* path, emissive is scaled by `mix(1.0, view.exposure,
+/// emissive.a)`, so an emissive with alpha 1 really is quoted in nits and really
+/// is divided down by the aperture. This renderer is deferred at every tier —
+/// see `render::RenderPlugin` — and the g-buffer has no room for that alpha:
+/// `deferred_gbuffer_from_pbr_input` packs `emissive.rgb` into an RGB9E5
+/// channel and `pbr_input_from_deferred_gbuffer` unpacks it as
+/// `vec4(emissive, 0.0)`. Alpha zero means `mix(1.0, exposure, 0.0)` is 1.0, so
+/// emissive is added to the frame *after* exposure, at face value.
+///
+/// Which means this number is already in the units the tonemapper works in: 1.0
+/// is the white point at every hour of the day. Three is a window that clips,
+/// with enough over it to carry a halo now that `render::BLOOM_THRESHOLD` gives
+/// bloom something to find — and that halo is the thing that was actually
+/// missing, not the brightness. It scales with `1.0 - brightness`, so at three
+/// in the afternoon a window sits at a fifth of a white point and reads as a
+/// pane with a room behind it, which is what it should read as.
+///
+/// `world::interior` is the one place that already had this right, and says so.
 const WINDOW_GLOW: f32 = 3.0;
 
 #[derive(Resource, Debug, Clone)]
@@ -35,6 +60,16 @@ pub struct TimeOfDay {
 /// Marks the sun so the cycle can find it.
 #[derive(Component)]
 pub struct Sun;
+
+/// Marks the second directional light: the sun's light coming back up off the
+/// street, from the side the sun is not on.
+///
+/// A separate marker rather than a second `Sun`, because everything that asks
+/// for the sun means the beam: `render::shadows` builds cascades for it,
+/// `render::volumetrics` puts shafts in it, and `world::sky` reasons about the
+/// disc. None of that belongs to a fill. See [`BOUNCE_TILT`].
+#[derive(Component)]
+pub struct Bounce;
 
 /// Unit vector from the city up towards the sun.
 ///
@@ -123,11 +158,43 @@ const SUN_LUX: f32 = 110_000.0;
 /// Three percent, and lower than the arithmetic alone would suggest, because it
 /// is not the only correction: `render::spawn_atmosphere` also lifted the
 /// planet's own ground albedo, which is the lower half of the environment map
-/// and therefore the other place a warm, groundward fill can come from. Between
-/// them a shaded wall comes back at about half the value of a lit one with its
-/// hue intact, which is a shadow rather than a hole and a shadow rather than a
-/// bruise.
+/// and therefore the other place a warm, groundward fill can come from.
+///
+/// It is no longer *directionless*, and that is the last thing wrong with it.
+/// Three percent of a hundred thousand lux is three thousand lux of white
+/// arriving equally from every direction at once, which lands identically on a
+/// wall in a courtyard, a wall on the shaded side of a street and a wall in an
+/// open field — and lifting every shaded surface in the frame by the same
+/// amount is precisely how a renderer produces a flat, milky picture. So most
+/// of it moved into [`Bounce`], a second directional light that comes from the
+/// side the sun is *not* on. What is left here is the small residue that has no
+/// direction in reality either.
 const BOUNCE: f32 = 0.03;
+
+/// How much of [`BOUNCE`] is left as a directionless term.
+///
+/// Not zero. A street canyon does scatter light around corners, and a fill that
+/// is purely directional leaves a surface facing at ninety degrees to it with
+/// nothing at all — which is the opposite failure and looks like a lighting bug
+/// rather than like flatness.
+///
+/// Measured rather than guessed: at a fifth, the back of an arcade and the
+/// underside of an awning went to true black, and 0.9% of a daylight frame
+/// clipped at the bottom against 0.01% before the split. Three tenths keeps
+/// them off the floor while still leaving the directional half more than twice
+/// the flat one, which is the ratio the whole change exists for.
+const BOUNCE_FLAT: f32 = 0.30;
+
+/// How far below the horizon the bounce fill comes from.
+///
+/// The light a shaded facade actually receives in a sunlit street comes off the
+/// sunlit facade opposite it and off the pavement in between, so it arrives
+/// from the far side of the street and from below. Modelling that as one more
+/// directional light is a cheat — a real bounce is a whole hemisphere — but it
+/// is a cheat with the right *shape*: the shaded side of a building is lit, the
+/// sunlit side gains nothing it did not already have, and an eave or a balcony
+/// finally casts something onto the wall under it.
+const BOUNCE_TILT: f32 = 0.30;
 
 /// How bright it is outside: 0 at night, 1 in full sun.
 ///
@@ -135,6 +202,39 @@ const BOUNCE: f32 = 0.03;
 /// overcast at noon is a dark day, and the city's windows come on for it.
 pub fn brightness(hours: f32, cover: f32) -> f32 {
     daylight(hours) * (1.0 - 0.50 * cover.clamp(0.0, 1.0).powf(1.6))
+}
+
+/// How much of the sun a pavement and a plastered wall send back, per channel.
+///
+/// Not white. Bounced light is coloured by what it bounced off, and a street is
+/// asphalt, stone slabs and rendered walls — which is to say warm grey. This is
+/// what stops the fill reading as a second, weaker sun.
+fn ground_bounce() -> Vec3 {
+    Vec3::new(1.0, 0.90, 0.76)
+}
+
+/// A directional light concentrates its whole illuminance on the surfaces
+/// facing it, where a hemisphere of bounce would have spread the same energy
+/// over everything facing broadly upward and outward. Dividing by roughly the
+/// cosine-weighted spread of that hemisphere is what keeps the total in the
+/// same place after the change of model.
+const BOUNCE_SPREAD: f32 = 1.6;
+
+/// Where the bounce comes from, given where the sun is.
+///
+/// Away from the sun horizontally and up from below. Take a street with the sun
+/// somewhere along +X: the facade whose normal points +X is the lit one, and it
+/// throws light back into the +X hemisphere — across the street, onto the facade
+/// whose normal points -X, which is the one in shade. So the direction a shaded
+/// wall sees its fill arriving *from* is the sun's horizontal direction negated,
+/// tilted down by [`BOUNCE_TILT`] because the pavement contributes too.
+fn bounce_direction(sun: Dir3) -> Vec3 {
+    let horizontal = Vec3::new(-sun.x, 0.0, -sun.z);
+    // A sun straight overhead has no horizontal component worth normalising, and
+    // at that hour the bounce genuinely does come from straight down.
+    horizontal.try_normalize().map_or(Vec3::NEG_Y, |flat| {
+        (flat - Vec3::Y * BOUNCE_TILT).normalize()
+    })
 }
 
 fn sky_color(hours: f32, cover: f32) -> Color {
@@ -208,6 +308,21 @@ fn spawn_sun(mut commands: Commands, config: Res<GameConfig>) {
         bevy::light::SunDisk::EARTH,
         Transform::default(),
     ));
+
+    commands.spawn((
+        Name::new("Bounce"),
+        Bounce,
+        DirectionalLight {
+            illuminance: 0.0,
+            // Never. A fill is an admission that the real light path is not
+            // being traced, and a shadow map on it would be an admission with
+            // a second cascade set to pay for — the whole point of the term is
+            // that it reaches where the beam does not.
+            shadow_maps_enabled: false,
+            ..default()
+        },
+        Transform::default(),
+    ));
 }
 
 /// Every 3D camera gets fog; `apply_sky` then keeps it matched to the sky.
@@ -242,7 +357,10 @@ fn apply_sky(
     config: Res<GameConfig>,
     mut clear: ResMut<ClearColor>,
     mut ambient: ResMut<GlobalAmbientLight>,
-    mut sun: Query<(&mut Transform, &mut DirectionalLight), With<Sun>>,
+    mut lights: ParamSet<(
+        Query<(&mut Transform, &mut DirectionalLight), With<Sun>>,
+        Query<(&mut Transform, &mut DirectionalLight), With<Bounce>>,
+    )>,
     mut fog: Query<&mut DistanceFog>,
 ) {
     let hours = clock.hours;
@@ -282,10 +400,11 @@ fn apply_sky(
     // And in clear sun it is *bounce* — see [`BOUNCE`], which is the term that
     // used to be a flat five hundred lux at every hour of the day.
     ambient.color = Color::srgb(0.35 + 0.53 * day, 0.42 + 0.42 * day, 0.58 + 0.16 * day);
-    ambient.brightness =
-        240.0 * (1.0 - day) + BOUNCE * sunlight + 150.0 * day * cover * skylight_gain(cover);
+    ambient.brightness = 240.0 * (1.0 - day)
+        + BOUNCE * BOUNCE_FLAT * sunlight
+        + 150.0 * day * cover * skylight_gain(cover);
 
-    for (mut transform, mut light) in &mut sun {
+    for (mut transform, mut light) in &mut lights.p0() {
         // Honestly below the horizon at night. This used to clamp the sun to
         // 2.9° above it "so shadow cascades stay sane", which left the azimuth
         // sweeping on through the night — the atmosphere drew a twilight glow
@@ -302,6 +421,21 @@ fn apply_sky(
         light.illuminance = sunlight;
         light.color = sun_color(hours, cover);
         light.shadow_maps_enabled = beam > 0.0;
+    }
+
+    // And the same sunlight, arriving from the other side of the street after
+    // one bounce. `bounce_direction` is where it comes *from*; the light points
+    // the other way, exactly as the sun does.
+    let up = bounce_direction(dir);
+    let lit = sun_color(hours, cover).to_linear().to_vec3() * ground_bounce();
+    for (mut transform, mut light) in &mut lights.p1() {
+        *transform = Transform::from_translation(up * 400.0).looking_to(-up, Vec3::Y);
+        // Under a solid overcast there is no beam to bounce and no direction
+        // for it to come from — the flat term and the sky map are the honest
+        // description then, and this fades out with the same `sunlight` the
+        // shadows do.
+        light.illuminance = BOUNCE * (1.0 - BOUNCE_FLAT) * sunlight * BOUNCE_SPREAD;
+        light.color = LinearRgba::rgb(lit.x, lit.y, lit.z).into();
     }
 
     // Fog hides the far edge of the streamed area, so chunks pop in inside haze
@@ -392,6 +526,70 @@ mod tests {
             let h = h as f32;
             assert_eq!(sun_elevation(h), sun_direction(h).y);
         }
+    }
+
+    /// The two things `WINDOW_GLOW` has to buy, held against the threshold
+    /// bloom actually uses. Emissive skips the exposure entirely on the
+    /// deferred path, so these are white points rather than nits — see the
+    /// constant. Anyone who reads it as a radiance and "corrects" it to a
+    /// plausible number of nits turns the city into a floodlight, which is
+    /// exactly what happened once.
+    #[test]
+    fn a_lit_window_reads_as_a_light_source_after_dark_and_not_before() {
+        use crate::render::BLOOM_THRESHOLD;
+
+        let at_night = (1.0 - brightness(1.0, 0.0)) * WINDOW_GLOW;
+        assert!(
+            at_night > BLOOM_THRESHOLD,
+            "a fully lit window comes out at {at_night}, under the bloom threshold"
+        );
+        // The facade shader shades the emissive by the same factor it shades
+        // the room behind it, down to about 0.28 for a pane seen at an angle
+        // into a side wall. Even the dimmest of those has to stay a light.
+        assert!(at_night * 0.28 > 0.5, "the dim panes go out");
+
+        // And in the middle of a clear afternoon a window is a window.
+        let by_day = (1.0 - brightness(15.0, 0.0)) * WINDOW_GLOW;
+        assert!(by_day < 0.5, "windows glow in daylight at {by_day}");
+    }
+
+    /// The fill has to come from somewhere a bounce could have come from: away
+    /// from the sun horizontally, because the wall it lights is the one facing
+    /// away from the sun, and from below, because the pavement is down there.
+    /// A fill on the sun's own side would be a second sun, and would light
+    /// exactly the surfaces that need it least.
+    #[test]
+    fn the_bounce_arrives_from_the_shaded_side_of_the_street() {
+        for hour in [7.0f32, 9.0, 12.0, 15.0, 17.0] {
+            let sun = sun_direction(hour);
+            let bounce = bounce_direction(sun);
+            assert!(
+                bounce.y < 0.0,
+                "at {hour}h the bounce comes from above: {bounce:?}"
+            );
+            let horizontal = Vec2::new(sun.x, sun.z).dot(Vec2::new(bounce.x, bounce.z));
+            assert!(
+                horizontal < 0.0,
+                "at {hour}h the bounce is on the sun's own side: {horizontal}"
+            );
+            assert!((bounce.length() - 1.0).abs() < 1e-5);
+        }
+    }
+
+    /// And the two fills together are the one bounce they were split out of.
+    /// Splitting a term into a directional half and a flat half is only honest
+    /// if the halves still add up; the alternative is a quiet change in overall
+    /// brightness dressed up as a change in direction.
+    #[test]
+    fn the_directional_and_flat_halves_of_the_bounce_add_up() {
+        assert!((0.0..1.0).contains(&BOUNCE_FLAT));
+        let flat = BOUNCE * BOUNCE_FLAT;
+        let directional = BOUNCE * (1.0 - BOUNCE_FLAT);
+        assert!((flat + directional - BOUNCE).abs() < 1e-6);
+        assert!(
+            directional > flat * 2.0,
+            "most of a street's bounce has a direction"
+        );
     }
 
     #[test]

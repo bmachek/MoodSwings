@@ -135,9 +135,17 @@ fn generate_city(
     // A town read off a map arrives as a road network and nothing else. What
     // fills it is not blocks — a real block is not a rectangle — but frontages
     // marched down each side of each street; see `world::streetside`.
+    let mut frontage = streetside::Frontage::default();
     if layout.blocks.is_empty() {
-        layout.blocks = streetside::lots(&layout, config.world_seed, config.city);
+        let (blocks, holes) = streetside::lots(&layout, config.world_seed, config.city);
+        layout.blocks = blocks;
+        frontage = holes;
     }
+    // Spent by `setup_ground`, which is the next system in the chain and
+    // therefore sees the insert. The gaps are decided here because they fall
+    // out of the marcher's own walk; the meshes that fill them are built there,
+    // because that is where `Ribbons` is.
+    commands.insert_resource(frontage);
 
     info!(
         "city built in {:.1}ms: {} blocks, {} buildings, {} intersections, {} roads",
@@ -312,11 +320,14 @@ fn tiled_ground(extent: f32, tile: f32) -> Mesh {
 /// times over it. Everything that makes that survivable — a texture that wraps,
 /// a mip chain, anisotropic filtering, and a UV that stays inside what an `f32`
 /// can say — lives in `texture` and in [`tiled_ground`].
+#[allow(clippy::too_many_arguments)]
 fn setup_ground(
     mut commands: Commands,
     config: Res<GameConfig>,
     library: Res<material::MaterialLibrary>,
     city: Res<City>,
+    frontage: Res<streetside::Frontage>,
+    foliage: Res<vegetation::FoliageKit>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut roads: ResMut<Assets<road::RoadMaterial>>,
@@ -366,12 +377,31 @@ fn setup_ground(
             }
         }
         let slabs = materials.add(slabs);
+        info!("{} gaps in the town's frontage to fill", frontage.len());
         commands.insert_resource(streetside::build_ribbons(
             &city,
+            &frontage,
             meshes.as_mut(),
             paving,
             slabs,
+            materials.add(forecourt(&library, images.as_mut())),
+            materials.add(boundary_wall(&library, images.as_mut())),
+            // At a repeat of one, because a boundary's mesh carries its own
+            // size in its UVs — see `FoliageKit::hedge_leaves`.
+            foliage.hedge_leaves(1.0, materials.as_mut()),
         ));
+        // The mask covers the town and a margin round it, and the margin is
+        // what makes the clamped edge safe: past it there are no streets, so
+        // the border reads as open country and the sampler is free to extend
+        // that to the horizon.
+        let reach = config.world.half_extent + ENVELOPE + BACKLAND + 60.0;
+        let started = std::time::Instant::now();
+        let mask = images.add(urban_mask(&city, reach));
+        info!(
+            "town mask rasterised in {:.1}ms at {}²",
+            started.elapsed().as_secs_f32() * 1000.0,
+            MASK_SIZE
+        );
         commands.spawn((
             Name::new("Ground"),
             Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE))),
@@ -380,7 +410,7 @@ fn setup_ground(
             // quad is kilometres across — see `world::ground`.
             MeshMaterial3d(grounds.add(ground::GroundMaterial {
                 base: landscape(&library, images.as_mut()),
-                extension: ground::GroundBreakup::default(),
+                extension: ground::GroundBreakup::plain(mask, reach),
             })),
             Transform::from_xyz(0.0, 0.0, 0.0),
         ));
@@ -421,6 +451,218 @@ fn setup_ground(
 /// streaks in it. That is what the first pass at this looked like.
 const GRASS_TILE: f32 = 3.5;
 
+/// Texels a side of the town mask — see [`urban_mask`].
+///
+/// A thousand and twenty-four over a town two and a half kilometres across is
+/// a texel every two and a bit metres, which is finer than the softest edge in
+/// the mask by a factor of fifteen. It is a map of where the town is, not a
+/// texture of the ground: nothing in it needs to resolve a kerb.
+const MASK_SIZE: u32 = 1024;
+
+/// How far behind a pavement the ground still belongs to the street.
+///
+/// A yard, a forecourt, the strip of grit somebody parks a van on. Thirty-odd
+/// metres is about as deep as the back land of a European town goes before it
+/// turns into whatever the middle of the block is; it is also, not by accident,
+/// a little more than the deepest plot `streetside` hands out.
+const BACKLAND: f32 = 34.0;
+
+/// And how far out is still town at all.
+///
+/// The gap between two streets in Landshut is about a hundred and fifty metres,
+/// so a hundred and forty reaches the middle of a block from both sides and
+/// runs out well before the next town over. This is the term that stops the
+/// inside of a block from being a meadow.
+const ENVELOPE: f32 = 140.0;
+
+/// Where the town is, rasterised once at startup.
+///
+/// Red is the back land: the ground immediately behind a pavement, including
+/// the wedge at an oblique corner that no pavement covers. Green is the
+/// built-up envelope — anywhere a block interior could be. `ground.wgsl` reads
+/// both and shades the plain from them, which is the only way one material can
+/// draw a market square and a field two kilometres out and mean something
+/// different by each.
+///
+/// A pure function of the road graph, so a pure function of `(seed, style,
+/// atlas)`: the mask is part of the layout, not part of the streaming, and it
+/// is built once for a world that regenerates its chunks from the same three
+/// inputs. Nothing here draws from an RNG.
+///
+/// Returned with a mip chain, because the plain is seen at every angle from
+/// standing height to a rooftop and a mask without one shimmers exactly where
+/// the ground goes flat to the eye.
+fn urban_mask(city: &citygen::CityLayout, reach: f32) -> Image {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+
+    let size = MASK_SIZE as usize;
+    let per_texel = reach * 2.0 / MASK_SIZE as f32;
+    let at = |index: usize| -reach + (index as f32 + 0.5) * per_texel;
+
+    // Stamped, not sampled: walking every texel and asking it for its distance
+    // to every street is a thousand-squared times two thousand, which is two
+    // thousand million. Each street instead visits only the texels its own
+    // corridor plus the back land can reach, which for a twenty-metre segment
+    // is about a thousand of them.
+    let mut near = vec![0.0f32; size * size];
+    for edge in city.graph.edges() {
+        let a = city.graph.node(edge.a).pos;
+        let b = city.graph.node(edge.b).pos;
+        // The corridor is the carriageway and its pavements — the ground that
+        // is already paved. Everything measured here is measured from the far
+        // side of that.
+        let corridor = edge.width * 0.5 + citygen::SIDEWALK_WIDTH;
+        let span = corridor + BACKLAND;
+        let low = (a.min(b) - Vec2::splat(span) + Vec2::splat(reach)) / per_texel;
+        let high = (a.max(b) + Vec2::splat(span) + Vec2::splat(reach)) / per_texel;
+        let x0 = (low.x.floor().max(0.0) as usize).min(size - 1);
+        let x1 = (high.x.ceil().max(0.0) as usize).min(size - 1);
+        let z0 = (low.y.floor().max(0.0) as usize).min(size - 1);
+        let z1 = (high.y.ceil().max(0.0) as usize).min(size - 1);
+        let run = b - a;
+        let length_squared = run.length_squared().max(1e-6);
+        for z in z0..=z1 {
+            let world_z = at(z);
+            for x in x0..=x1 {
+                let point = Vec2::new(at(x), world_z);
+                let t = ((point - a).dot(run) / length_squared).clamp(0.0, 1.0);
+                let beyond = (point.distance(a + run * t) - corridor).max(0.0);
+                // Linear rather than smooth: this field is blurred twice below
+                // to make the envelope, and a smoothstep here would only be
+                // smoothed again. The shader puts the curve back on.
+                let value = 1.0 - (beyond / BACKLAND).min(1.0);
+                let cell = &mut near[z * size + x];
+                *cell = cell.max(value);
+            }
+        }
+    }
+
+    // The envelope is the back land seen from far enough away that individual
+    // streets stop mattering. Two box blurs rather than one: a single box
+    // leaves square corners on the town, which show up on the ground as
+    // straight edges nothing in the world explains.
+    let radius = ((ENVELOPE * 0.5) / per_texel).round().max(1.0) as usize;
+    let mut envelope = near.clone();
+    for _ in 0..2 {
+        blur(&mut envelope, size, radius);
+    }
+
+    let mut data = vec![0u8; size * size * 4];
+    for index in 0..size * size {
+        let x = index % size;
+        let z = index / size;
+        // The outermost ring is forced empty. The sampler clamps at the edge,
+        // so whatever the border says is what the ground says from there to
+        // the horizon — and a street that happens to end on the border would
+        // otherwise paint a yard forty kilometres long.
+        let border = x == 0 || z == 0 || x == size - 1 || z == size - 1;
+        let (a, b) = if border {
+            (0.0, 0.0)
+        } else {
+            // The envelope is an average, so its range depends on how dense
+            // the streets are rather than on anything absolute; the two ends
+            // here are read off Landshut — a block interior lands near a tenth
+            // and open country lands at nothing.
+            (
+                near[index],
+                ((envelope[index] - 0.015) / 0.13).clamp(0.0, 1.0),
+            )
+        };
+        data[index * 4] = texture::byte(a);
+        data[index * 4 + 1] = texture::byte(b);
+        data[index * 4 + 3] = 255;
+    }
+
+    // The mip chain, the same way `texture::painted_rect` builds one, but in
+    // linear: this is a mask and averaging it in sRGB would bend it.
+    let mut level = data.clone();
+    let (mut width, mut height) = (MASK_SIZE, MASK_SIZE);
+    let mut levels = 1;
+    while width > 1 || height > 1 {
+        let (next, nw, nh) = texture::downsample(&level, width, height, false);
+        data.extend_from_slice(&next);
+        level = next;
+        width = nw;
+        height = nh;
+        levels += 1;
+    }
+
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: MASK_SIZE,
+            height: MASK_SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.mip_level_count = levels;
+    image.data = Some(data);
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        // Clamped, not repeated. Every other texture in this project tiles;
+        // this one is a map, and a map that wrapped would put a second town
+        // beyond the edge of the first.
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        anisotropy_clamp: 4,
+        ..default()
+    });
+    image
+}
+
+/// One separable box blur, in place, with running sums.
+///
+/// Running sums because the radius is fifty-odd texels and the naive form is
+/// that many taps per texel per axis; this is two adds and a subtract however
+/// wide the kernel is.
+fn blur(field: &mut [f32], size: usize, radius: usize) {
+    let window = (radius * 2 + 1) as f32;
+    let mut scratch = vec![0.0f32; field.len()];
+    // Horizontal.
+    for row in 0..size {
+        let base = row * size;
+        let mut sum: f32 = 0.0;
+        for x in 0..=radius.min(size - 1) {
+            sum += field[base + x];
+        }
+        for x in 0..size {
+            scratch[base + x] = sum / window;
+            let leaving = x as isize - radius as isize;
+            if leaving >= 0 {
+                sum -= field[base + leaving as usize];
+            }
+            let arriving = x + radius + 1;
+            if arriving < size {
+                sum += field[base + arriving];
+            }
+        }
+    }
+    // And vertical.
+    for column in 0..size {
+        let mut sum: f32 = 0.0;
+        for z in 0..=radius.min(size - 1) {
+            sum += scratch[z * size + column];
+        }
+        for z in 0..size {
+            field[z * size + column] = sum / window;
+            let leaving = z as isize - radius as isize;
+            if leaving >= 0 {
+                sum -= scratch[leaving as usize * size + column];
+            }
+            let arriving = z + radius + 1;
+            if arriving < size {
+                sum += scratch[arriving * size + column];
+            }
+        }
+    }
+}
+
 /// What is between the streets when the streets are not carved out of asphalt.
 ///
 /// Only a town read off a map needs this. The generator's ground is the road
@@ -438,13 +680,91 @@ fn landscape(library: &material::MaterialLibrary, images: &mut Assets<Image>) ->
         ..default()
     };
     match library.get(material::set::GRASS) {
-        Some(scanned) => scanned.apply(&mut lawn),
+        Some(scanned) => {
+            scanned.apply(&mut lawn);
+            // The tint is not optional, and this is the surface that proved
+            // it. `apply` leaves `base_color` white, so for as long as this
+            // line was missing the largest surface in the game was drawn at a
+            // daylit photograph's own albedo — two and a half times too bright
+            // and five times too saturated. The town read as buildings
+            // standing in a field of poster paint, which is exactly the
+            // complaint the flat roofs raised once already; see
+            // `ground::TURF_TINT`.
+            lawn.base_color = ground::TURF_TINT;
+        }
         None => {
-            lawn.base_color = Color::srgb(0.29, 0.43, 0.24);
+            lawn.base_color = ground::TURF_PAINT;
             lawn.base_color_texture = Some(images.add(texture::grass()));
         }
     }
     lawn
+}
+
+/// The gravel a yard behind a gap in the frontage is laid with.
+///
+/// The roof set doing duty as grit, the same way the gravelled carriageways
+/// use it — a chipping is a chipping, and the alternative was a twelfth
+/// download for a surface that is only ever seen at a glancing angle. Darker
+/// than the road version, because a yard nobody sweeps is darker than a lane
+/// somebody drives on.
+fn forecourt(library: &material::MaterialLibrary, images: &mut Assets<Image>) -> StandardMaterial {
+    let mut grit = StandardMaterial {
+        perceptual_roughness: 0.96,
+        ..default()
+    };
+    match library.get(material::set::ROOF) {
+        Some(scanned) => {
+            scanned.apply(&mut grit);
+            // Darker than the gravelled *carriageway* built from the same
+            // set. A lane somebody drives on is swept by its own traffic; a
+            // yard behind a gap in a terrace is not, and the first pass at
+            // this read as a pale concrete slab dropped on the ground rather
+            // than as part of it.
+            // `Gravel023` measures a mean linear albedo of 0.70 — it is
+            // white chippings photographed in the sun, the brightest scan in
+            // the library by a factor of three — so this has to come down a
+            // long way before a yard stops reading as a drift of snow —
+            // measured off the render, one tint down from here still came back
+            // at one and six tenths of the carriageway beside it. This lands
+            // at about one and a fifth, which is where a gravel yard belongs:
+            // paler than the tarmac, darker than the pavement slabs.
+            grit.base_color = Color::srgb(0.295, 0.272, 0.232);
+        }
+        None => {
+            grit.base_color = Color::srgb(0.29, 0.275, 0.24);
+            grit.base_color_texture = Some(images.add(texture::roof()));
+            grit.normal_map_texture = Some(images.add(texture::roof_normal()));
+        }
+    }
+    grit
+}
+
+/// And what a boundary wall across that gap is built of.
+///
+/// Rough concrete rather than the pavement's slabs: a garden wall and a
+/// footway made of one material is the tell that neither was chosen, and the
+/// rough set is the only one in the library that reads as blockwork somebody
+/// rendered themselves.
+fn boundary_wall(
+    library: &material::MaterialLibrary,
+    images: &mut Assets<Image>,
+) -> StandardMaterial {
+    let mut wall = StandardMaterial {
+        perceptual_roughness: 0.94,
+        ..default()
+    };
+    match library.get(material::set::CONCRETE_ROUGH) {
+        Some(scanned) => {
+            scanned.apply(&mut wall);
+            wall.base_color = Color::srgb(0.55, 0.53, 0.50);
+        }
+        None => {
+            wall.base_color = Color::srgb(0.46, 0.45, 0.42);
+            wall.base_color_texture = Some(images.add(texture::paving()));
+            wall.normal_map_texture = Some(images.add(texture::paving_normal()));
+        }
+    }
+    wall
 }
 
 /// Metres of street one repeat of each paving covers.
@@ -454,7 +774,7 @@ fn landscape(library: &material::MaterialLibrary, images: &mut Assets<Image>) ->
 /// they have to avoid is reading as a pattern, and the repeat is what does that.
 const SETT_TILE: f32 = 1.35;
 const SLAB_TILE: f32 = 1.6;
-const GRIT_TILE: f32 = 2.1;
+pub(crate) const GRIT_TILE: f32 = 2.1;
 
 /// The carriageway material for one kind of surface, and how much asphalt
 /// ageing it takes.
@@ -471,25 +791,37 @@ fn carriageway(
 ) -> road::RoadMaterial {
     use atlas::Surface;
 
-    // Set, tile, tint, how much asphalt ageing it takes, and how coarse its
-    // relief is.
-    let (set, tile, tint, wear, relief) = match surface {
+    // Set, tile, tint, how much asphalt ageing it takes, how coarse its relief
+    // is, and how deep its deepest joint really is in metres — see
+    // `ScannedSet::deepen`. Zero there means no parallax at all, which is not
+    // an omission: it is a fetch budget spent where there is something to find.
+    let (set, tile, tint, wear, relief, joint) = match surface {
         // Tarmac is the one surface the ageing in `road.wgsl` describes: it is
         // poured, so it is patched and it cracks. It is also the finest, which
-        // is why its relief is the one that has to lie down at a grazing angle.
+        // is why its relief is the one that has to lie down at a grazing angle
+        // — and why it is the one surface here with no parallax. Its relief is
+        // a few millimetres of chipping, which is under a pixel at any range
+        // you can see the road from, and it covers more of the screen than
+        // everything else in this match put together.
         Surface::Asphalt => (
             material::set::ROAD,
             ASPHALT_TILE,
             Color::srgb(0.50, 0.50, 0.52),
             1.0,
             0.0,
+            0.0,
         ),
+        // A sett is a rounded granite block with a three-centimetre sand joint
+        // around it, and it is the surface a player stands closest to in the
+        // whole Altstadt. This is the case parallax was worth loading the
+        // height maps for.
         Surface::Sett => (
             material::set::SETT,
             SETT_TILE,
             Color::srgb(0.62, 0.61, 0.60),
             0.0,
             1.0,
+            0.030,
         ),
         Surface::Slabs => (
             material::set::PAVEMENT,
@@ -497,6 +829,7 @@ fn carriageway(
             Color::srgb(0.66, 0.65, 0.63),
             0.0,
             0.65,
+            0.016,
         ),
         Surface::Gravel => (
             material::set::ROOF,
@@ -504,6 +837,7 @@ fn carriageway(
             Color::srgb(0.55, 0.51, 0.45),
             0.0,
             0.45,
+            0.020,
         ),
     };
 
@@ -514,6 +848,9 @@ fn carriageway(
     match library.get(set) {
         Some(scanned) => {
             scanned.apply(&mut base);
+            if joint > 0.0 {
+                scanned.deepen(&mut base, joint, tile);
+            }
             base.base_color = tint;
         }
         None => {

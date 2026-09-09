@@ -69,11 +69,23 @@ const DECK: f32 = 1_150.0;
 const WIND: f32 = 34.0;
 
 /// The lit side of cloud at the top of the day, in cd/m².
-const SUNLIT_NITS: f32 = 19_000.0;
+///
+/// Nineteen thousand was the low end of the plausible range and it left the
+/// brightest surface in a cloudy frame at 0.48 of the camera's white point —
+/// so the one thing in the whole picture that a photographer would expect to be
+/// clipping came out as light grey, and the frame had no white in it anywhere.
+/// A sunlit cumulus top really is thirty to fifty thousand candela per square
+/// metre; at forty-two thousand it lands just over the white point at the noon
+/// aperture, which is a cloud that blows out where the sun is straight on it and
+/// holds detail everywhere else — and, being over `render::BLOOM_THRESHOLD`, is
+/// finally something for the bloom pass to find in daylight.
+const SUNLIT_NITS: f32 = 42_000.0;
 /// And the same cloud's own shadow. A quarter, roughly — cloud is a very
 /// efficient scatterer, so its shaded side is much brighter relative to its lit
-/// side than any solid object's is.
-const SHADE_NITS: f32 = 5_200.0;
+/// side than any solid object's is. Raised with the lit side and by less than
+/// it, so the deck gains contrast rather than merely gaining brightness: the
+/// ratio was 3.65 and is now 4.7.
+const SHADE_NITS: f32 = 9_000.0;
 /// What an overcast holds over a city after dark, lit from below by the city.
 ///
 /// Small in absolute terms and not small at all once the aperture has opened
@@ -487,6 +499,26 @@ mod tests {
             clear.length() > 0.0,
             "even a clear night has some sky in it"
         );
+    }
+
+    /// The one thing a sunlit frame in this game never had: something over the
+    /// white point. Cloud is the brightest surface in any frame that has some,
+    /// and it is one of the few things here quoted in honest radiance — the sky
+    /// shader multiplies by `view.exposure` by hand — so the check is arithmetic
+    /// rather than a screenshot. Under the old 19,000 the brightest thing in a
+    /// cloudy noon landed at 0.48 and there was no white anywhere in the image.
+    #[test]
+    fn a_sunlit_cloud_clips_at_the_noon_aperture() {
+        use crate::render::{BLOOM_THRESHOLD, DAY_EV100, exposure};
+
+        let (lit, shade) = tint(12.0, 0.4);
+        let brightest = lit.x * exposure(DAY_EV100);
+        assert!(
+            brightest > BLOOM_THRESHOLD,
+            "the brightest cloud in the sky reads {brightest} against a white point of 1.0"
+        );
+        // And its own shadow does not, or the deck is one flat white sheet.
+        assert!(shade.x * exposure(DAY_EV100) < 0.5);
     }
 
     /// Noon is the brightest cloud there is, and dusk is warmer than noon.

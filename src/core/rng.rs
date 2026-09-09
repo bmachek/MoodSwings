@@ -109,6 +109,13 @@ pub mod stream {
     pub const BUSKERS: u64 = 29;
     /// Which streets have a van stopped on them and who is unloading it.
     pub const DELIVERIES: u64 = 30;
+    /// What fills the ground a real town's frontage left open: the forecourt
+    /// across a gap in a terrace and the wall or hedge along the back of the
+    /// pavement. Its own stream and not `BUILDINGS`, for the reason at the top
+    /// of this file made concrete — the gaps are decided *inside* the marcher's
+    /// walk down each street, so a draw taken from the same stream would shift
+    /// every frontage after it and rebuild the whole town from the same seed.
+    pub const YARDS: u64 = 31;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

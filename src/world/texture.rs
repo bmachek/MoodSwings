@@ -29,9 +29,22 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 /// Facades are the only textures read close up and at a glancing angle.
-const FACADE_SIZE: u32 = 512;
+///
+/// One of these covers a whole building face, and that is the whole problem
+/// with it: on a twenty-metre Lowrise, 512 was 26 texels per metre. What comes
+/// out of these maps is not the material — the scanned grain in
+/// `world::facade` covers that — but the *features*: the window frame, the
+/// sill, the fascia board's bottom edge, the floor line. At 26 texels per metre
+/// every one of those edges is a two-pixel gradient at three metres, and a
+/// building made of soft edges is most of the "not sharp" impression the whole
+/// facade stack was accused of. 1024 is four times the paint cost at startup —
+/// which does not show: a whole capture run, city generation included, measured
+/// 8.9 s before and 8.6 s after, so it is inside the noise — and about 22 MB of
+/// VRAM with mips. It is the cheapest sharpening available anywhere in this
+/// renderer.
+const FACADE_SIZE: u32 = 1024;
 /// Emissive and roughness maps only ever modulate the base, so half is plenty.
-const MASK_SIZE: u32 = 256;
+const MASK_SIZE: u32 = 512;
 const GROUND_SIZE: u32 = 256;
 
 // ----------------------------------------------------------------- font ----
@@ -354,7 +367,17 @@ pub fn painted_rect(
         mipmap_filter: ImageFilterMode::Linear,
         // The road is seen almost edge-on almost all the time, which is exactly
         // the case trilinear filtering blurs into mud.
-        anisotropy_clamp: 8,
+        //
+        // Sixteen rather than the eight this used to say, and the argument for
+        // eight was never written down — it was probably caution about a
+        // setting that costs fill rate. The surfaces painted here are the road,
+        // the paving, the setts and the roof tiles, which are precisely the
+        // four read most edge-on in the game, and the scanned sets they stand
+        // in for have asked for sixteen (`material::tiling_sampler`) since they
+        // arrived. Half the anisotropy on the *fallback* path meant a clone
+        // without the downloads got a blurrier road than one with it, for a
+        // reason nobody had measured.
+        anisotropy_clamp: 16,
         ..default()
     });
     image
@@ -380,6 +403,92 @@ pub fn normal_map(size: u32, relief: f32, height: impl Fn(f32, f32) -> f32) -> I
             byte(normal.y * 0.5 + 0.5),
             byte(normal.z * 0.5 + 0.5),
             255,
+        ]
+    })
+}
+
+// ---------------------------------------------------------------- detail ----
+
+/// Metres of surface covered by one repeat of the detail map.
+///
+/// Every other texture in this file is sized to the thing it depicts — a sett
+/// is fifteen centimetres because a sett *is* fifteen centimetres. This one is
+/// sized to what a pixel can still resolve when the camera is half a metre from
+/// a wall, which is the range at which every one of the others runs out. The
+/// densest surface in the game before this was the setts at 379 texels per
+/// metre and the wall grain at 930; a 512-pixel square over thirty centimetres
+/// is 1700, which is enough that a wall at arm's length still has something in
+/// it.
+///
+/// It cannot be much finer than this and stay useful. The mip chain is what
+/// eventually removes a detail layer, and it removes it at the distance where
+/// one texel is one pixel: at 0.24 m that was inside two metres, which is
+/// nearer than a player usually stands to a wall. Thirty centimetres holds it
+/// to about three, which is the range the complaint was actually about.
+pub const DETAIL_TILE: f32 = 0.30;
+
+/// Resolution of that map. One image, shared by every surface that wants it, so
+/// there is no reason to be mean with it: 512² with its mip chain is 1.4 MB for
+/// the whole city.
+const DETAIL_SIZE: u32 = 512;
+
+/// How tall the detail relief is as a fraction of its own tile.
+///
+/// Read in metres that is seven millimetres, which is a chip out of a render
+/// rather than a pore in it — deliberately, and it is the one number here that
+/// is not physical. What this layer is for is the last two metres, where the
+/// eye is asking a question no map in the game has enough texels to answer, and
+/// a relief tuned to the true depth of a pore answers it with nothing. The
+/// shader carries the other half of the restraint: it fades the layer out over
+/// four metres, so nothing beyond conversational distance is affected by a
+/// number chosen for how it reads rather than for what it measures.
+const DETAIL_RELIEF: f32 = 0.030;
+
+/// Pores, grit and hairline scratches — the field the detail map is built from.
+///
+/// Three frequencies and nothing else. There is no point drawing anything
+/// *recognisable* at this scale: what the eye wants within a metre is not a
+/// feature it can name, it is the absence of a flat surface. All three wrap on
+/// the lattice, so one repeat every twenty-four centimetres across a whole
+/// facade does not show a seam.
+fn detail_height(u: f32, v: f32) -> f32 {
+    // The pores: what a rendered or cast surface is made of up close.
+    let pore = fbm(u, v, 96, 3, 0x4F27);
+    // A finer speckle over them, near the texel, which is what survives the
+    // fade-in as grain rather than as shape.
+    let grit = fbm(u, v, 224, 2, 0x91A3);
+    // And scratches: a ridge field cut off hard, the same trick
+    // `asphalt_height` uses for cracks and for the same reason — a soft
+    // threshold gives valleys, not scratches.
+    let scratch = ridge(u, v, 40, 2, 0x3C55);
+
+    let mut height = 0.5 + (pore - 0.5) * 0.62 + (grit - 0.5) * 0.30;
+    if scratch > 0.972 {
+        height -= ((scratch - 0.972) * 11.0).min(0.30);
+    }
+    height.clamp(0.0, 1.0)
+}
+
+/// The shared micro-detail map: a normal in RGB, and its own height in alpha.
+///
+/// Packed into one image rather than two because both are wanted by the same
+/// fragment at the same UV, and a second fetch for one channel is the sort of
+/// thing that turns a cheap effect into a measurable one. The alpha is the
+/// height itself, pulled in towards a half so it can be used as a multiplier on
+/// albedo: a pore is darker than the surface around it, which is the other half
+/// of why a close-up surface reads as a material rather than as a colour.
+pub fn detail() -> Image {
+    let step = 1.0 / DETAIL_SIZE as f32;
+    let scale = DETAIL_RELIEF * DETAIL_SIZE as f32 * 0.5;
+    painted(DETAIL_SIZE, TextureFormat::Rgba8Unorm, |u, v| {
+        let dx = detail_height(u + step, v) - detail_height(u - step, v);
+        let dy = detail_height(u, v + step) - detail_height(u, v - step);
+        let normal = Vec3::new(-dx * scale, -dy * scale, 1.0).normalize();
+        [
+            byte(normal.x * 0.5 + 0.5),
+            byte(normal.y * 0.5 + 0.5),
+            byte(normal.z * 0.5 + 0.5),
+            byte(0.5 + (detail_height(u, v) - 0.5) * 0.9),
         ]
     })
 }
@@ -794,6 +903,20 @@ const TILES: f32 = 6.0;
 /// How much of a course's height the rounded tail takes up.
 const TAIL: f32 = 0.36;
 
+/// Resolution the clay tiles are painted at.
+///
+/// Four times the other ground textures, for the same argument [`SETT_SIZE`]
+/// records and a stronger version of it. One repeat carries `COURSES` × `TILES`
+/// = fifty-four tiles, and the material then tiles that several times over a
+/// single roof leaf: at 256 a tile was twenty-eight texels tall by forty
+/// across, which is not enough to hold the rounded tail, the lap line and the
+/// joint groove at once — and the per-tile `fired` colour, which the comment in
+/// [`tiles`] says is the whole reason a clay roof reads as clay, was averaging
+/// out by the second mip level. A roof is also not an incidental surface here:
+/// in any framing of the old town from a hillside or a window it is most of
+/// what is on screen.
+const TILE_SIZE: u32 = 1024;
+
 fn tile_at(u: f32, v: f32) -> Tile {
     let course = (u * COURSES).floor();
     // Every other course is set half a tile over — the bond that stops the
@@ -837,7 +960,7 @@ fn tile_height(u: f32, v: f32) -> f32 {
 
 /// Clay tiles, for the pitched roofs.
 pub fn tiles() -> Image {
-    painted(GROUND_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
+    painted(TILE_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
         let tile = tile_at(u, v);
         // One value per *tile*, not per texel. This is what a clay roof
         // actually looks like from the far pavement: the courses are a
@@ -869,8 +992,43 @@ pub fn tiles() -> Image {
     })
 }
 
+/// The roof's occlusion in red and its roughness in green, off the same height
+/// field as its colour and its relief.
+///
+/// One image doing two jobs, and that is not a saving of memory so much as of
+/// bindings: `StandardMaterial` reads occlusion out of the red channel of one
+/// slot and roughness out of the green channel of another, so the same picture
+/// can be handed to both and each takes the channel it wants. Blue is metalness
+/// and is left at zero, which is what clay is.
+///
+/// Why a roof needs either. It was a flat 0.93 everywhere, which is wrong at
+/// both ends: the exposed face of a fired tile is a glazed-ish 0.78 and catches
+/// a long low highlight down a whole course at the hour the sun is on it, while
+/// the shadow under a lap and the moss in a joint are as matte as anything on
+/// the building. And with no occlusion map at all, the groove between two tiles
+/// was lit exactly as brightly as the crown of the tile beside it — so what a
+/// roof had, from any distance where the normal map's relief had mipped away,
+/// was one orange value. From above, which is how an old town is most often
+/// looked at, that is most of the picture.
+pub fn tiles_surface() -> Image {
+    painted(TILE_SIZE, TextureFormat::Rgba8Unorm, |u, v| {
+        let height = tile_height(u, v);
+        let sunk = 1.0 - height;
+        [
+            // Ambient occlusion: the lap shadow and the joint groove. Not to
+            // zero — this is a *contact* term, and a tile's joint is a
+            // centimetre deep, not a cave.
+            byte(1.0 - sunk * 0.55),
+            // Roughness. Matte where the water sits and the moss grows.
+            byte(0.97 - height * 0.19),
+            0,
+            255,
+        ]
+    })
+}
+
 pub fn tiles_normal() -> Image {
-    normal_map(GROUND_SIZE, 0.038, tile_height)
+    normal_map(TILE_SIZE, 0.038, tile_height)
 }
 
 // --------------------------------------------------------------- facades ----

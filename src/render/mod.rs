@@ -16,7 +16,7 @@
 //!   look right at noon and then fudged for night.
 //! * **Bloom**, which is what makes an emissive surface read as *emitting*
 //!   rather than merely being bright. Every lit window in the city depends on
-//!   it.
+//!   it — and it only does that job above a threshold. See [`BLOOM_THRESHOLD`].
 //! * **Shadows that reach the whole city**, and a short screen-space contact
 //!   term underneath everything standing on the ground. See [`shadows`].
 //! * **Ambient occlusion and temporal anti-aliasing**, together. SSAO is what
@@ -43,6 +43,7 @@ pub mod quality;
 pub mod shadows;
 pub mod volumetrics;
 
+use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::prepass::{DeferredPrepass, DepthPrepass, MotionVectorPrepass};
@@ -54,7 +55,7 @@ use bevy::pbr::{
     DefaultOpaqueRendererMethod, ScreenSpaceAmbientOcclusion,
     ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections,
 };
-use bevy::post_process::bloom::Bloom;
+use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
 
@@ -67,17 +68,66 @@ use quality::{AoQuality, Capabilities, GraphicsSettings, QualityPreset, Upscalin
 
 /// Aperture the world is metered for at noon. EV100 15 is the sunny-16 rule:
 /// what a camera would be set to standing in this street in full daylight.
-const DAY_EV100: f32 = 15.0;
+pub(crate) const DAY_EV100: f32 = 15.0;
 /// And what it opens up to after dark. Five stops is roughly the range a pair
 /// of eyes covers walking out of a lit room, and without it a physically-lit
 /// night is not moody, it is simply black.
-const NIGHT_EV100: f32 = 9.7;
+pub(crate) const NIGHT_EV100: f32 = 9.7;
 
 /// The city is two kilometres across, not thirty-two. Pulling the aerial
 /// perspective range in spends the same thirty-two depth slices over the
 /// distances that actually exist, so haze resolves across a street rather than
 /// across a mountain range.
-const AERIAL_RANGE: f32 = 3_000.0;
+///
+/// Pulled in again, from three kilometres, for the same reason it was pulled in
+/// the first time. The slices are distributed linearly to this distance, and a
+/// third of them were being spent past the far edge of anything the streamer
+/// ever spawns — so the band the town actually lives in, two hundred to five
+/// hundred metres, was resolved by about five of them.
+const AERIAL_RANGE: f32 = 2_000.0;
+
+/// Where bloom starts, in post-exposure linear units.
+///
+/// One is exactly "brighter than the white the camera is metered for", which is
+/// the only threshold with a meaning rather than a taste behind it: a sunlit
+/// diffuse wall at albedo 0.7 lands at about 0.6 and is left alone, while a
+/// specular glint, a lit window and a lamp envelope are not.
+///
+/// It used to be zero, with `Bloom::NATURAL`'s energy-conserving composite —
+/// which is `mix(frame, blur_of_the_whole_frame, intensity)`, i.e. nine percent
+/// of every pixel replaced by a blur of its neighbourhood. That is veiling
+/// glare, not bloom: it lifts the blacks towards the local mean and pulls the
+/// highlights down, and it was doing that unconditionally to every frame in the
+/// game while the doc comment above claimed it was what made an emitter read as
+/// emitting. With no threshold there is no separation between an emitter and a
+/// wall, so there was nothing for it to separate.
+pub(crate) const BLOOM_THRESHOLD: f32 = 1.0;
+
+/// How wide the knee under [`BLOOM_THRESHOLD`] is.
+///
+/// A hard threshold pops: a surface drifting across it — a car roof turning
+/// under the sun — switches its halo on between two frames. The knee is the
+/// fraction of the threshold over which the contribution ramps instead.
+const BLOOM_KNEE: f32 = 0.4;
+
+/// What one candela per square metre comes out as, after a camera set to
+/// `ev100` has divided it down.
+///
+/// Bevy's own `Exposure::exposure()`, spelled out here so the modules that quote
+/// a radiance in nits can check their numbers against [`BLOOM_THRESHOLD`] in a
+/// unit test rather than against an afternoon of screenshots. `world::sky`'s
+/// cloud deck is the one that does: its shader multiplies by `view.exposure` by
+/// hand, so its constants really are radiances.
+///
+/// Note which things are *not* on this scale. Because this renderer is deferred
+/// at every tier, `emissive` is not: the g-buffer packs the emissive rgb and
+/// unpacks it with an alpha of zero, and Bevy only applies the exposure to
+/// emissive in proportion to that alpha. So `timeofday::WINDOW_GLOW` and
+/// `streetlights::LAMP_ENVELOPE` are multiples of the white point, and reading
+/// them as nits and "correcting" them accordingly sets the city on fire.
+pub(crate) fn exposure(ev100: f32) -> f32 {
+    1.0 / (2.0f32.powf(ev100) * 1.2)
+}
 
 /// Marks a camera that has been fitted out, so the base stack is inserted once
 /// rather than every frame. The quality-dependent parts are re-synced on every
@@ -268,9 +318,31 @@ fn attach_camera_stack(
             // out to have a shadow end worth banding.
             DebandDither::Enabled,
             Bloom {
-                // Well under the default. The city has thousands of lit windows
-                // and a bloom tuned for one neon sign turns them into a haze.
-                intensity: 0.09,
+                // Additive, and that is not a taste — Bevy's own note on
+                // `BloomPrefilter` says a non-energy-conserving prefilter must
+                // be composited additively, because energy conservation is a
+                // *mix* and mixing towards a buffer that is black everywhere
+                // except the highlights would darken everything else by the
+                // intensity. Threshold and composite mode are one decision.
+                prefilter: BloomPrefilter {
+                    threshold: BLOOM_THRESHOLD,
+                    threshold_softness: BLOOM_KNEE,
+                },
+                composite_mode: BloomCompositeMode::Additive,
+                // It means something different from the 0.09 it replaces: that
+                // was a share of *every* pixel, this is how much of the light
+                // above white is scattered back over the frame. Bevy's own
+                // additive preset uses 0.05 at a lower threshold; a city with
+                // thousands of lit windows in it needs less than a scene with
+                // one neon sign, and 0.16 is where a lamp gets a halo and a
+                // street of windows does not turn into fog.
+                intensity: 0.16,
+                // And a tighter scatter than `NATURAL`'s 0.7. In additive mode
+                // the low-frequency boost is what decides how much of the
+                // *widest* mip is added, which is to say how far the glow
+                // spreads — and a wide glow around a hundred lit windows is
+                // indistinguishable from the veil this change exists to remove.
+                low_frequency_boost: 0.35,
                 ..Bloom::NATURAL
             },
             AtmosphereSettings {
@@ -338,7 +410,13 @@ fn sync_camera_stack(
             Some(quality) => {
                 camera.insert(ScreenSpaceAmbientOcclusion {
                     quality_level: ao_quality(quality),
-                    ..default()
+                    // The default is 0.25 m, which is a thickness for props on
+                    // a desk. Everything this city is made of — a kerb, a car,
+                    // a lamp column, a wall — is thicker than that, and an
+                    // occluder assumed thinner than it is lets rays past it
+                    // that should have been stopped, so corners come out
+                    // under-occluded.
+                    constant_object_thickness: 0.6,
                 });
             }
             None => {
@@ -347,15 +425,43 @@ fn sync_camera_stack(
         }
 
         match settings.upscaling {
-            Upscaling::Taa => {
+            // DLSS would own the jitter and the history itself, so TAA would
+            // have to come off before it went on — and for a long time this arm
+            // took TAA off and put nothing on in its place, on a promise that
+            // the DLSS component would be attached "in the raytracing pass once
+            // that lands". It never landed. Meanwhile `shadows` selects the
+            // temporal shadow filter for Dlss and `volumetrics` jitters the
+            // raymarch for it, both of which are only correct because something
+            // resolves the variation afterwards, so the tier came out as a
+            // frame full of crawling noise with no anti-aliasing over it.
+            //
+            // `GraphicsSettings::downgrade` rewrites Dlss to Taa on the way in,
+            // which covers a save file; this covers the dev panel, which writes
+            // the setting directly and does not pass through the downgrade.
+            Upscaling::Taa | Upscaling::Dlss => {
                 camera.insert(TemporalAntiAliasing::default());
             }
-            // DLSS owns the jitter and the history itself, so TAA has to come
-            // off before it goes on; the DLSS component is attached in the
-            // raytracing pass once that lands.
-            Upscaling::Dlss | Upscaling::Off => {
+            Upscaling::Off => {
                 camera.remove::<TemporalAntiAliasing>();
             }
+        }
+
+        // Every temporal resolve is a blur: TAA accumulates a jittered history
+        // and hands back an image softer than the one it was given. Every
+        // renderer that ships TAA follows it with a sharpen, and this one never
+        // did — which is most of why a kerb line and a road marking read mushy
+        // at 1600x900. Contrast-adaptive rather than unsharp-masking, so it
+        // leaves the flat wall alone and puts the edge back.
+        if settings.sharpening > 0.0 {
+            camera.insert(ContrastAdaptiveSharpening {
+                enabled: true,
+                sharpening_strength: settings.sharpening,
+                // Bevy's own advice, and it is right: film grain and the like
+                // belong after the sharpen, not inside it.
+                denoise: false,
+            });
+        } else {
+            camera.remove::<ContrastAdaptiveSharpening>();
         }
 
         if settings.ssr {

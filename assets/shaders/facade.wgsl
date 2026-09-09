@@ -31,6 +31,7 @@
     pbr_functions::calculate_view,
     pbr_fragment::pbr_input_from_standard_material,
     mesh_view_bindings::view,
+    mesh_functions::get_world_from_local,
 }
 
 #ifdef PREPASS_PIPELINE
@@ -73,35 +74,102 @@ struct FacadeSettings {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> settings: FacadeSettings;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var grain_color: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var grain_color_sampler: sampler;
+// The one sampler all five maps are read through. Metal allows sixteen in a
+// fragment stage and `StandardMaterial` has already spent most of them: one
+// each here took the pipeline to seventeen and it stopped being created.
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var grain_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var grain_normal: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var grain_normal_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(105) var grain_rough: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var grain_occlusion: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var detail_map: texture_2d<f32>;
+
+// Metres of wall covered by one repeat of the detail map. Must agree with
+// `world::texture::DETAIL_TILE`, which is where it is documented and where the
+// image is painted; there is no uniform for it because it never varies.
+const DETAIL_TILE: f32 = 0.30;
+// Metres over which the detail layer fades out. Beyond this it is not merely
+// weak, it is not fetched — the whole argument for a detail layer is that it
+// costs nothing where it would not be visible.
+const DETAIL_FADE: f32 = 5.0;
+// How far its normal is allowed to tilt the surface, and how far its own height
+// is allowed to darken the albedo.
+const DETAIL_TILT: f32 = 0.85;
+const DETAIL_SHADE: f32 = 0.22;
+
+// How far a building's own colour is allowed to wander from its palette slot,
+// in value and in the red/blue balance.
+const HOUSE_VALUE: f32 = 0.075;
+const HOUSE_CAST: f32 = 0.035;
 
 // Lays the scanned grain over a facade's own painted surface.
 //
 // Takes and returns the whole `PbrInput` rather than writing through a pointer,
 // so the forward and deferred branches below are each one line and there is no
 // second copy of any of this to fall out of step.
-fn dress(input: PbrInput) -> PbrInput {
+//
+// `axes` and `face_uv` are the wall's own frame, recovered by `face_axes` in
+// the fragment; `instance_index` identifies the building this fragment belongs
+// to. Both are passed down rather than recomputed because both are already in
+// hand up there — see the fragment for why they have to be taken off the
+// *unparallaxed* derivatives.
+fn dress(input: PbrInput, axes: Face, face_uv: vec2<f32>, instance_index: u32) -> PbrInput {
     var pbr_input = input;
 
-    // Every wall in this city stands on the street grid, so the dominant axis
-    // of the normal *is* the plane the wall lies in. That makes the usual
-    // triplanar blend unnecessary: there is no diagonal face for its seams to
-    // appear on, and picking one projection outright costs two texture fetches
-    // instead of six.
+    // Which plane the grain is projected in.
+    //
+    // This used to pick a world axis — zy for a wall facing mostly along x, xy
+    // for one facing mostly along z — on the argument that every wall in this
+    // city stands on the street grid, so the dominant axis of the normal *is*
+    // the plane the wall lies in. `world::streetside` falsified that on
+    // purpose: on a town read off a map, every plot is placed square to its own
+    // street and therefore at an arbitrary angle to every other one. A wall at
+    // 45 degrees advances only 0.707 metres of projected coordinate per metre
+    // of actual wall, so its brick courses came out at the right height and
+    // 41% too far apart — smoothly, without a seam anywhere, which is why it
+    // never read as a bug and only ever as "something is wrong with Landshut".
+    //
+    // So a vertical face uses its own tangent frame instead. `face_axes` has
+    // already recovered how many metres one unit of facade UV measures, so
+    // `face_uv.x * length(axes.u)` is exactly metres across the wall, at any
+    // orientation, for no extra work. The vertical coordinate stays world
+    // height rather than the face's own v: the grain has to line up with the
+    // ground the building stands on, and `weather_it` below reads `plane.y` as
+    // the height rain has run down from.
+    //
+    // A roof keeps the world xz projection — it genuinely is a horizontal
+    // plane, and its own UV runs whichever way the mesh was built. And a
+    // degenerate `axes` (a face exactly edge-on, or a mesh with no UVs at all)
+    // falls back to the old world-axis pick, which is wrong by up to 41% on a
+    // diagonal and is at least never zero.
     let facing = abs(pbr_input.world_normal);
+    let upright = facing.y <= max(facing.x, facing.z);
+    let measured = dot(axes.u, axes.u) > 1e-9;
     var plane: vec2<f32>;
     var tangent: vec3<f32>;
-    if facing.y > max(facing.x, facing.z) {
+    var bitangent: vec3<f32>;
+    if upright && measured {
+        plane = vec2(face_uv.x * length(axes.u), pbr_input.world_position.y);
+        tangent = normalize(axes.u);
+        // World up, projected into the wall. The grain's second axis is world
+        // height, so its relief has to be lit along world height too — the old
+        // `cross(normal, tangent)` gave a bitangent that pointed *down* on half
+        // the faces in the city, which mirrored the mortar shadows on every
+        // second wall.
+        bitangent = normalize(
+            vec3(0.0, 1.0, 0.0) - pbr_input.world_normal * pbr_input.world_normal.y,
+        );
+    } else if !upright {
         plane = pbr_input.world_position.xz;
         tangent = vec3(1.0, 0.0, 0.0);
+        bitangent = cross(pbr_input.world_normal, tangent);
     } else if facing.x > facing.z {
         plane = pbr_input.world_position.zy;
         tangent = vec3(0.0, 0.0, 1.0);
+        bitangent = cross(pbr_input.world_normal, tangent);
     } else {
         plane = pbr_input.world_position.xy;
         tangent = vec3(1.0, 0.0, 0.0);
+        bitangent = cross(pbr_input.world_normal, tangent);
     }
     // Turning the grain a quarter turn is enough to stop two walls cut from the
     // same photograph reading as the same wall — cheaper than a second scan,
@@ -115,13 +183,39 @@ fn dress(input: PbrInput) -> PbrInput {
     // is already a mask for "is this a window" — no extra channel needed.
     let wall = 1.0 - saturate(pbr_input.material.metallic * 2.0);
 
+    // A colour per *building*, not per palette slot.
+    //
+    // Six exact RGB values per district, shared by every building drawing that
+    // slot, is what makes a generated street read as a texture atlas: two
+    // houses in the same frame are the same yellow to the last decimal, which
+    // is a thing no real street contains. The wander below is deliberately
+    // small — this is not a second palette, it is the fact that two houses
+    // painted from the same tin were painted in different decades.
+    //
+    // Per building means per *instance*: the fragment's own position varies
+    // across a wall and the face key `glaze` uses varies from one face of a
+    // building to the next, so either would give one building several colours.
+    // The instance's model matrix is the one thing here that is constant over a
+    // whole building and different for the one beside it. Both of a building's
+    // level-of-detail shells carry the identical transform (see
+    // `buildings::spawn`), so nothing changes colour as it hands over.
+    let origin = get_world_from_local(instance_index)[3].xyz;
+    let house = origin.xz * 0.137;
+    let value = 1.0 + (hash21(house) - 0.5) * 2.0 * HOUSE_VALUE;
+    // `cast` would be the word for it and is a reserved one in WGSL.
+    let warmth = (hash21(house + 23.4) - 0.5) * 2.0 * HOUSE_CAST;
+    pbr_input.material.base_color = vec4(
+        pbr_input.material.base_color.rgb * value * vec3(1.0 + warmth, 1.0, 1.0 - warmth),
+        pbr_input.material.base_color.a,
+    );
+
     // Normalised against the *texture's* average, so what the photograph
     // contributes is its variation and not its grey — the district's colour has
     // to survive. The average comes free: the top of the mip chain is a one-
     // texel reduction of the whole image, so asking for an absurd level of
     // detail returns exactly it.
-    let grain = textureSample(grain_color, grain_color_sampler, uv).rgb;
-    let average = textureSampleLevel(grain_color, grain_color_sampler, uv, 24.0).rgb;
+    let grain = textureSample(grain_color, grain_sampler, uv).rgb;
+    let average = textureSampleLevel(grain_color, grain_sampler, uv, 24.0).rgb;
     let mean = max(dot(average, vec3(0.3333)), 0.001);
     let modulation = mix(vec3(1.0), grain / mean, settings.strength * wall);
     pbr_input.material.base_color = vec4(
@@ -129,15 +223,74 @@ fn dress(input: PbrInput) -> PbrInput {
         pbr_input.material.base_color.a,
     );
 
-    var packed = textureSample(grain_normal, grain_normal_sampler, uv).xyz * 2.0 - 1.0;
+    var packed = textureSample(grain_normal, grain_sampler, uv).xyz * 2.0 - 1.0;
     if settings.swap > 0.5 {
         // The relief has to turn with the colour, or the mortar shadows fall
         // across courses that are not there.
         packed = vec3(packed.y, packed.x, packed.z);
     }
-    let bitangent = cross(pbr_input.world_normal, tangent);
     let tilt = (tangent * packed.x + bitangent * packed.y) * settings.relief * wall;
     pbr_input.N = normalize(pbr_input.N + tilt);
+
+    // The other two maps in the set, which were downloaded with the colour and
+    // then never opened.
+    //
+    // This is what `material::DELIGHT` promised. It halves a scanned colour
+    // map's contrast, on the written argument that the relief the removed
+    // contrast stood for "is still there: it is in the normal map and the
+    // occlusion map, where the renderer can light it" — and for a wall the
+    // occlusion map was not bound at all, and the roughness map was replaced
+    // by the painted facade's flat 0.88. So every wall in the city had one
+    // gloss: the mortar joint as polished as the brick, the patch as polished
+    // as the render. Roughness variation and contact occlusion are the two
+    // loudest cues that a surface is a material rather than a colour, and both
+    // were sitting on disk.
+    //
+    // Gated by `settings.strength` for the same reason as the colour: with no
+    // download there is no set, an unbound texture reads white, and white is a
+    // fully rough, fully unoccluded wall rather than a no-op. `for_district`
+    // zeroes the strength in that case.
+    let scanned = settings.strength * wall;
+    let rough = textureSample(grain_rough, grain_sampler, uv).g;
+    pbr_input.material.perceptual_roughness =
+        mix(pbr_input.material.perceptual_roughness, rough, scanned);
+    // Diffuse only. `specular_occlusion` does not survive the deferred path —
+    // the g-buffer packs the diffuse term monochrome and drops the other — so
+    // spending a fetch on it would buy a difference between the two pipelines
+    // and nothing else.
+    let occlusion = textureSample(grain_occlusion, grain_sampler, uv).r;
+    pbr_input.diffuse_occlusion *= vec3(mix(1.0, occlusion, scanned));
+
+    // And the last two metres.
+    //
+    // The wall grain is the densest map in the game at about 930 texels per
+    // metre, which means a fragment thirty centimetres from a wall is
+    // magnifying it nine times: every surface inside arm's reach is a smear of
+    // whatever the mip chain had. A detail layer is the standard answer and it
+    // is cheap, because it is only ever fetched where it can be seen — the
+    // gradients are taken up here in uniform control flow so the fetch itself
+    // can sit inside the distance test.
+    let detail_uv = plane / DETAIL_TILE;
+    let ddx = dpdx(detail_uv);
+    let ddy = dpdy(detail_uv);
+    let near = saturate(1.0 - distance(view.world_position, pbr_input.world_position.xyz)
+        / DETAIL_FADE);
+    if near > 0.004 {
+        let fine = textureSampleGrad(detail_map, grain_sampler, detail_uv, ddx, ddy);
+        let micro = fine.xy * 2.0 - 1.0;
+        pbr_input.N = normalize(
+            pbr_input.N
+                + (tangent * micro.x + bitangent * micro.y) * near * DETAIL_TILT * wall,
+        );
+        // The height in alpha, used as a multiplier: a pore is darker than the
+        // face around it, and half of what says "material" up close is that the
+        // shading and the colour agree about where the holes are.
+        let shade = 1.0 + (fine.a - 0.5) * 2.0 * DETAIL_SHADE * near * wall;
+        pbr_input.material.base_color = vec4(
+            pbr_input.material.base_color.rgb * shade,
+            pbr_input.material.base_color.a,
+        );
+    }
 
     return weather_it(pbr_input, plane, mean, wall, facing);
 }
@@ -195,16 +348,17 @@ fn weather_it(
     // near enough the same shape at this scale that the other two are two more
     // fetches for nothing, and taking one keeps the wander achromatic — a
     // district's colour is decided elsewhere and this must not tint it.
-    let broad = textureSample(grain_color, grain_color_sampler, plane / MACRO_TILE).g;
+    let broad = textureSample(grain_color, grain_sampler, plane / MACRO_TILE).g;
     let wander = 1.0 + (broad / mean - 1.0) * MACRO * mask;
 
     // Rain runs down. `plane.y` is world height on any wall — the projection
-    // above picks the zy or xy plane for a vertical face — so stretching the
-    // sample along it smears the grain into vertical runs, which is the shape
-    // dirt on a building actually has.
+    // above keeps the vertical coordinate as world height whichever frame it
+    // measures the horizontal in, precisely so this stays true — so stretching
+    // the sample along it smears the grain into vertical runs, which is the
+    // shape dirt on a building actually has.
     let run = textureSample(
         grain_color,
-        grain_color_sampler,
+        grain_sampler,
         vec2(plane.x * 0.75, plane.y / STREAK_STRETCH) / settings.tile,
     ).g;
     let streak = saturate((1.0 - run / mean) * 1.4);
@@ -600,13 +754,23 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     // Everything below now samples the facade where the eye can actually see
     // it, rather than where the ray first touched the box.
     in.uv = in.uv + seen.offset;
+    // The grain reads the same UV, so it slides into the reveal with the
+    // picture rather than staying flat behind it.
+    let face_uv = in.uv;
+#else
+    // No UVs, no face to measure. A zero u axis is the signal `dress` falls
+    // back to its old world-axis projection on, and nothing else can produce
+    // one: `face_axes` returns unit vectors even where the system it solves is
+    // degenerate.
+    let axes = Face(vec3(0.0), vec3(0.0));
+    let face_uv = vec2(0.0);
 #endif
 
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     pbr_input.material.base_color =
         alpha_discard(pbr_input.material, pbr_input.material.base_color);
 
-    pbr_input = dress(pbr_input);
+    pbr_input = dress(pbr_input, axes, face_uv, in.instance_index);
 #ifdef VERTEX_UVS
     pbr_input = glaze(pbr_input, in.uv, axes);
     // A reveal is a hole, and the inside of a hole sees less sky than the wall

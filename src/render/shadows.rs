@@ -57,7 +57,29 @@ const OVERLAP: f32 = 0.2;
 /// tight to see at street scale. This is larger on purpose — it is the softness
 /// of a bright overcast sky as much as of a disc, and it is what stops a
 /// forty-storey parapet drawing a razor edge across a road.
-const SUN_SOFTNESS: f32 = 3.0;
+///
+/// It was three degrees, which is six times the sun, and that turned out to be
+/// too much of a good thing in exactly one place: the contact edge. A car's
+/// shadow, a kerb's shadow and a bollard's shadow are all cast from centimetres
+/// away, where a wide source produces almost no penumbra in reality and this
+/// produced a smear — the same edge the contact-shadow pass exists to sharpen.
+/// Under two degrees the parapet is still soft and the wheel is still planted.
+const SUN_SOFTNESS: f32 = 1.8;
+
+/// The shortest the first cascade is allowed to be, in metres.
+///
+/// The near bound used to be a flat three percent of the shadow distance and
+/// nothing else, which is a sensible proportion at the nine hundred to two
+/// thousand metres of the upper tiers and fifteen metres at Medium's five
+/// hundred — so at the tier most people actually run, everything past the far
+/// kerb was shadowed by cascade one at six times coarser texels and cascade two
+/// covered fifteen metres to five hundred on a single map.
+///
+/// Twenty-eight metres is a carriageway plus both pavements plus the first
+/// courses of the buildings either side, which is the geometry a near cascade
+/// exists to resolve. Below that it is not resolving a street, it is resolving
+/// the player's own feet.
+const NEAR_CASCADE_FLOOR: f32 = 28.0;
 
 /// Splits the shadowed range into cascades, without ever handing Bevy something
 /// it will panic on.
@@ -86,7 +108,8 @@ pub fn cascade_config(
     // over inside the crossing you are standing on, too long and the near
     // cascade is as coarse as the far one.
     let first = (maximum * 0.03)
-        .clamp(NEAREST * 4.0 + 1.0, 40.0)
+        .max(NEAR_CASCADE_FLOOR)
+        .clamp(NEAREST * 4.0 + 1.0, 60.0)
         .min(maximum * 0.5);
 
     CascadeShadowConfigBuilder {
@@ -160,7 +183,20 @@ pub fn sync_camera_shadows(
         camera.insert(filtering);
 
         if settings.contact_shadows {
-            camera.insert(ContactShadows::default());
+            camera.insert(ContactShadows {
+                // The march is `linear_steps` samples along the ray whatever
+                // the ray's length, so a longer reach costs nothing and only
+                // spreads the samples further apart. Length is therefore a
+                // tuning against the *scene*, not against the frame budget —
+                // see `GraphicsSettings::contact_shadow_length`.
+                linear_steps: 24,
+                // And a thickness for street furniture rather than for props
+                // on a table. Bevy's 0.1 m assumes every depth-buffer fragment
+                // is a wafer, so a ray passes clean through the side of a car
+                // and the car casts nothing onto the road beside it.
+                thickness: 0.3,
+                length: settings.contact_shadow_length,
+            });
         } else {
             camera.remove::<ContactShadows>();
         }
@@ -257,6 +293,23 @@ mod tests {
             furthest <= limit * 1.001,
             "shadowing out to {furthest} m with a 400 m stream radius"
         );
+    }
+
+    /// The near cascade is what resolves the street the player is standing in,
+    /// and it has to be at least a street wide to do it. This is the number the
+    /// flat three-percent rule got wrong at the tier most people run.
+    #[test]
+    fn the_near_cascade_covers_a_street_rather_than_a_doorstep() {
+        for preset in QualityPreset::ALL {
+            let settings = preset.settings();
+            let config = cascade_config(settings.shadow_distance, settings.cascades, 900.0);
+            let first = config.bounds[0];
+            assert!(
+                first >= NEAR_CASCADE_FLOOR * 0.99,
+                "{} spends its near cascade on {first} m",
+                preset.name()
+            );
+        }
     }
 
     /// A short shadow distance must not leave the first cascade covering

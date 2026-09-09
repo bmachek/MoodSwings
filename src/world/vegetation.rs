@@ -253,6 +253,36 @@ pub struct FoliageKit {
     /// The whole crown as one mesh, and how high above the foot it hangs.
     crown: Vec<(Handle<Mesh>, Handle<StandardMaterial>, f32)>,
     hedge: (Handle<Mesh>, Handle<StandardMaterial>),
+    /// The leaf maps, kept so a second hedge can be cut at a different repeat
+    /// — see [`FoliageKit::hedge_leaves`].
+    leaf: (Handle<Image>, Handle<Image>),
+}
+
+/// What a clipped hedge is, in one colour. Shared by the park boundary and by
+/// the walls of a real town's back yards, because a town does not grow two
+/// kinds of privet.
+const HEDGE_TINT: Color = Color::srgb(0.20, 0.31, 0.15);
+
+impl FoliageKit {
+    /// A hedge's leaves, cut at a given repeat.
+    ///
+    /// Public because a park is no longer the only thing in the city with a
+    /// boundary: `world::streetside` plants one across every gap in a real
+    /// town's frontage. It cannot use the park's own material, and the reason
+    /// is worth writing down — the park hedge is one shared unit cube scaled
+    /// by its transform, so its UVs are one repeat per face however long the
+    /// run is, and the material multiplies that by nine. Scaled to eight
+    /// metres by one, that is nine repeats across eight metres and nine across
+    /// one, an aspect ratio of eight to one; through an alpha mask it comes out
+    /// as a venetian blind. A boundary whose mesh carries its own size in its
+    /// UVs wants the repeat at one instead.
+    pub fn hedge_leaves(
+        &self,
+        tile: f32,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Handle<StandardMaterial> {
+        materials.add(leaves(HEDGE_TINT, &self.leaf.0, &self.leaf.1, tile))
+    }
 }
 
 /// Metres of canopy one repeat of the leaf texture covers.
@@ -363,12 +393,13 @@ pub fn build_assets(
             // because a box's UVs are one repeat per face however big it is and
             // a hedge is several metres long.
             materials.add(leaves(
-                Color::srgb(0.20, 0.31, 0.15),
+                HEDGE_TINT,
                 &leaf_color,
                 &leaf_normal,
                 LEAF_TILE * 2.0,
             )),
         ),
+        leaf: (leaf_color, leaf_normal),
     }
 }
 

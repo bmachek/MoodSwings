@@ -82,6 +82,10 @@ pub struct ScannedSet {
     pub normal: Handle<Image>,
     pub roughness: Handle<Image>,
     pub occlusion: Option<Handle<Image>>,
+    /// The height field the scan was measured off, inverted for Bevy. See
+    /// [`ScannedSet::deepen`], which is the only thing that uses it, and
+    /// [`invert`] for why it cannot be used as it arrives.
+    pub depth: Handle<Image>,
 }
 
 impl ScannedSet {
@@ -93,6 +97,24 @@ impl ScannedSet {
     /// glTF-style, which means its blue channel — where `StandardMaterial`
     /// looks for metalness — is a copy of the roughness. Zeroing the metallic
     /// multiplier is what stops wet-looking asphalt from reading as chrome.
+    ///
+    /// # It does not set `base_color`, and the caller must
+    ///
+    /// `StandardMaterial::default().base_color` is white, so a material that
+    /// takes a set and stops here is drawn at the scan's own albedo — a
+    /// correctly exposed daylight photograph of a surface, which is a
+    /// systematically brighter and more saturated thing than the surface. The
+    /// flat roofs found this out first ("a city of snow", see
+    /// `buildings::ROOF_TINT`) and the grass found it out again three
+    /// milestones later, on the largest surface in the game.
+    ///
+    /// It is deliberately still the caller's job rather than an argument here.
+    /// Two of the eleven sets are used for something other than what they were
+    /// photographed as — the roof grain doubles as gravel, the pavement as
+    /// carriageway slabs — and the tint is the only thing that makes that
+    /// work, so it belongs where the decision is, not where the maps are. What
+    /// this doc block is for is that the omission is silent: nothing warns, and
+    /// the surface merely comes out looking like a rendering from 2010.
     pub fn apply(&self, material: &mut StandardMaterial) {
         material.base_color_texture = Some(self.color.clone());
         material.normal_map_texture = Some(self.normal.clone());
@@ -101,6 +123,51 @@ impl ScannedSet {
         material.perceptual_roughness = 1.0;
         material.metallic = 0.0;
     }
+
+    /// Gives a surface its real depth, by parallax over the set's height map.
+    ///
+    /// Every one of these sets ships a `Displacement.jpg`, the fetch script has
+    /// always downloaded it, and until now nothing opened it. What that cost is
+    /// exactly the thing a normal map cannot buy: at a grazing angle a normal
+    /// map's relief flattens into the plane it is painted on, so a cobbled
+    /// square seen from standing height was a photograph of cobbles lying on a
+    /// sheet of glass. Parallax moves the texture instead of merely relighting
+    /// it, and the joint between two setts then goes *behind* the stone in
+    /// front of it, which is the whole cue.
+    ///
+    /// # The two numbers
+    ///
+    /// `metres` is how deep this material's deepest joint really is — three
+    /// centimetres between setts, less between slabs. `tile` is how many metres
+    /// of surface one repeat of the maps covers. Both are needed because Bevy's
+    /// `parallax_depth_scale` is in units of *transformed* UV, which is to say
+    /// one repeat of the texture, so a scale that is right for a pavement tiled
+    /// every 2.6 m is eight times wrong for the same set tiled every 21.
+    ///
+    /// # Why this is opt-in rather than part of [`apply`](Self::apply)
+    ///
+    /// Because it is the one thing in this module that is not free, and the one
+    /// thing that can look worse. Bevy's parallax loop spends up to
+    /// `max_parallax_layer_count` texture fetches per fragment and spends the
+    /// most of them at exactly the grazing angles a ground plane is mostly seen
+    /// at, so a 40 km world plane would pay for it over most of the screen and
+    /// have nothing to show: the plain is grass, and grass has no joints for a
+    /// ray to fall into. It belongs on the surfaces close to the player with
+    /// real relief in them, and the caller is the only one that knows which
+    /// those are.
+    pub fn deepen(&self, material: &mut StandardMaterial, metres: f32, tile: f32) {
+        material.depth_map = Some(self.depth.clone());
+        // Clamped because Bevy's own documentation warns that anything past 0.1
+        // distorts, and a mistyped tile size is otherwise a surface that
+        // swims.
+        material.parallax_depth_scale = (metres / tile.max(0.05)).clamp(0.0, 0.08);
+        // Eight rather than the default sixteen. The refinement step below the
+        // march is what removes the stairsteps, and doubling the layers on a
+        // surface whose relief is three centimetres buys a difference nobody
+        // has been able to see in a screenshot.
+        material.max_parallax_layer_count = 8.0;
+        material.parallax_mapping_method = bevy::pbr::ParallaxMappingMethod::Occlusion;
+    }
 }
 
 #[derive(Resource, Default)]
@@ -108,6 +175,9 @@ pub struct MaterialLibrary {
     sets: HashMap<&'static str, ScannedSet>,
     /// Maps still waiting for their mip chain. Emptied as they arrive.
     pending: HashSet<AssetId<Image>>,
+    /// Which of those are height maps, and therefore have to be turned upside
+    /// down on arrival. See [`invert`].
+    heights: HashSet<AssetId<Image>>,
 }
 
 impl MaterialLibrary {
@@ -179,6 +249,7 @@ fn discover(asset_server: Res<AssetServer>, mut library: ResMut<MaterialLibrary>
             roughness: linear(map_path(name, "Roughness")),
             occlusion: present(name, "AmbientOcclusion")
                 .then(|| linear(map_path(name, "AmbientOcclusion"))),
+            depth: linear(map_path(name, "Displacement")),
         };
 
         library.pending.extend(
@@ -190,6 +261,8 @@ fn discover(asset_server: Res<AssetServer>, mut library: ResMut<MaterialLibrary>
             .into_iter()
             .chain(scanned.occlusion.as_ref().map(|h| h.id())),
         );
+        library.pending.insert(scanned.depth.id());
+        library.heights.insert(scanned.depth.id());
         library.sets.insert(name, scanned);
     }
 
@@ -224,6 +297,11 @@ fn finish_loaded_maps(
         let Some(mut image) = images.get_mut(*id) else {
             continue;
         };
+        if library.heights.remove(id)
+            && let Err(reason) = invert(&mut image)
+        {
+            warn!("a height map was not inverted ({reason}); its relief will be inside out");
+        }
         if let Err(reason) = delight(&mut image) {
             warn!("a scanned colour map was not de-lit ({reason}); it will crush");
         }
@@ -232,6 +310,36 @@ fn finish_loaded_maps(
         }
         image.sampler = ImageSampler::Descriptor(tiling_sampler());
     }
+}
+
+/// Turns a height map into a depth map, in place.
+///
+/// ambientCG ships displacement the way every displacement map is authored:
+/// white is the top of the relief. Bevy's parallax loop reads the same channel
+/// the other way up — it walks *into* the surface from zero and stops when the
+/// map's value is no longer greater than how far it has walked, so nought is
+/// the surface and one is the bottom of the deepest joint. Handing it the map
+/// as it arrives does not fail, it inverts the relief: the mortar stands proud
+/// and every sett is a hole, which is a thing the eye notices immediately and
+/// cannot name.
+///
+/// Done to the bytes rather than in linear light on purpose. This is not a
+/// colour, it is a parameterisation of a distance, and one minus it is the same
+/// parameterisation measured from the other end.
+fn invert(image: &mut Image) -> Result<(), &'static str> {
+    if image.texture_descriptor.mip_level_count > 1 {
+        return Err("already mipped");
+    }
+    let Some(data) = image.data.as_mut() else {
+        return Err("pixels were dropped before the render world");
+    };
+    for texel in data.as_chunks_mut::<4>().0 {
+        // Colour channels only: the alpha of a height map is not a height.
+        for channel in texel.iter_mut().take(3) {
+            *channel = 255 - *channel;
+        }
+    }
+    Ok(())
 }
 
 /// How much of a scanned colour map's own contrast survives de-lighting.
@@ -460,6 +568,80 @@ mod tests {
 
         delight(&mut image).unwrap();
         assert_eq!(image.data, untouched);
+    }
+
+    /// The height maps arrive the way displacement is authored everywhere —
+    /// white is the top — and Bevy's parallax walks the other way. Getting
+    /// this backwards does not fail, it turns every joint into a ridge.
+    #[test]
+    fn a_height_map_comes_out_measured_from_the_other_end() {
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::default(),
+        );
+        // The top of a sett, and the sand joint beside it.
+        image.data = Some(vec![240, 240, 240, 255, 12, 12, 12, 255]);
+
+        invert(&mut image).unwrap();
+        let data = image.data.as_ref().unwrap();
+        assert_eq!(data[0], 15, "the stone should now read as the surface");
+        assert_eq!(data[4], 243, "the joint should now read as the deepest");
+        assert_eq!(data[3], 255, "alpha is not a height");
+    }
+
+    /// The parallax scale is in units of one repeat of the texture, not in
+    /// metres, which is the whole reason `deepen` takes both numbers. A three
+    /// centimetre sett joint on setts that repeat every 1.35 m is a very
+    /// different number from the same joint on a surface tiled every ten.
+    #[test]
+    fn the_parallax_depth_is_measured_in_repeats_rather_than_in_metres() {
+        let set = ScannedSet {
+            color: Handle::default(),
+            normal: Handle::default(),
+            roughness: Handle::default(),
+            occlusion: None,
+            depth: Handle::default(),
+        };
+
+        let mut close = StandardMaterial::default();
+        set.deepen(&mut close, 0.030, 1.35);
+        assert!((close.parallax_depth_scale - 0.030 / 1.35).abs() < 1e-6);
+        assert!(close.depth_map.is_some());
+
+        let mut spread = StandardMaterial::default();
+        set.deepen(&mut spread, 0.030, 10.0);
+        assert!(
+            spread.parallax_depth_scale < close.parallax_depth_scale,
+            "the same joint stretched over more surface has to parallax less"
+        );
+    }
+
+    /// Bevy's own documentation says anything past 0.1 distorts. A tile size
+    /// mistyped as centimetres would otherwise produce a surface that swims.
+    #[test]
+    fn no_tile_size_can_ask_for_a_parallax_that_distorts() {
+        let set = ScannedSet {
+            color: Handle::default(),
+            normal: Handle::default(),
+            roughness: Handle::default(),
+            occlusion: None,
+            depth: Handle::default(),
+        };
+        for tile in [0.0, 0.001, 0.05, 1.0] {
+            let mut material = StandardMaterial::default();
+            set.deepen(&mut material, 0.5, tile);
+            assert!(
+                material.parallax_depth_scale <= 0.08,
+                "a tile of {tile} m asked for {}",
+                material.parallax_depth_scale
+            );
+        }
     }
 
     #[test]

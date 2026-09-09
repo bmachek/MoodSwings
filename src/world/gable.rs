@@ -116,6 +116,9 @@ pub fn build_assets(
 ) -> GableKit {
     let clay = images.add(texture::tiles());
     let relief = images.add(texture::tiles_normal());
+    // Occlusion in red, roughness in green, off the same height field as the
+    // other two — see `texture::tiles_surface`.
+    let surface = images.add(texture::tiles_surface());
     // New, weathered, and one the moss has had. All three are the same fired
     // clay underneath — what changes with age is that it goes browner, greyer
     // and less even, not that it goes a different colour.
@@ -127,15 +130,30 @@ pub fn build_assets(
         Color::srgb(0.50, 0.34, 0.26),
     ];
     GableKit {
-        cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        // With tangents, and that is not decoration: Bevy applies a normal map
+        // only where the mesh carries a tangent basis, so the roof relief that
+        // has been painted and bound since this module was written was being
+        // dropped on the floor. A bare `Cuboid` has none. The city's own
+        // `with_tangents` runs mikktspace, which is the basis the shader
+        // agrees with.
+        cube: meshes.add(super::buildings::with_tangents(
+            Cuboid::new(1.0, 1.0, 1.0).mesh().build(),
+        )),
         tile: ages.map(|age| {
             materials.add(StandardMaterial {
                 // Old clay, not the grey felt the flat roofs are covered in.
                 base_color: age,
                 base_color_texture: Some(clay.clone()),
                 normal_map_texture: Some(relief.clone()),
+                // The same image twice: occlusion takes its red channel and
+                // the metallic/roughness slot takes its green and blue.
+                occlusion_texture: Some(surface.clone()),
+                metallic_roughness_texture: Some(surface.clone()),
                 uv_transform: Affine2::from_scale(LAP),
-                perceptual_roughness: 0.93,
+                // One, because it multiplies the map. Anything else throws the
+                // green channel away — see `material::ScannedSet::apply`.
+                perceptual_roughness: 1.0,
+                metallic: 1.0,
                 ..default()
             })
         }),

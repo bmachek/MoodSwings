@@ -20,8 +20,12 @@
 //!
 //! No point lights per room — a city of interiors would be a city of shadow
 //! maps. The room's surfaces are emissive instead, at a *fixed* level on the
-//! window-glow scale (`emissive` here is exposure-independent — the same
-//! nits `timeofday::WINDOW_GLOW` is measured in). Fixed is not a shortcut,
+//! window-glow scale (`emissive` here is exposure-independent — the same scale
+//! `timeofday::WINDOW_GLOW` is on, which is multiples of the frame's white
+//! point rather than the nits that constant's own comment used to claim; the
+//! deferred g-buffer drops the alpha Bevy would have applied the exposure
+//! through, and this module was the one place that had it right).
+//! Fixed is not a shortcut,
 //! it is the behaviour wanted: against a sunlit street the room reads as
 //! shade, and after dark the same numbers read as a shop with its lights
 //! on, without a system touching a thing. A first draft drove these values

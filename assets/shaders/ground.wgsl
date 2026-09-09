@@ -1,4 +1,4 @@
-// A kilometre of ground that is not one colour.
+// A kilometre of ground that is not one colour, and a town that has a floor.
 //
 // The land around a town read off a map is one quad with a grass scan tiled
 // across it. Every square metre of that is correct and every square metre is the
@@ -17,6 +17,28 @@
 // World space, not UV, for the reason every mask in this project is: the ground
 // tiles every few metres, so anything sampled in its UVs repeats at that size
 // and comes out as a pattern rather than as terrain.
+//
+// The first version of this did only the two things above, and it was still
+// wrong, in two ways that the noise could never have fixed:
+//
+//  1. It varied *value and hue* but never *surface*. Every square metre stayed
+//     grass; the result was "green, and slightly different green". Worse, the
+//     drying was a multiply — `color * vec3(1.42, 1.15, 0.52)` — so it made the
+//     high ground brighter, which on an albedo that was already two and a half
+//     times too high (see `ground::TURF_TINT`) gave chartreuse rather than
+//     straw. Drying now moves towards a *fixed* colour instead: dry grass is
+//     straw, and straw is straw whatever it dried from. Bare earth and
+//     courtyard grit arrive the same way, at their own scales.
+//
+//  2. It had no idea where the town was. One material covers forty kilometres
+//     while the town is two of them, so a fragment in a market square and a
+//     fragment in a field two kilometres out were shaded identically — which is
+//     why the inside of every block was meadow running up to the kerb. The town
+//     now arrives as a mask rasterised from the road graph once at startup:
+//     red for the backland immediately behind a pavement, green for anywhere
+//     inside the built-up envelope. It is not a texture of the ground, it is a
+//     map of the town, and one bilinear tap of it is what turns a lawn between
+//     two streets into a yard.
 
 #import bevy_pbr::{
     pbr_types::PbrInput,
@@ -44,12 +66,37 @@ struct GroundSettings {
     value: f32,
     // How much of it goes dry and yellow rather than merely pale.
     dry: f32,
+    // How much of the surface's own hue survives the pull towards luminance.
+    saturation: f32,
+    // How much bare earth comes through where the cover is thin.
+    dirt: f32,
+    // How loudly the town mask speaks. Zero for a lawn, which has no mask
+    // bound and would otherwise read the white fallback as "all town".
+    urban: f32,
+    // Metres from the middle of the world to the edge of the mask.
+    half_extent: f32,
     // Unused; a uniform is padded to sixteen bytes whether or not it is
     // written that way, and naming the padding is cheaper than discovering it.
     pad: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> ground: GroundSettings;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var town: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var town_sampler: sampler;
+
+// The three surfaces the grass is allowed to stop being, in linear albedo.
+//
+// Fixed colours rather than multipliers of the grass, which is the whole point:
+// a multiplier keeps the scan's hue and only pushes it about, so every state of
+// the ground stayed a state of *grass*. Straw is straw, soil is soil, and a
+// courtyard is neither.
+//
+// All three sit between 0.055 and 0.12 linear, which is where dry ground
+// measures. Anything brighter competes with the render's concrete and starts
+// the poster paint again from the other end.
+const STRAW = vec3(0.118, 0.104, 0.058);
+const EARTH = vec3(0.078, 0.062, 0.044);
+const GRIT = vec3(0.083, 0.075, 0.061);
 
 // The same lattice noise the road and the sky use. A third copy, deliberately:
 // see the note in `sky.wgsl` — a shared import has to be a loaded shader asset
@@ -106,27 +153,92 @@ fn vary(input: PbrInput) -> PbrInput {
     let close = fbm(here / (ground.tile * 0.23));
     let field = broad * 0.66 + close * 0.34;
 
-    let shade = 1.0 + (field - 0.5) * 2.0 * ground.value;
-    // And the high ground goes off. Grass that has dried is not paler green, it
-    // is a different colour — yellow, and much less saturated — so this is a hue
-    // shift rather than another multiplier, and it is the half of this that
-    // actually reads. Value alone does not: measured over a plain, a third
-    // either way in linear light comes back as a tenth of a code either way in
-    // the image, because sRGB spends most of its range below mid grey and grass
-    // sits above it. Hue has no such compression.
-    let parched = smoothstep(0.50, 0.76, broad) * ground.dry;
+    // Where the town is. One tap, clamped at the edges, so everything past the
+    // extract's own square reads as open country — which it is.
+    let uv = here / (ground.half_extent * 2.0) + 0.5;
+    let mask = textureSample(town, town_sampler, uv);
+    // Backland: the strip immediately behind a pavement, and the wedge at an
+    // oblique corner that no pavement covers. Nothing grows there.
+    let backland = mask.r * ground.urban;
+    // And anywhere at all inside the built-up envelope, which is where the
+    // block interiors are.
+    let inside = mask.g * ground.urban;
 
-    var color = pbr_input.material.base_color.rgb * shade;
-    color = mix(color, color * vec3(1.42, 1.15, 0.52), parched);
+    var color = pbr_input.material.base_color.rgb;
+
+    // The order here is: choose a surface, then shade it. The first version did
+    // the opposite — value first, then hue — which meant every mix towards a
+    // fixed target threw the shading away again, so the moment the town mask
+    // arrived the whole of the back land came out as one flat slab of grit with
+    // no variation in it at all. A patch of gravel is lit and worn the same way
+    // a patch of grass is; the value belongs at the end, over all of them.
+
+    // Saturation first, before anything is mixed towards a target, so the
+    // targets are not themselves desaturated. Town ground is greyer than
+    // country ground for the ordinary reason: it is walked on, parked on and
+    // covered in the dust off a road.
+    let luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = mix(vec3(luma), color, ground.saturation * mix(1.0, 0.66, inside));
+
+    // The high ground goes off. Towards straw, not towards `color * 1.42`:
+    // grass that has dried is not brighter grass, it is a different and much
+    // duller colour, and multiplying an albedo that was already too high is
+    // exactly how the plain acquired its chartreuse patches.
+    let parched = smoothstep(0.50, 0.76, broad) * ground.dry;
+    color = mix(color, STRAW, parched);
+
+    // Bare earth, at a third of the field's scale and offset off it, so soil
+    // shows through where the cover happens to be thin rather than along the
+    // same contours the drying follows. More of it inside the town, where the
+    // ground is walked over.
+    let thin = fbm(here / (ground.tile * 0.31) + vec2(37.0, -19.0));
+    let bare = smoothstep(0.58, 0.86, thin) * clamp(ground.dirt * mix(1.0, 2.6, inside), 0.0, 0.9);
+    color = mix(color, EARTH, bare);
+
+    // And the town's own floor. A yard, a forecourt, the gravel behind a row of
+    // houses: worn to grit, and it is what a block interior is actually made
+    // of. Grit broken with earth rather than flat grit, at the close scale, so
+    // that a courtyard forty metres across has something happening across it —
+    // one constant is what a slab is, and a slab between two streets is the
+    // failure this replaced, turned inside out.
+    let floor = mix(GRIT, EARTH, smoothstep(0.40, 0.80, close) * 0.55);
+    // And not everywhere. The land behind a terrace is yards *and* gardens, and
+    // a town whose whole back land is one gravel is exactly as wrong as one
+    // whose whole back land is one lawn — which is what the first pass with the
+    // mask in produced, a beige field with houses on it instead of a green one.
+    // `close` is the fourteen-metre octave, which is about the size of the
+    // thing being decided: this yard is gravel, that one is somebody's garden.
+    let kept = smoothstep(0.22, 0.64, close);
+    // Held well under one on top of that, so weeds still come through a yard
+    // and the ground under the town never becomes a second carriageway.
+    let worn = clamp(
+        (smoothstep(0.10, 0.85, backland) * 0.72 + smoothstep(0.30, 1.0, inside) * 0.20)
+            * mix(0.28, 1.0, kept),
+        0.0,
+        0.82,
+    );
+    color = mix(color, floor, worn);
+
+    // Now the value, over whatever the surface turned out to be. See the note
+    // this replaced: a third either way in linear light comes back as about a
+    // tenth of a code either way in the image, because sRGB spends most of its
+    // range below mid grey and ground sits above it. It is the quietest of the
+    // four terms and it is here for the long shallow gradients, not for the
+    // patchwork.
+    color = color * (1.0 + (field - 0.5) * 2.0 * ground.value);
+
     pbr_input.material.base_color = vec4(color, pbr_input.material.base_color.a);
 
     // Damp ground is a little glossier than dry, which is most of what makes a
-    // hollow read as a hollow from a distance.
-    pbr_input.material.perceptual_roughness = clamp(
-        pbr_input.material.perceptual_roughness - (0.5 - field) * 0.16,
-        0.2,
-        1.0,
-    );
+    // hollow read as a hollow from a distance. The swing used to be a sixteenth
+    // either way, which on a base of one is under the noise floor of the
+    // roughness map itself; a fifth reads. Grit and earth go back the other
+    // way, because neither has ever been glossy.
+    let rough = pbr_input.material.perceptual_roughness
+        - (0.5 - field) * 0.40
+        + bare * 0.10
+        + worn * 0.12;
+    pbr_input.material.perceptual_roughness = clamp(rough, 0.45, 1.0);
 
     return pbr_input;
 }
