@@ -993,7 +993,9 @@ fn carriageway(
     // is, and how deep its deepest joint really is in metres — see
     // `ScannedSet::deepen`. Zero there means no parallax at all, which is not
     // an omission: it is a fetch budget spent where there is something to find.
-    let (set, tile, tint, wear, relief, joint) = match surface {
+    // Set, tile, tint, asphalt ageing, relief coarseness, joint depth, how far
+    // it has settled and how much it pots.
+    let (set, tile, tint, wear, relief, joint, sag, pits) = match surface {
         // Tarmac is the one surface the ageing in `road.wgsl` describes: it is
         // poured, so it is patched and it cracks. It is also the finest, which
         // is why its relief is the one that has to lie down at a grazing angle
@@ -1008,6 +1010,10 @@ fn carriageway(
             1.0,
             0.0,
             0.0,
+            // Tarmac takes both: it is the surface that is laid over trenches,
+            // and the only one that pots.
+            0.020,
+            1.0,
         ),
         // A sett is a rounded granite block with a sand joint around it, and
         // it is the surface a player stands closest to in the whole Altstadt.
@@ -1020,6 +1026,10 @@ fn carriageway(
             0.0,
             1.0,
             0.035,
+            // Setts settle more than tarmac — a sand bed under a market street
+            // is what a century of drays leaves ruts in — and pot not at all.
+            0.028,
+            0.0,
         ),
         Surface::Slabs => (
             material::set::PAVEMENT,
@@ -1028,6 +1038,8 @@ fn carriageway(
             0.0,
             0.65,
             0.016,
+            0.018,
+            0.0,
         ),
         Surface::Gravel => (
             material::set::ROOF,
@@ -1036,6 +1048,9 @@ fn carriageway(
             0.0,
             0.45,
             0.020,
+            // A gravel lane is nothing but hollows.
+            0.045,
+            0.55,
         ),
     };
 
@@ -1082,6 +1097,8 @@ fn carriageway(
             settings: road::RoadSettings {
                 wear,
                 relief,
+                sag,
+                pits,
                 ..default()
             },
         },

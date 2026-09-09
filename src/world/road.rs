@@ -80,6 +80,23 @@ pub struct RoadSettings {
     /// *is* when you look down one. So the coarser the paving, the more of its
     /// relief survives the grazing angle.
     pub relief: f32,
+    /// How far this surface has settled over what is buried under it, in
+    /// metres.
+    ///
+    /// A road is not a plane. It is a lid over trenches and made-good bays, and
+    /// it dips a centimetre or two over each of them at about the length of a
+    /// car — which is why a wet street reflects in bands rather than evenly,
+    /// and why standing water is where it is. Every carriageway settles,
+    /// including a cobbled one; what differs is how much.
+    pub sag: f32,
+    /// How pitted it is, 0 to 1.
+    ///
+    /// Asphalt pots and granite does not, and that is the same argument
+    /// [`Self::wear`] makes: a pothole is what happens when water gets under a
+    /// *poured* surface and freezes. A sett has joints for exactly that, which
+    /// is why it has joints, so a cobbled street loses a stone rather than
+    /// growing a crater.
+    pub pits: f32,
 }
 
 impl Default for RoadSettings {
@@ -91,6 +108,8 @@ impl Default for RoadSettings {
             fall: 0.0,
             wear: 1.0,
             relief: 0.0,
+            sag: 0.020,
+            pits: 1.0,
         }
     }
 }
