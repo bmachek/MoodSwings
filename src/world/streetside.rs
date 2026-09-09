@@ -1452,55 +1452,213 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Fr
     let mut holes = Frontage {
         gaps: vec![Vec::new(); layout.graph.edge_count()],
     };
-    // Middles of everything placed so far, bucketed by cell. A candidate only
-    // looks at its own cell and the eight around it.
-    let mut taken: HashMap<(i32, i32), Vec<(Vec2, f32)>> = HashMap::default();
+    // Everything placed so far, bucketed by cell. A terrace is tested against
+    // its own footprint rather than against a circle round its middle — see
+    // [`Placed`].
+    let mut taken: HashMap<(i32, i32), Vec<Oblong>> = HashMap::default();
     let roads = corridors(layout);
     let scale = style.lot_scale();
 
-    for (index, edge) in layout.graph.edges().enumerate() {
-        let a = layout.graph.node(edge.a).pos;
-        let b = layout.graph.node(edge.b).pos;
-        let Ok(direction) = Dir2::new(b - a) else {
-            continue;
-        };
-        let normal = Vec2::new(-direction.y, direction.x);
-        // How much of this segment is buildable: everything except what the
-        // nodes at its ends need kept clear, which is a lot at a crossing and
-        // nothing at a bend.
-        let clear_at = |node| {
-            if layout.graph.node(node).edges.len() >= 3 {
-                JUNCTION_CLEAR
-            } else {
-                BEND_CLEAR
-            }
-        };
-        let (head, tail) = (clear_at(edge.a), clear_at(edge.b));
-        let run = edge.length - head - tail;
-        if run < FRONTAGE.0 * scale {
-            continue;
-        }
-
+    for run in runs(layout) {
+        let total = run.total();
         for side in [-1.0f32, 1.0] {
-            // The building line: past the carriageway and past the pavement.
-            let line = edge.width * 0.5 + SIDEWALK_WIDTH;
-            // A mesh's +Z faces the street it stands on, which is the way back
-            // across the pavement.
-            let yaw = (-normal.x * side).atan2(-normal.y * side);
-            let mut along = head;
+            // Where the run may build: everything except what a crossing at
+            // either end needs kept clear. A bend needs nothing, and a bend is
+            // now *inside* a run rather than the end of one.
+            let head = run.clearance(layout, true);
+            let tail = run.clearance(layout, false);
+            if total - head - tail < FRONTAGE.0 * scale {
+                continue;
+            }
 
-            while along < run + head {
-                if rng.random_range(0.0..1.0) < HOLE {
+            let mut along = head;
+            while along < total - tail {
+                // How far this terrace can run before the street has turned
+                // out from under it. Everything in a terrace stands on one
+                // straight line, so the line has to be one the street actually
+                // follows.
+                let Some(terrace) = run.terrace(along, total - tail) else {
+                    break;
+                };
+                if terrace.span < FRONTAGE.0 * scale {
+                    along += CHORD_STEP;
+                    continue;
+                }
+
+                // One depth for the whole row, so the backs line up and the
+                // roof planes carry across a party wall instead of stepping.
+                let depth = rng.random_range(DEPTH.0..DEPTH.1);
+                // The building line clears the widest carriageway the terrace
+                // stands along, not the one under its first house.
+                let line = terrace.line + depth * 0.5;
+                let normal = Vec2::new(-terrace.axis.y, terrace.axis.x);
+                // A mesh's +Z faces the street it stands on, which is the way
+                // back across the pavement.
+                let yaw = (-normal.x * side).atan2(-normal.y * side);
+
+                // Test the whole row at once, and shorten it from the far end
+                // rather than losing a house out of the middle of it. A tooth
+                // missing from a terrace is a hole in the street wall; a
+                // terrace that stops early is a corner.
+                let mut span = terrace.span;
+                let mut fits = false;
+                for _ in 0..4 {
+                    if span < FRONTAGE.0 * scale {
+                        break;
+                    }
+                    let block = Oblong {
+                        centre: terrace.at + terrace.axis * (span * 0.5) + normal * (side * line),
+                        axis: terrace.axis,
+                        half: Vec2::new(span, depth) * 0.5,
+                    };
+                    if !in_a_road(&roads, &block) && !clashes(&taken, &block, CLEARANCE_GAP) {
+                        fits = true;
+                        break;
+                    }
+                    span *= 0.62;
+                }
+                if !fits {
+                    along += terrace.span.max(CHORD_STEP);
+                    continue;
+                }
+
+                // Fill the row. Party walls: no reveal between two houses, and
+                // no clash test between them either, because touching is the
+                // whole point and an isotropic circle round each one cannot
+                // tell "beside me, where we share a wall" from "behind me, on
+                // the next street".
+                let mut across = 0.0f32;
+                let mut houses = 0usize;
+                while across < span {
+                    let frontage =
+                        (rng.random_range(FRONTAGE.0..FRONTAGE.1) * scale).min(span - across);
+                    if frontage < FRONTAGE.0 * scale * 0.6 {
+                        break;
+                    }
+                    let centre = terrace.at
+                        + terrace.axis * (across + frontage * 0.5)
+                        + normal * (side * line);
+                    let district = district_at(centre, layout.half_extent, terrace.arterial);
+                    let (low, high) = style.heights(district.height_range());
+                    let height = rng.random_range(low..high);
+                    // The footprint is read in the site's own frame — frontage
+                    // across, depth back — because `Building::facing` is set.
+                    // It is never a rectangle on the map, and nothing treats it
+                    // as one.
+                    let half = Vec2::new(frontage, depth) * 0.5;
+                    blocks.push(Block {
+                        // Only ever read for filing this into a chunk and for
+                        // the minimap, both of which want a world box round it.
+                        area: Rect::new(
+                            centre - Vec2::splat(half.length()),
+                            centre + Vec2::splat(half.length()),
+                        ),
+                        paved: false,
+                        district,
+                        buildings: vec![Building {
+                            footprint: Rect::new(centre - half, centre + half),
+                            facing: Some(yaw),
+                            height,
+                            palette: rng.random_range(0..PALETTE_SIZE),
+                            kind: kind_for(&mut rng, district, terrace.arterial),
+                        }],
+                        vacants: Vec::new(),
+                        arterial: [terrace.arterial; 4],
+                        quarter: None,
+                    });
+                    across += frontage;
+                    houses += 1;
+
+                    // And what is behind it. A town built only along its
+                    // frontages has a hole in the middle of every block, and
+                    // the holes are enormous: the gap between two streets in
+                    // Landshut is about a hundred and fifty metres and a plot
+                    // is twenty deep. What is actually back there is the back
+                    // of the town — a workshop, a coach house, a lock-up, an
+                    // extension somebody built in the sixties.
+                    let mut back =
+                        terrace.line + depth + yards.random_range(BACKYARD.0..BACKYARD.1);
+                    for _ in 0..OUTBUILDINGS {
+                        if yards.random_range(0.0..1.0) > BACK_BUILT {
+                            break;
+                        }
+                        let wide = frontage * yards.random_range(BACK_SPAN.0..BACK_SPAN.1);
+                        let deep = yards.random_range(BACK_DEPTH.0..BACK_DEPTH.1);
+                        // Never past the back land the rest of the world
+                        // believes in: beyond it the ground has stopped being
+                        // exactly zero and a hard-written y is a lie.
+                        if back + deep > super::BACKLAND {
+                            break;
+                        }
+                        let at = terrace.at
+                            + terrace.axis
+                                * (across - frontage * 0.5 + yards.random_range(-2.0..2.0))
+                            + normal * (side * (back + deep * 0.5));
+                        let shape = Oblong {
+                            centre: at,
+                            axis: terrace.axis,
+                            half: Vec2::new(wide, deep) * 0.5,
+                        };
+                        // Advance past this slot whether or not it is built on,
+                        // so a rejected outbuilding does not push the next one
+                        // further into the field.
+                        back += deep + yards.random_range(BACKYARD.0..BACKYARD.1);
+                        if in_a_road(&roads, &shape) || clashes(&taken, &shape, CLEARANCE_GAP) {
+                            continue;
+                        }
+                        taken.entry(cell_of(at)).or_default().push(shape);
+
+                        let half = Vec2::new(wide, deep) * 0.5;
+                        blocks.push(Block {
+                            area: Rect::new(at - half, at + half),
+                            paved: false,
+                            district,
+                            buildings: vec![Building {
+                                footprint: Rect::new(at - half, at + half),
+                                facing: Some(yaw),
+                                // One or two storeys, whatever the street in
+                                // front is: this is a shed, not a second house.
+                                height: yards.random_range(BACK_HEIGHT.0..BACK_HEIGHT.1),
+                                palette: yards.random_range(0..PALETTE_SIZE),
+                                kind: BuildingKind::Apartments,
+                            }],
+                            vacants: Vec::new(),
+                            arterial: [false; 4],
+                            quarter: None,
+                        });
+                    }
+                }
+
+                if houses == 0 {
+                    along += CHORD_STEP;
+                    continue;
+                }
+                // File the row itself, once, under every cell it touches.
+                let built = Oblong {
+                    centre: terrace.at + terrace.axis * (across * 0.5) + normal * (side * line),
+                    axis: terrace.axis,
+                    half: Vec2::new(across, depth) * 0.5,
+                };
+                file(&mut taken, built);
+                along += across;
+
+                // A gap between two rows, and it is punctuation rather than
+                // noise: a gate, a yard entrance, a passage through to the
+                // back. Rolled once per terrace instead of once per house,
+                // because rolled per house it broke the street wall into
+                // single teeth — six runs in ten were one building long.
+                if along < total - tail && rng.random_range(0.0..1.0) < HOLE {
                     let span = rng.random_range(HOLE_WIDTH.0..HOLE_WIDTH.1);
-                    // The hole is a place, not a skipped iteration. Recorded
-                    // here and surfaced by `spawn_edge`, because a gap in a
-                    // real terrace is a gate, a yard or a hardstanding and the
-                    // one thing it is never is mown meadow abutting a kerb.
-                    let centre = a + *direction * (along + span * 0.5) + normal * (side * line);
+                    let Some((at, axis, edge, _, gap_line)) = run.at(along + span * 0.5) else {
+                        break;
+                    };
+                    let normal = Vec2::new(-axis.y, axis.x);
+                    let outward = normal * side;
+                    let centre = at + outward * gap_line;
                     let gap = Gap {
                         centre,
-                        yaw,
-                        outward: normal * side,
+                        yaw: (-normal.x * side).atan2(-normal.y * side),
+                        outward,
                         span,
                         boundary: if yards.random_range(0.0..1.0) < OPENING {
                             None
@@ -1511,175 +1669,323 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Fr
                         },
                         height: yards.random_range(BOUNDARY_HEIGHT.0..BOUNDARY_HEIGHT.1),
                     };
-                    along += span;
                     // Wide enough to be a yard, and not standing in a street
-                    // that happens to run behind this one. The corridor test is
-                    // the same one a building takes, for the same reason: a
-                    // plot at a real town's angles sits at some arbitrary angle
-                    // to every road but its own.
+                    // that happens to run behind this one.
                     let yard = Oblong {
-                        centre: centre + gap.outward * (FORECOURT * 0.5),
-                        axis: *direction,
+                        centre: centre + outward * (FORECOURT * 0.5),
+                        axis,
                         half: Vec2::new(span, FORECOURT) * 0.5,
                     };
                     if span >= FORECOURT_MIN && !in_a_road(&roads, &yard) {
-                        holes.gaps[index].push(gap);
+                        holes.gaps[edge.0 as usize].push(gap);
                     }
-                    continue;
-                }
-                let frontage = rng.random_range(FRONTAGE.0..FRONTAGE.1) * scale;
-                if along + frontage > run + head {
-                    break;
-                }
-                let depth = rng.random_range(DEPTH.0..DEPTH.1);
-                let centre = a
-                    + *direction * (along + frontage * 0.5)
-                    + normal * (side * (line + depth * 0.5));
-                along += frontage + 0.4;
-
-                // Would it stand in something already built? The two radii are
-                // the circles the buildings fit inside, and eight tenths of
-                // their sum is close enough to touching to call it a clash —
-                // exactly touching is what a terrace is, and a terrace is
-                // wanted.
-                let radius = Vec2::new(frontage, depth).length() * 0.5;
-                let cell = (
-                    (centre.x / CELL).floor() as i32,
-                    (centre.y / CELL).floor() as i32,
-                );
-                let clash = (-1..=1).any(|dx| {
-                    (-1..=1).any(|dz| {
-                        taken
-                            .get(&(cell.0 + dx, cell.1 + dz))
-                            .is_some_and(|others| {
-                                others.iter().any(|(other, other_radius)| {
-                                    centre.distance(*other) < (radius + other_radius) * CLEARANCE
-                                })
-                            })
-                    })
-                });
-                if clash {
-                    continue;
-                }
-                // And is it standing in a road? See [`in_a_road`] — not the
-                // street it faces, which it is placed against on purpose, but
-                // any other one that happens to run behind or beside it.
-                let plot = Oblong {
-                    centre,
-                    axis: *direction,
-                    half: Vec2::new(frontage, depth) * 0.5,
-                };
-                if in_a_road(&roads, &plot) {
-                    continue;
-                }
-                taken.entry(cell).or_default().push((centre, radius));
-
-                let district = district_at(centre, layout.half_extent, edge.arterial);
-                let (low, high) = style.heights(district.height_range());
-                let height = rng.random_range(low..high);
-                // The footprint is read in the site's own frame — frontage
-                // across, depth back — because `Building::facing` is set. It is
-                // never a rectangle on the map, and nothing treats it as one.
-                let half = Vec2::new(frontage, depth) * 0.5;
-                let footprint = Rect::new(centre - half, centre + half);
-                let building = Building {
-                    footprint,
-                    facing: Some(yaw),
-                    height,
-                    palette: rng.random_range(0..PALETTE_SIZE),
-                    kind: kind_for(&mut rng, district, edge.arterial),
-                };
-                blocks.push(Block {
-                    // Only ever read for filing this into a chunk and for the
-                    // minimap, both of which want a world box round the thing.
-                    area: Rect::new(centre - Vec2::splat(radius), centre + Vec2::splat(radius)),
-                    paved: false,
-                    district,
-                    buildings: vec![building],
-                    vacants: Vec::new(),
-                    arterial: [edge.arterial; 4],
-                    quarter: None,
-                });
-
-                // And what is behind it.
-                //
-                // A town built only along its frontages is a town with a hole
-                // in the middle of every block, and the holes are enormous: the
-                // gap between two streets in Landshut is about a hundred and
-                // fifty metres and a plot is twenty deep, so four fifths of the
-                // ground inside a block had nothing on it at all. The shading
-                // makes it read as a yard rather than as a meadow now, but a
-                // yard a hundred metres across with nothing standing on it is
-                // still not a town — it is a car park nobody painted.
-                //
-                // What is actually back there is the back of the town: a
-                // workshop, a coach house, a garage block, a lock-up, an
-                // extension somebody built in the sixties. Low, small, turned
-                // to the same street as the house in front, and placed by
-                // exactly the machinery the frontage is — the same clash grid
-                // and the same corridor test — so a back building can no more
-                // stand in a road than a front one can.
-                let mut back = line + depth + yards.random_range(BACKYARD.0..BACKYARD.1);
-                for _ in 0..OUTBUILDINGS {
-                    if yards.random_range(0.0..1.0) > BACK_BUILT {
-                        break;
-                    }
-                    let across = frontage * yards.random_range(BACK_SPAN.0..BACK_SPAN.1);
-                    let deep = yards.random_range(BACK_DEPTH.0..BACK_DEPTH.1);
-                    let at = a
-                        + *direction
-                            * (along - frontage * 0.5
-                                + across * 0.5
-                                + yards.random_range(-2.0..2.0))
-                        + normal * (side * (back + deep * 0.5));
-                    let reach = Vec2::new(across, deep).length() * 0.5;
-                    let cell = ((at.x / CELL).floor() as i32, (at.y / CELL).floor() as i32);
-                    let clash = (-1..=1).any(|dx| {
-                        (-1..=1).any(|dz| {
-                            taken
-                                .get(&(cell.0 + dx, cell.1 + dz))
-                                .is_some_and(|others| {
-                                    others.iter().any(|(other, other_radius)| {
-                                        at.distance(*other) < (reach + other_radius) * CLEARANCE
-                                    })
-                                })
-                        })
-                    });
-                    let shape = Oblong {
-                        centre: at,
-                        axis: *direction,
-                        half: Vec2::new(across, deep) * 0.5,
-                    };
-                    back += deep + yards.random_range(BACKYARD.0..BACKYARD.1);
-                    if clash || in_a_road(&roads, &shape) {
-                        continue;
-                    }
-                    taken.entry(cell).or_default().push((at, reach));
-
-                    let half = Vec2::new(across, deep) * 0.5;
-                    blocks.push(Block {
-                        area: Rect::new(at - Vec2::splat(reach), at + Vec2::splat(reach)),
-                        paved: false,
-                        district,
-                        buildings: vec![Building {
-                            footprint: Rect::new(at - half, at + half),
-                            facing: Some(yaw),
-                            // One or two storeys, whatever the street in front
-                            // is: this is a shed, not a second house.
-                            height: yards.random_range(BACK_HEIGHT.0..BACK_HEIGHT.1),
-                            palette: yards.random_range(0..PALETTE_SIZE),
-                            kind: BuildingKind::Apartments,
-                        }],
-                        vacants: Vec::new(),
-                        arterial: [false; 4],
-                        quarter: None,
-                    });
+                    along += span;
                 }
             }
         }
     }
 
     (blocks, holes)
+}
+
+/// Which cell of the clash grid a point falls in.
+fn cell_of(at: Vec2) -> (i32, i32) {
+    ((at.x / CELL).floor() as i32, (at.y / CELL).floor() as i32)
+}
+
+/// Files a shape under every cell its extent reaches.
+///
+/// Under *every* cell, not just the one its middle is in: a terrace is up to
+/// ninety metres long and the grid is twenty, so filing it by its centre and
+/// looking it up in the eight cells around that would miss two thirds of it.
+fn file(taken: &mut HashMap<(i32, i32), Vec<Oblong>>, shape: Oblong) {
+    let reach = shape.half.x.abs() + shape.half.y.abs();
+    let (low, high) = (
+        cell_of(shape.centre - Vec2::splat(reach)),
+        cell_of(shape.centre + Vec2::splat(reach)),
+    );
+    for x in low.0..=high.0 {
+        for z in low.1..=high.1 {
+            taken.entry((x, z)).or_default().push(shape);
+        }
+    }
+}
+
+/// Does this shape stand in something already built?
+fn clashes(taken: &HashMap<(i32, i32), Vec<Oblong>>, shape: &Oblong, margin: f32) -> bool {
+    let reach = shape.half.x.abs() + shape.half.y.abs();
+    let (low, high) = (
+        cell_of(shape.centre - Vec2::splat(reach)),
+        cell_of(shape.centre + Vec2::splat(reach)),
+    );
+    for x in low.0..=high.0 {
+        for z in low.1..=high.1 {
+            if taken
+                .get(&(x, z))
+                .is_some_and(|near| near.iter().any(|other| shape.clashes_with(other, margin)))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ------------------------------------------------------------- terraces ----
+
+/// The longest a single straight terrace may run, in metres.
+///
+/// A real street wall is not infinitely long even where the street is straight:
+/// it steps, it changes hands, a passage goes through. Ninety metres is about
+/// eight houses, which is a block side in an old town.
+const TERRACE_MAX: f32 = 90.0;
+
+/// How far the street may wander from the straight line its terrace stands on.
+///
+/// This is what turns a curve into architecture instead of into a fan. A row of
+/// houses is straight, so a curved street is built as a few straight rows set
+/// at slight angles to one another — which is exactly what a curved Altstadt
+/// street is. Let the sag grow and the row starts leaving the pavement; hold it
+/// too tight and every house is its own terrace again, which is the bug.
+const CHORD_SAG: f32 = 1.2;
+
+/// How finely the marcher looks for the end of a terrace, and how far it steps
+/// on when it cannot open one here.
+const CHORD_STEP: f32 = 4.0;
+
+/// How sharply a street may turn and still be the same street.
+///
+/// Past this the two arms are built as separate runs even though nothing else
+/// arrives at the node, because a terrace cannot turn a corner and pretending
+/// otherwise puts a ninety-metre straight row across the inside of a bend.
+const RUN_BREAK: f32 = 0.61; // 35 degrees
+
+/// How much wider one arm may be than the last and still be the same street.
+const RUN_WIDTH_STEP: f32 = 3.0;
+
+/// How close two rows may come before they are the same building.
+const CLEARANCE_GAP: f32 = 0.5;
+
+/// One street, followed as far as it goes.
+///
+/// This is the unit a town is composed of, and the one this module used not to
+/// have. Everything used to be built per *polyline segment, per side*: on the
+/// committed Landshut that is about five thousand independent one-house rows,
+/// each deriving its own yaw from its own segment's normal. Consecutive houses
+/// on the same street came out a median of four degrees apart and often twenty,
+/// which is precisely the "everything stands crosswise" the town read as. Six
+/// runs in ten were a single building long, and a third of the edges built
+/// nothing at all because nine metres of junction clearance was taken off both
+/// ends of a thirteen-metre segment.
+///
+/// A run is a maximal chain of edges joined through nodes where nothing else
+/// arrives, broken where the street turns sharply, changes width or changes
+/// surface — because those are the places a street wall really does stop.
+struct Run {
+    /// The polyline, in order.
+    points: Vec<Vec2>,
+    /// Arc length from the start to each point. One longer than `edges`.
+    reach: Vec<f32>,
+    /// Which edge each segment came from.
+    edges: Vec<super::roadgraph::EdgeId>,
+    /// Half the widest carriageway in the run, plus a pavement: the building
+    /// line, held constant so a row does not step where the street widens.
+    line: f32,
+    /// Whether any of it is an arterial.
+    arterial: bool,
+    /// The nodes at the two ends, for the junction clearance.
+    ends: (super::roadgraph::NodeId, super::roadgraph::NodeId),
+}
+
+/// One straight row of houses waiting to be built.
+struct Terrace {
+    /// Where it starts, on the building line's own axis.
+    at: Vec2,
+    /// The direction it runs in: the chord of the piece of street it covers.
+    axis: Vec2,
+    /// How long that chord is.
+    span: f32,
+    /// The building line for this row.
+    line: f32,
+    arterial: bool,
+}
+
+impl Run {
+    fn total(&self) -> f32 {
+        self.reach.last().copied().unwrap_or(0.0)
+    }
+
+    /// How much of one end has to be kept clear of the crossing there.
+    fn clearance(&self, layout: &CityLayout, at_start: bool) -> f32 {
+        let node = if at_start { self.ends.0 } else { self.ends.1 };
+        if layout.graph.node(node).edges.len() >= 3 {
+            JUNCTION_CLEAR
+        } else {
+            BEND_CLEAR
+        }
+    }
+
+    /// The point `along` metres down the run, the direction there, which edge
+    /// it belongs to, how far along that edge it is, and the building line.
+    fn at(&self, along: f32) -> Option<(Vec2, Vec2, super::roadgraph::EdgeId, f32, f32)> {
+        let along = along.clamp(0.0, self.total());
+        let index = match self.reach.binary_search_by(|r| r.total_cmp(&along)) {
+            Ok(i) => i.min(self.edges.len().saturating_sub(1)),
+            Err(i) => i.saturating_sub(1).min(self.edges.len().saturating_sub(1)),
+        };
+        let (a, b) = (*self.points.get(index)?, *self.points.get(index + 1)?);
+        let axis = Dir2::new(b - a).ok()?;
+        let into = along - self.reach[index];
+        Some((a + *axis * into, *axis, self.edges[index], into, self.line))
+    }
+
+    /// The longest straight row that can be opened at `from` without the street
+    /// wandering out from under it.
+    ///
+    /// Grown a step at a time rather than solved, because the test is a maximum
+    /// over the covered points and there is no closed form for it. The step is
+    /// four metres, which on a Landshut street is a good deal finer than a
+    /// house.
+    fn terrace(&self, from: f32, until: f32) -> Option<Terrace> {
+        let (at, _, _, _, line) = self.at(from)?;
+        let mut span = 0.0f32;
+        let mut axis = Vec2::X;
+        let mut reach = (from + CHORD_STEP).min(until);
+        while reach > from {
+            let Some((end, _, _, _, _)) = self.at(reach) else {
+                break;
+            };
+            let Ok(chord) = Dir2::new(end - at) else {
+                break;
+            };
+            if self.sag(from, reach, at, *chord) > CHORD_SAG {
+                break;
+            }
+            span = at.distance(end);
+            axis = *chord;
+            if reach >= until || reach - from >= TERRACE_MAX {
+                break;
+            }
+            reach = (reach + CHORD_STEP).min(until);
+        }
+        (span > 0.0).then_some(Terrace {
+            at,
+            axis,
+            span,
+            line,
+            arterial: self.arterial,
+        })
+    }
+
+    /// How far the street strays from a chord laid across it.
+    fn sag(&self, from: f32, to: f32, at: Vec2, axis: Vec2) -> f32 {
+        let across = Vec2::new(-axis.y, axis.x);
+        let mut worst = 0.0f32;
+        let mut along = from;
+        while along < to {
+            if let Some((point, _, _, _, _)) = self.at(along) {
+                worst = worst.max((point - at).dot(across).abs());
+            }
+            along += CHORD_STEP;
+        }
+        worst
+    }
+}
+
+/// Chains the road graph's edges into streets.
+///
+/// Deterministic without drawing anything: edges are visited in `EdgeId` order
+/// and each chain is extended greedily, so the same graph always gives the same
+/// runs. It has to be — this decides where every house in the town stands.
+fn runs(layout: &CityLayout) -> Vec<Run> {
+    let graph = &layout.graph;
+    let mut seen = vec![false; graph.edge_count()];
+    let mut out = Vec::new();
+
+    // The one edge that carries on from `edge` at `node`, if the street does.
+    let carries_on = |edge_id: super::roadgraph::EdgeId, node: super::roadgraph::NodeId| {
+        let node_ref = graph.node(node);
+        if node_ref.edges.len() != 2 {
+            return None;
+        }
+        let mine = graph.edge(edge_id);
+        let next_id = *node_ref.edges.iter().find(|e| **e != edge_id)?;
+        let next = graph.edge(next_id);
+        if (next.width - mine.width).abs() > RUN_WIDTH_STEP || next.surface != mine.surface {
+            return None;
+        }
+        // The turn between the two, measured as the angle the walker turns
+        // through rather than the angle between the two arms.
+        let far = |e: &super::roadgraph::RoadEdge, from: super::roadgraph::NodeId| {
+            if e.a == from { e.b } else { e.a }
+        };
+        let before = graph.node(node).pos - graph.node(far(mine, node)).pos;
+        let after = graph.node(far(next, node)).pos - graph.node(node).pos;
+        let (Ok(before), Ok(after)) = (Dir2::new(before), Dir2::new(after)) else {
+            return None;
+        };
+        (before.dot(*after) > RUN_BREAK.cos()).then_some((next_id, far(next, node)))
+    };
+
+    for start in 0..graph.edge_count() {
+        if seen[start] {
+            continue;
+        }
+        let start_id = super::roadgraph::EdgeId(start as u32);
+        seen[start] = true;
+        let edge = graph.edge(start_id);
+        let mut chain = std::collections::VecDeque::from([start_id]);
+        let mut nodes = std::collections::VecDeque::from([edge.a, edge.b]);
+
+        // Forwards, then backwards, from the two ends of the seed edge.
+        for forward in [true, false] {
+            loop {
+                let (tip_edge, tip_node) = if forward {
+                    (*chain.back().unwrap(), *nodes.back().unwrap())
+                } else {
+                    (*chain.front().unwrap(), *nodes.front().unwrap())
+                };
+                let Some((next_id, beyond)) = carries_on(tip_edge, tip_node) else {
+                    break;
+                };
+                if seen[next_id.0 as usize] {
+                    break;
+                }
+                seen[next_id.0 as usize] = true;
+                if forward {
+                    chain.push_back(next_id);
+                    nodes.push_back(beyond);
+                } else {
+                    chain.push_front(next_id);
+                    nodes.push_front(beyond);
+                }
+            }
+        }
+
+        let nodes: Vec<_> = nodes.into();
+        let edges: Vec<_> = chain.into();
+        let points: Vec<Vec2> = nodes.iter().map(|n| graph.node(*n).pos).collect();
+        let mut reach = Vec::with_capacity(points.len());
+        let mut running = 0.0;
+        reach.push(0.0);
+        for pair in points.windows(2) {
+            running += pair[0].distance(pair[1]);
+            reach.push(running);
+        }
+        let widest = edges
+            .iter()
+            .map(|e| graph.edge(*e).width)
+            .fold(0.0f32, f32::max);
+        out.push(Run {
+            line: widest * 0.5 + SIDEWALK_WIDTH,
+            arterial: edges.iter().any(|e| graph.edge(*e).arterial),
+            ends: (nodes[0], *nodes.last().unwrap()),
+            points,
+            reach,
+            edges,
+        });
+    }
+    out
 }
 
 /// Is this rectangle standing in a street?

@@ -621,7 +621,14 @@ const MASK_SIZE: u32 = 1024;
 /// metres is about as deep as the back land of a European town goes before it
 /// turns into whatever the middle of the block is; it is also, not by accident,
 /// a little more than the deepest plot `streetside` hands out.
-const BACKLAND: f32 = 34.0;
+///
+/// That last clause was wishful for a while. `streetside` stacks up to three
+/// outbuildings behind a house, each advancing the back line whether or not it
+/// was built on, and the third landed sixty-five metres out — past this, past
+/// the shaded ground, and past [`terrain::LEVEL_REACH`], which is where the
+/// ground stops being exactly zero and a hard-written y stops being true. It
+/// is a limit now rather than an observation, which is why it is `pub(crate)`.
+pub(crate) const BACKLAND: f32 = 34.0;
 
 /// And how far out is still town at all.
 ///
