@@ -80,11 +80,19 @@ on load.
 
 ## Map data — [OpenStreetMap](https://www.openstreetmap.org), ODbL 1.0
 
-`assets/cities/landshut.ron` is Landshut's street network: five hundred and
-fifty-four streets with their real names, widths and shapes, in a square about
-two kilometres across centred on the Altstadt. It is baked from an Overpass
-extract by `tools/fetch-city.sh`, which downloads it, and `tools/bake-city.py`,
-which projects it into metres.
+`assets/cities/landshut.ron` is Landshut itself, in a square about two
+kilometres across centred on the Altstadt:
+
+- five hundred and fifty streets with their real names, widths and surfaces;
+- two thousand six hundred buildings where they really stand, each reduced to
+  the smallest rotated rectangle that holds it, with the storeys the mappers
+  counted and what the tags say it is for;
+- the Isar and its arms — Große Isar, Kleine Isar — and the mill races;
+- and eighty-five pieces of open ground: the parks, the pitches, the
+  allotments, the cemetery.
+
+It is baked from Overpass extracts by `tools/fetch-city.sh`, which downloads
+them, and `tools/bake-city.py`, which projects them into metres.
 
 **Map data © OpenStreetMap contributors**, licensed under the
 [Open Database Licence 1.0](https://opendatacommons.org/licenses/odbl/1-0/).

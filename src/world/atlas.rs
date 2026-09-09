@@ -38,8 +38,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use super::citygen::CityLayout;
+use super::citygen::{Block, Building, BuildingKind, CityLayout, Rect};
 use super::roadgraph::RoadGraph;
+use crate::core::config::CityStyle;
 
 /// One town, as baked by `tools/bake-city.py`.
 #[derive(Debug, Clone, Deserialize)]
@@ -50,6 +51,78 @@ pub struct Atlas {
     /// says where it is of.
     pub centre: (f64, f64),
     pub streets: Vec<Street>,
+    /// The town's real buildings, where they really stand.
+    ///
+    /// Defaulted like [`Street::surface`], so an atlas baked before any of this
+    /// existed still loads as the street plan it was.
+    #[serde(default)]
+    pub buildings: Vec<Footprint>,
+    /// Its rivers and streams.
+    #[serde(default)]
+    pub waters: Vec<Water>,
+    /// And the ground that is not built on.
+    #[serde(default)]
+    pub grounds: Vec<Ground>,
+}
+
+/// One building, as the smallest rotated rectangle that contains it.
+///
+/// A rectangle rather than the polygon it came from, and that is not a
+/// concession — it is the shape [`crate::world::citygen::Building`] already is.
+/// A footprint there is read as `frontage x depth` in the building's own frame
+/// with a `facing` yaw, precisely because a town read off a map has no blocks
+/// and no four sides to choose between. So the bake reduces each OSM way to its
+/// minimum-area enclosing rectangle and the whole of it drops into the existing
+/// mesh path: no new geometry, no polygon extrusion, and every shell, gable,
+/// sign, doorway and chimney follows the same yaw it always did.
+///
+/// What that gives up is the courtyard in a ring-shaped block. The bake throws
+/// away any footprint that fills less than about half its own box for that
+/// reason: a rectangle stamped over a courtyard block is a solid lump where a
+/// courtyard should be, and an invented terrace is better than a wrong solid.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Footprint {
+    pub centre: (f32, f32),
+    /// Which way the frontage runs, in the same convention `Building::facing`
+    /// uses: `+Z` out across the pavement.
+    pub yaw: f32,
+    pub frontage: f32,
+    pub depth: f32,
+    /// What the mappers measured or counted, in metres. `None` where they did
+    /// neither, and then the city style decides as it always has — four fifths
+    /// of this town is `None`.
+    pub height: Option<f32>,
+    /// What the tags say it is for, where they say anything the game draws
+    /// differently.
+    pub kind: Option<crate::world::citygen::BuildingKind>,
+}
+
+/// A river, a stream or a mill race.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Water {
+    pub name: String,
+    pub width: f32,
+    pub points: Vec<(f32, f32)>,
+}
+
+/// A piece of ground that is not built on and is not a street.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum GroundKind {
+    Grass,
+    Park,
+    Cemetery,
+    Trees,
+    Allotments,
+    Field,
+    Pitch,
+    Playground,
+    Parking,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Ground {
+    pub kind: GroundKind,
+    pub points: Vec<(f32, f32)>,
 }
 
 /// What a street is paved with.
@@ -163,6 +236,56 @@ pub struct Signposts {
 ///
 /// The blocks come out empty and that is not an oversight — see
 /// `frontage_lots`, which is what fills a real city instead.
+/// The town's real buildings, turned into the layout's own blocks.
+///
+/// One block per building, which is what `streetside` already produces for an
+/// atlas city: a real block is not a rectangle and nothing downstream wants one
+/// to be. Anything whose middle is outside the square the game builds is
+/// dropped, the same rule the streets take.
+pub fn footprints(atlas: &Atlas, seed: u64, half_extent: f32, style: CityStyle) -> Vec<Block> {
+    use crate::core::rng::{stream, stream_for};
+    use rand::RngExt;
+
+    // Its own stream, drawn after nothing and before nothing: a palette or a
+    // storey height taken here must not move a single invented terrace, and the
+    // terraces draw from `stream::BUILDINGS`.
+    let mut rng = stream_for(seed, stream::ATLAS);
+    let mut blocks = Vec::new();
+    for plot in &atlas.buildings {
+        let centre = Vec2::new(plot.centre.0, plot.centre.1);
+        if centre.x.abs() > half_extent || centre.y.abs() > half_extent {
+            continue;
+        }
+        let half = Vec2::new(plot.frontage, plot.depth) * 0.5;
+        let district = super::streetside::district_at(centre, half_extent, false);
+        // What the mappers counted, where they counted it. Where they did not —
+        // four buildings in five — the style decides, exactly as it does for an
+        // invented one, so a Landshut townhouse is a Landshut townhouse whether
+        // or not somebody typed its storeys into OSM.
+        let (low, high) = style.heights(district.height_range());
+        let height = plot
+            .height
+            .map(|metres| metres.clamp(low.min(high), high.max(low) * 1.6))
+            .unwrap_or_else(|| rng.random_range(low..high));
+        blocks.push(Block {
+            area: Rect::new(centre - Vec2::splat(half.length()), centre + Vec2::splat(half.length())),
+            paved: false,
+            district,
+            buildings: vec![Building {
+                footprint: Rect::new(centre - half, centre + half),
+                facing: Some(plot.yaw),
+                height,
+                palette: rng.random_range(0..super::citygen::PALETTE_SIZE),
+                kind: plot.kind.unwrap_or(BuildingKind::Apartments),
+            }],
+            vacants: Vec::new(),
+            arterial: [false; 4],
+            quarter: None,
+        });
+    }
+    blocks
+}
+
 pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signposts) {
     let mut graph = RoadGraph::default();
     // Junction welding: two ways that share an OSM node project to the same
@@ -259,6 +382,9 @@ mod tests {
             name: "Test".into(),
             centre: (0.0, 0.0),
             streets,
+            buildings: Vec::new(),
+            waters: Vec::new(),
+            grounds: Vec::new(),
         }
     }
 
@@ -308,6 +434,72 @@ mod tests {
                 .iter()
                 .any(|street| street.name == "Altstadt" && street.surface == Surface::Sett),
             "the Altstadt is not cobbled"
+        );
+    }
+
+    /// The extract now carries more than its streets, and every one of those
+    /// fields is a promise to a match arm somewhere. Nothing else in the suite
+    /// would notice a re-bake that quietly stopped emitting buildings, or one
+    /// that started emitting a retail shed the length of a street.
+    #[test]
+    fn the_committed_landshut_stands_its_own_buildings_on_its_own_ground() {
+        let Some(town) = load("landshut") else {
+            return;
+        };
+        assert!(
+            town.buildings.len() > 2000,
+            "only {} of Landshut's buildings came off the map",
+            town.buildings.len()
+        );
+
+        // A townhouse, not a shed and not a shopping centre. The median plot in
+        // this town is about 17 m by 11; the bake drops anything under 24 m² as
+        // a bin store and anything over 78 m by 46 as something the game has no
+        // mesh for.
+        for plot in &town.buildings {
+            assert!(
+                plot.frontage >= 1.0 && plot.frontage <= 78.0,
+                "a {} m frontage at {:?}",
+                plot.frontage,
+                plot.centre
+            );
+            assert!(plot.depth >= 1.0 && plot.depth <= 46.0, "{} m deep", plot.depth);
+            assert!(plot.frontage >= plot.depth, "a plot deeper than it is wide");
+            if let Some(height) = plot.height {
+                assert!((2.0..=140.0).contains(&height), "{height} m tall");
+            }
+        }
+
+        // Landshut is a town on a braided river and the atlas has to know it.
+        // Three arms, each better than three kilometres inside the square.
+        for arm in ["Isar", "Große Isar", "Kleine Isar"] {
+            let run: f32 = town
+                .waters
+                .iter()
+                .filter(|water| water.name == arm)
+                .flat_map(|water| {
+                    water
+                        .points
+                        .windows(2)
+                        .map(|p| Vec2::new(p[0].0, p[0].1).distance(Vec2::new(p[1].0, p[1].1)))
+                        .collect::<Vec<_>>()
+                })
+                .sum();
+            assert!(run > 2_000.0, "the {arm} is only {run} m long");
+        }
+        // And a river is drawn as a band, not as a canal: the bake densifies to
+        // twelve metres and smooths, so no run may be a long straight.
+        for water in &town.waters {
+            for pair in water.points.windows(2) {
+                let step = Vec2::new(pair[0].0, pair[0].1).distance(Vec2::new(pair[1].0, pair[1].1));
+                assert!(step < 20.0, "a {step} m straight in the {}", water.name);
+            }
+        }
+
+        assert!(
+            town.grounds.len() > 40,
+            "only {} pieces of open ground",
+            town.grounds.len()
         );
     }
 

@@ -45,6 +45,14 @@ const KERB_SET_BACK: f32 = 0.7;
 /// Distance between lamp posts along a street.
 const LAMP_SPACING: f32 = 28.0;
 
+/// How close two lamp posts may stand, in metres.
+///
+/// Not a spacing -- [`LAMP_SPACING`] is the spacing. This is the distance below
+/// which two posts are the same post seen twice, which happens wherever one
+/// street is mapped as several parallel ways and each of them lights its own
+/// two kerbs.
+const LAMP_APART: f32 = 13.0;
+
 /// How much room a post needs to not be standing in a road, in metres.
 ///
 /// The column is a hand's width; this is a little more, so a post is rejected
@@ -143,7 +151,23 @@ pub struct LampPosts(pub Vec<LampPost>);
 impl LampPosts {
     pub fn build(city: &City, corridors: &super::streetside::Corridors) -> Self {
         let graph = &city.graph;
-        let mut posts = Vec::new();
+        let mut posts: Vec<LampPost> = Vec::new();
+        // Where a post has already been put, by cell, so the next one can ask.
+        //
+        // A town read off a map has its main streets mapped as several parallel
+        // ways -- Landshut's Altstadt is twenty-two of them -- and each is lit
+        // on both kerbs by a spawner that can only see one edge at a time. What
+        // that plants is a thicket: half a dozen columns across a market square
+        // that wants two rows. This is the one thing an edge cannot know by
+        // itself, so it is asked of everything placed so far.
+        let mut placed: bevy::platform::collections::HashMap<(i32, i32), Vec<Vec2>> =
+            bevy::platform::collections::HashMap::default();
+        let cell_of = |at: Vec2| {
+            (
+                (at.x / LAMP_APART).floor() as i32,
+                (at.y / LAMP_APART).floor() as i32,
+            )
+        };
 
         for edge in graph.edges() {
             let a = graph.node(edge.a).pos;
@@ -176,13 +200,26 @@ impl LampPosts {
                 // in a carriageway is the complaint this was written for. Try
                 // the other kerb before giving the slot away — at a junction it
                 // is usually only one side that is another street's tarmac.
+                let crowded = |foot: Vec2| {
+                    let cell = cell_of(foot);
+                    (-1..=1).any(|dx| {
+                        (-1..=1).any(|dz| {
+                            placed
+                                .get(&(cell.0 + dx, cell.1 + dz))
+                                .is_some_and(|near| {
+                                    near.iter().any(|other| other.distance(foot) < LAMP_APART)
+                                })
+                        })
+                    })
+                };
                 let Some((foot, side)) = [first, -first]
                     .into_iter()
                     .map(|side| (at + normal * offset * side, side))
-                    .find(|(foot, _)| !corridors.in_the_road(*foot, LAMP_GIRTH))
+                    .find(|(foot, _)| !corridors.in_the_road(*foot, LAMP_GIRTH) && !crowded(*foot))
                 else {
                     continue;
                 };
+                placed.entry(cell_of(foot)).or_default().push(foot);
                 posts.push(LampPost {
                     foot,
                     // Whichever kerb it stands on, the arm reaches the other

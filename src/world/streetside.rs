@@ -1387,7 +1387,7 @@ pub fn spawn_junction(
 ///
 /// Read off the two things an extract actually knows: how far from the middle
 /// it is, and whether the street is a main road.
-fn district_at(at: Vec2, half_extent: f32, arterial: bool) -> District {
+pub(crate) fn district_at(at: Vec2, half_extent: f32, arterial: bool) -> District {
     let out = at.length() / half_extent.max(1.0);
     match out {
         r if r < CORE && arterial => District::Downtown,
@@ -1558,7 +1558,22 @@ fn corridors(layout: &CityLayout) -> HashMap<(i32, i32), Vec<(super::roadgraph::
 /// by [`spawn_edge`] instead — which is what lets every downstream spawner,
 /// from the facade shells to the geraniums, take a real town without knowing
 /// there is one.
-pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Frontage) {
+pub fn lots(
+    layout: &CityLayout,
+    seed: u64,
+    style: CityStyle,
+    // The town's real buildings, already turned into blocks by
+    // `atlas::footprints`. They are laid down first and filed into the clash
+    // grid, and the terrace marcher then fills what is left — so where OSM
+    // knows a street, the street is the real one, and where it does not, an
+    // invented terrace stands rather than a hole.
+    //
+    // There is no separate "is this side covered?" pass and there does not need
+    // to be: a terrace is already tested as a whole against everything placed,
+    // and it already shortens from its far end rather than losing a tooth.
+    // Real buildings are simply the first things placed.
+    real: Vec<Block>,
+) -> (Vec<Block>, Frontage) {
     let mut rng = crate::core::rng::stream_for(seed, crate::core::rng::stream::BUILDINGS);
     // A second stream, and it has to be second. What goes across a gap is
     // decided *inside* the walk down each street, so drawing it from the
@@ -1578,6 +1593,39 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Fr
     let mut taken: HashMap<(i32, i32), Vec<Oblong>> = HashMap::default();
     let roads = corridors(layout);
     let scale = style.lot_scale();
+
+    let mut mapped = 0usize;
+    let mut in_the_way = 0usize;
+    for block in real {
+        let building = &block.buildings[0];
+        let yaw = building.facing.unwrap_or(0.0);
+        let plot = Oblong {
+            centre: building.footprint.center(),
+            // `facing` turns +Z outwards, so local +X — the frontage — is the
+            // way the street runs.
+            axis: Vec2::new(yaw.cos(), -yaw.sin()),
+            half: building.footprint.size() * 0.5,
+        };
+        // A real building can still be standing in the game's road, and it is
+        // the road that is wrong: a carriageway width here is guessed from the
+        // `lanes` tag at three metres a lane, and a medieval market street is
+        // narrower between its houses than its traffic lanes imply. Measured,
+        // 425 of Landshut's 2629 footprints have a corner inside one. The
+        // patrol found it before this test did — it walked one junction in
+        // forty seconds and then reported that the player had stopped moving.
+        //
+        // Against the tarmac rather than the corridor, and with a metre of
+        // slack, because a real house genuinely does stand on the back of the
+        // pavement and that is not the failure. Whatever is dropped here, the
+        // terrace marcher fills.
+        if on_the_carriageway(&roads, &plot, 1.0) {
+            in_the_way += 1;
+            continue;
+        }
+        file(&mut taken, plot);
+        blocks.push(block);
+        mapped += 1;
+    }
 
     for run in runs(layout) {
         let total = run.total();
@@ -1805,6 +1853,12 @@ pub fn lots(layout: &CityLayout, seed: u64, style: CityStyle) -> (Vec<Block>, Fr
         }
     }
 
+    info!(
+        "{mapped} of the town's buildings are its own ({in_the_way} of them stood \
+         in a street and were left out); {} more were invented to fill what the \
+         map does not know",
+        blocks.len() - mapped
+    );
     (blocks, holes)
 }
 
@@ -2164,6 +2218,42 @@ fn on_another_carriageway(
             })
         })
     })
+}
+
+/// Is this shape standing on tarmac?
+///
+/// The carriageway alone, filed by every cell the shape reaches rather than the
+/// nine round its middle — a building read off a map can be seventy metres long
+/// and the grid is twenty.
+fn on_the_carriageway(
+    roads: &HashMap<(i32, i32), Vec<(super::roadgraph::EdgeId, Oblong)>>,
+    shape: &Oblong,
+    margin: f32,
+) -> bool {
+    let reach = shape.half.x.abs() + shape.half.y.abs();
+    let (low, high) = (
+        cell_of(shape.centre - Vec2::splat(reach)),
+        cell_of(shape.centre + Vec2::splat(reach)),
+    );
+    for x in low.0..=high.0 {
+        for z in low.1..=high.1 {
+            if roads.get(&(x, z)).is_some_and(|near| {
+                near.iter().any(|(_, road)| {
+                    shape.clashes_with(
+                        &Oblong {
+                            centre: road.centre,
+                            axis: road.axis,
+                            half: Vec2::new(road.half.x, road.half.y - SIDEWALK_WIDTH),
+                        },
+                        margin,
+                    )
+                })
+            }) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn in_another_road(
@@ -2630,7 +2720,7 @@ mod tests {
             graph,
             canal: None,
         };
-        let (blocks, holes) = lots(&layout, 1, CityStyle::Landshuepf);
+        let (blocks, holes) = lots(&layout, 1, CityStyle::Landshuepf, Vec::new());
         assert!(!blocks.is_empty(), "nothing was built at all");
         assert!(!holes.is_empty(), "a town with no gaps in its frontage");
 

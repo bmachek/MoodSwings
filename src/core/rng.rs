@@ -122,6 +122,17 @@ pub mod stream {
     /// that moved between two visits to the same chunk would be a hill that
     /// moved while the player was looking at it.
     pub const TERRAIN: u64 = 32;
+
+    /// The buildings a real town already has: the palette and, where the
+    /// mappers counted no storeys, the height of every footprint read off the
+    /// baked OSM extract.
+    ///
+    /// Its own stream and not `BUILDINGS`, for the usual reason sharpened by
+    /// what these two now do together: `BUILDINGS` marches the invented
+    /// terraces that fill the gaps *between* the real footprints, so drawing a
+    /// real building's palette from it would mean that a re-bake of the extract
+    /// — one new house in OSM — reshuffled every invented street in the town.
+    pub const ATLAS: u64 = 33;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

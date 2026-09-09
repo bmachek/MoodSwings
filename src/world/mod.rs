@@ -122,24 +122,40 @@ fn generate_city(
     // from the seed. A named town that will not load falls back to the
     // generator with a warning rather than to an empty world — the same
     // discipline a missing sound gets.
-    let layout = config
-        .city
-        .atlas()
-        .and_then(atlas::load)
-        .map(|town| atlas::layout(&town, config.world_seed, config.world.half_extent))
+    // Kept rather than consumed, because the streets are no longer all it
+    // holds: its buildings, its water and its open ground are read further
+    // down, once the road network exists to place them against.
+    let town = config.city.atlas().and_then(atlas::load);
+    let (mut layout, signs) = town
+        .as_ref()
+        .map(|town| atlas::layout(town, config.world_seed, config.world.half_extent))
         .unwrap_or_else(|| {
             (
                 citygen::generate(config.world_seed, config.world.half_extent, config.city),
                 atlas::Signposts::default(),
             )
         });
-    let (mut layout, signs) = layout;
     // A town read off a map arrives as a road network and nothing else. What
     // fills it is not blocks — a real block is not a rectangle — but frontages
     // marched down each side of each street; see `world::streetside`.
     let mut frontage = streetside::Frontage::default();
     if layout.blocks.is_empty() {
-        let (blocks, holes) = streetside::lots(&layout, config.world_seed, config.city);
+        // What the map actually knows: the town's own buildings, where they
+        // really stand and at the angle they really stand at. The marcher then
+        // fills the rest — see `streetside::lots`.
+        let real = town
+            .as_ref()
+            .map(|atlas| {
+                atlas::footprints(
+                    atlas,
+                    config.world_seed,
+                    config.world.half_extent,
+                    config.city,
+                )
+            })
+            .unwrap_or_default();
+        let (blocks, holes) =
+            streetside::lots(&layout, config.world_seed, config.city, real);
         layout.blocks = blocks;
         frontage = holes;
     }

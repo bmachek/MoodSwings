@@ -121,7 +121,7 @@ pub struct Street {
 /// [`zone_civics`], a pass over the *finished* layout with its own
 /// `stream::ZONING`, for the same reason: a new civic building must never
 /// reshuffle the city around it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
 pub enum BuildingKind {
     Apartments,
     Offices,
