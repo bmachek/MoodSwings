@@ -84,6 +84,16 @@ readings already — a "free" change and a "2ms regression" that were both noise
 so compare like with like, and rerun two or three times, because the spread over
 a settled window is under half a millisecond and over the default one is not.
 
+Compare like with like in *time* as well. The same binary and the same framing
+measured 30.4 ms with the machine cool and 35.5 ms twenty minutes later, which
+is bigger than most changes worth making; a before/after taken half an hour
+apart is measuring the fan. Build the old commit and the new one back to back
+and shoot them in the same minute — `git stash -u`, `git checkout <base>`,
+`cargo build --release`, measure, come back. It costs three minutes of
+compiling and it is the difference between "eleven percent slower" and "twelve
+percent faster", both of which this repository has now reported about the same
+change.
+
 The seed a capture builds is the *persisted* one from the player's options file,
 not the code default — so a position probed in a citygen unit test is a position
 in a different city. Probe with a temporary `info!` in the spawn path instead.
