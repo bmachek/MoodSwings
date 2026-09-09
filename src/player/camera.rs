@@ -95,11 +95,45 @@ impl Plugin for CameraPlugin {
     }
 }
 
+/// How far the camera can see, in metres.
+///
+/// Bevy's default is a thousand, and that was the number that decided how big
+/// this world was allowed to be. It is not a soft limit: the clip matrix is a
+/// reverse-Z infinite projection, but `compute_frustum` builds a real far
+/// plane out of this value, so anything past it is culled outright. The town
+/// is two kilometres across, the landscape `world::terrain` raises starts at
+/// twelve hundred metres and is only at full height at three and a half
+/// thousand — every hill of it was being thrown away before it reached the
+/// rasteriser, which is why raising this and putting relief in the ground had
+/// to be the same change.
+///
+/// Twenty kilometres, which is where the ground mesh itself stops. Anything
+/// shorter cuts the ground off *before* the horizon, and what shows in the gap
+/// is the atmosphere's own planet surface — a different colour, arriving along
+/// a ruled horizontal line. Cutting at the horizon instead means there is no
+/// gap.
+///
+/// Costs nothing per frame: the far plane is a culling half-space,
+/// not a depth range — the depth buffer is reverse-Z and infinite either way,
+/// so precision near the camera is exactly what it was.
+const SIGHT: f32 = 20_000.0;
+
+/// And how close. Bevy's own default, written down rather than inherited,
+/// because the depth precision of everything laid flat on the ground is
+/// `distance² × 2⁻²³ / near` and `world::layer` does arithmetic with that
+/// number.
+const NEAR: f32 = 0.1;
+
 fn spawn_camera(mut commands: Commands) {
     let rig = CameraRig::default();
     commands.spawn((
         Name::new("Camera"),
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            near: NEAR,
+            far: SIGHT,
+            ..default()
+        }),
         // With a minimap camera in the world too, UI needs to be told which
         // view it belongs to; otherwise the HUD silently renders nowhere.
         IsDefaultUiCamera,

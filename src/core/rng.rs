@@ -116,6 +116,12 @@ pub mod stream {
     /// walk down each street, so a draw taken from the same stream would shift
     /// every frontage after it and rebuild the whole town from the same seed.
     pub const YARDS: u64 = 31;
+    /// Where the hills are. Sampled through `key_for` rather than drawn, like
+    /// the weather and the canal: the shape of the ground is a fact about the
+    /// seed, the whole world regenerates its chunks from that seed, and a hill
+    /// that moved between two visits to the same chunk would be a hill that
+    /// moved while the player was looking at it.
+    pub const TERRAIN: u64 = 32;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
