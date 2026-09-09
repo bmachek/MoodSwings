@@ -387,7 +387,10 @@ fn drive_traffic(
                 });
             }
             if driver.stuck > GIVE_UP {
-                commands.entity(entity).despawn();
+                // `try_despawn`: `maintain_population` recycles by distance in
+                // the same frame, and a car that is both stuck and out of
+                // range is despawned twice.
+                commands.entity(entity).try_despawn();
             }
         } else {
             driver.stuck = 0.0;

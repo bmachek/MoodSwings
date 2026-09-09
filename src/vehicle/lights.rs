@@ -255,7 +255,9 @@ fn switch_beams(
                     }
                 });
             }
-            (false, Some(beam)) => commands.entity(beam).despawn(),
+            // Forgiving: the beam is a child of a car, and a car recycled by
+            // the traffic population took it with it.
+            (false, Some(beam)) => commands.entity(beam).try_despawn(),
             (false, None) => {}
         }
     }

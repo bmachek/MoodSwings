@@ -772,7 +772,9 @@ fn busk(
         let Some(mut busking) = busking else { continue };
         busking.left -= dt;
         if busking.left <= 0.0 || loitering.is_none() || launched.is_some() {
-            commands.entity(busking.emitter).despawn();
+            // Forgiving: the emitter is a child of the performer, and a
+            // performer despawned by the crowd's own recycling took it along.
+            commands.entity(busking.emitter).try_despawn();
             commands.entity(entity).remove::<Busking>();
             continue;
         }

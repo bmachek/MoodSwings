@@ -185,7 +185,14 @@ fn run_errands(
             // citizen left standing in one that despawns is a citizen standing
             // in a field. The population budget refills the street, and a
             // share of what it refills comes back out of a door.
-            commands.entity(entity).despawn();
+            //
+            // `try_despawn`, because `pedestrian::maintain_population` also
+            // despawns citizens — for walking off the despawn ring — and the
+            // two run in the same frame. A citizen who reaches a doorway on
+            // the same tick they leave the ring is despawned twice, and a
+            // second despawn of a live entity id is an error the moment
+            // something else has reused it.
+            commands.entity(entity).try_despawn();
         } else {
             commands.entity(entity).insert(Browsing {
                 at: errand.at,

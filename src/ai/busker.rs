@@ -203,7 +203,9 @@ fn take_a_pitch(
             commands.entity(entity).remove::<Busker>();
             for (part, owner) in &guitars {
                 if owner.parent() == entity {
-                    commands.entity(part).despawn();
+                    // Forgiving: the guitar is a child of the busker, and a
+                    // busker who walked off the despawn ring took it with them.
+                    commands.entity(part).try_despawn();
                 }
             }
         } else {

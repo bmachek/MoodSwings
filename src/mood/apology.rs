@@ -229,13 +229,17 @@ fn fly_flowers(
             if matches!(grudge, Some(grudge) if grudge.against == flower.by) {
                 received.remove::<Grudge>();
             }
-            commands.entity(entity).despawn();
+            // Forgiving: this is a child of a citizen who may have been
+            // recycled in the same frame.
+            commands.entity(entity).try_despawn();
             info!("apology received");
             continue;
         }
 
         if flower.age > WILT_AFTER {
-            commands.entity(entity).despawn();
+            // Forgiving: this is a child of a citizen who may have been
+            // recycled in the same frame.
+            commands.entity(entity).try_despawn();
         }
     }
 }

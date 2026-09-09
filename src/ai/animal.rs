@@ -274,7 +274,9 @@ fn maintain_animals(
     for (entity, transform, dog) in &dogs {
         let gone = alive.get(dog.owner).is_err();
         if gone || transform.translation.xz().distance(focus) > DESPAWN {
-            commands.entity(entity).despawn();
+            // Forgiving: an animal is leashed to a citizen, and a citizen the
+            // crowd recycled took the leash and everything on it.
+            commands.entity(entity).try_despawn();
         } else {
             dog_count += 1;
         }
@@ -282,7 +284,9 @@ fn maintain_animals(
     let mut cat_count = 0usize;
     for (entity, transform) in &cats {
         if transform.translation.xz().distance(focus) > DESPAWN {
-            commands.entity(entity).despawn();
+            // Forgiving: an animal is leashed to a citizen, and a citizen the
+            // crowd recycled took the leash and everything on it.
+            commands.entity(entity).try_despawn();
         } else {
             cat_count += 1;
         }
@@ -462,7 +466,9 @@ fn draw_leashes(
             })
         });
         let Some((hand, collar)) = ends else {
-            commands.entity(entity).despawn();
+            // Forgiving: an animal is leashed to a citizen, and a citizen the
+            // crowd recycled took the leash and everything on it.
+            commands.entity(entity).try_despawn();
             continue;
         };
         let reach = collar - hand;

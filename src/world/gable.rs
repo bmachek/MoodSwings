@@ -1,24 +1,35 @@
-//! The stepped gable, and the pitched roof behind it.
+//! The screen wall in front of a Landshut roof, and the roof behind it.
 //!
 //! Every building in this city is a box with a slab on top, and for a city of
 //! nowhere in particular that is the honest answer. It is the wrong answer for
 //! exactly one postcard: what anybody who has stood in the Landshut Altstadt
 //! remembers is not a street plan and not a colour, it is *the roofline* — a
-//! row of tall narrow houses whose front walls carry on upwards past the roof
-//! as a stepped screen, each one a different height, each one hiding whatever
-//! is behind it.
+//! row of tall narrow houses whose front walls carry on upwards past the roof,
+//! each one a different height, each one hiding whatever is behind it.
 //!
-//! That is a `Giebelhaus`, and the screen is a `Treppengiebel`. It is also,
-//! conveniently, the cheapest recognisable thing in this whole exercise: five
-//! boxes of decreasing width stacked on the front wall.
+//! ## What the thing actually is
+//!
+//! It is a `Vorschussmauer`, and Landshut's Altstadt is the northern end of
+//! the *Inn-Salzach* building style it belongs to. The wall is pulled up past
+//! the eaves as a fire screen — the region burnt down often enough that a
+//! masonry wall between one roof and the next was worth building, and it also
+//! gave the ladders something safe to stand against. Behind it sits a steep
+//! `Grabendach` that falls *inwards* and drains through spouts in the screen,
+//! so from the street there is no roof at all: the house reads as a flat,
+//! nearly rectangular front, and a row of them reads as one canyon wall.
+//!
+//! The top of the screen comes in three forms and this module builds all
+//! three — see [`Screen`]. Only one of them is the stepped gable everybody
+//! thinks of first; the commonest is a plain horizontal top with a cornice
+//! under it, and the one that makes a skyline is the curved `Schweifgiebel`.
 //!
 //! ## Why the screen and not the roof
 //!
-//! The roof behind it is a plain pitch — two slabs leaning on a ridge — and it
-//! is there almost entirely for the view from above. From a pavement you never
-//! see it: the whole point of a gable screen is that it stands proud of the
-//! roof and hides it, which is why the things were built. So the pitch gets two
-//! meshes and no further thought, and the screen gets the arithmetic.
+//! The roof behind it is a plain pitch, and it is there almost entirely for
+//! the view from above. From a pavement you never see it: the whole point of a
+//! screen is that it stands proud of the roof and hides it, which is why the
+//! things were built. So the pitch gets the eaves detail it needs from the
+//! flank and the screen gets the arithmetic.
 //!
 //! ## What a gabled building gives up
 //!
@@ -53,6 +64,24 @@ const COPING_RANGE: f32 = 230.0;
 
 /// Steps up one side of a screen. Four is a gable, seven is a wedding cake.
 const STEPS: (u32, u32) = (3, 6);
+
+/// The cornice at the eaves: how deep it is and how far it oversails.
+///
+/// Shallow, and it is the most valuable twelve centimetres on the building. A
+/// screen wall with no cornice under it is simply a taller wall, and a row of
+/// taller walls is exactly what "the buildings look like boxes" means.
+const CORNICE: f32 = 0.26;
+const CORNICE_OUT: f32 = 0.30;
+
+/// How far the drainage spout stands out of the screen.
+const SPOUT: f32 = 0.55;
+
+/// The narrowest a screen's top band may be, against the frontage.
+///
+/// Not zero. A stepped gable's last step is the pier the flagpole goes on and
+/// it has width; a band of nothing is a band that vanishes and leaves the
+/// coping floating.
+const MIN_PIER: f32 = 0.14;
 
 /// How high the screen stands above the eaves, as a fraction of the frontage.
 ///
@@ -253,19 +282,83 @@ pub fn build_assets(
     }
 }
 
-/// One step of a screen: how wide it is and how high its top sits, both as
-/// fractions of the frontage and of the total rise.
+/// What the top of a screen wall does.
 ///
-/// Split out from the spawn so the shape can be tested. The failure this
-/// guards against is the one that makes a stepped gable look wrong rather than
-/// broken — steps that do not reach the middle leave a flat top, and steps that
-/// overshoot it cross over and the screen grows a notch at its own apex.
-fn step(index: u32, steps: u32) -> (f32, f32) {
-    let up = (index + 1) as f32 / steps as f32;
-    // The width shrinks to nothing at the top, so the last step is the ridge
-    // pier and the first is the full width of the wall.
-    let across = 1.0 - index as f32 / steps as f32;
-    (across, up)
+/// Three forms, and the first pass at this module built only the second one —
+/// which is the one everybody pictures and is not the one most of the street
+/// is. A row where every house wears the same stepped gable reads as a stage
+/// set; the variety is most of what makes a real skyline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Screen {
+    /// A flat top with a cornice under it. The plainest and the commonest: an
+    /// Inn-Salzach front is described as a "nearly rectangular front surface",
+    /// and this is that.
+    Straight,
+    /// `Treppengiebel`: steps up to a pier in the middle.
+    Stepped,
+    /// `Schweifgiebel`: an ogee, shouldered low and drawn to a point. The one
+    /// that makes a skyline, and geometrically the same loop as the steps with
+    /// a curve where the staircase was.
+    Curved,
+}
+
+impl Screen {
+    /// How many bands the screen is built out of.
+    ///
+    /// A stepped gable *is* its bands and wants few of them; a curve is a
+    /// curve and wants enough that the eye stops counting. A straight top is
+    /// one band and a coping.
+    fn bands(self, steps: u32) -> u32 {
+        match self {
+            Screen::Straight => 1,
+            Screen::Stepped => steps,
+            Screen::Curved => CURVE_BANDS,
+        }
+    }
+
+    /// Half-width of the screen at a height fraction, 0 at the eaves and 1 at
+    /// the top, as a fraction of the frontage.
+    ///
+    /// The whole difference between the three forms is this function. Written
+    /// as a profile rather than as three loops so the failure that made the
+    /// first version look wrong rather than broken — a screen whose bands do
+    /// not reach the middle leaves a flat top, and one that overshoots grows a
+    /// notch at its own apex — is one thing to test rather than three.
+    fn across(self, up: f32) -> f32 {
+        match self {
+            // Full width all the way, and then the coping caps it.
+            Screen::Straight => 1.0,
+            // A staircase: linear.
+            Screen::Stepped => 1.0 - up,
+            // An ogee. Full width at the shoulder, then falling away with a
+            // slack S rather than a straight line — which is the whole of what
+            // separates a scrolled gable from a triangle.
+            Screen::Curved => {
+                let t = (up - CURVE_SHOULDER).max(0.0) / (1.0 - CURVE_SHOULDER);
+                1.0 - t * t * (3.0 - 2.0 * t)
+            }
+        }
+    }
+}
+
+/// How many bands a curve is drawn with, and how far up its shoulder sits.
+///
+/// Fourteen is where the steps stop being countable at the distance a roofline
+/// is looked at. The shoulder is what makes it an ogee: the wall carries on at
+/// full width for the first third and only then starts to fall away.
+const CURVE_BANDS: u32 = 14;
+const CURVE_SHOULDER: f32 = 0.34;
+
+/// How often each form is built.
+///
+/// Straight is the commonest, which is the thing the first pass had exactly
+/// backwards. The curve is rare enough to be worth seeing.
+fn draw_screen(rng: &mut ChaCha8Rng) -> Screen {
+    match rng.random_range(0.0..1.0) {
+        roll if roll < 0.52 => Screen::Straight,
+        roll if roll < 0.83 => Screen::Stepped,
+        _ => Screen::Curved,
+    }
 }
 
 /// Raises a stepped gable on one building's front, and pitches its roof.
@@ -296,6 +389,7 @@ pub fn spawn(
 ) -> f32 {
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x6AB1_E501);
     let steps = rng.random_range(STEPS.0..=STEPS.1);
+    let screen = draw_screen(&mut rng);
     // Off the frontage, and then held to the house. The width is what sets the
     // pitch and the pitch is what makes a row read as one street — but a
     // generator that hands out lots wider than its buildings are tall will
@@ -323,36 +417,96 @@ pub fn spawn(
     let outward = Vec2::new(yaw.sin(), yaw.cos());
     let front = center + outward * (throat * 0.5 + PROUD - THICK * 0.5);
 
-    for index in 0..steps {
-        let (across, up) = step(index, steps);
-        let width = frontage * across;
+    // The cornice at the eaves, under the screen. Every one of the three forms
+    // has one and it is the line that separates the wall from what is standing
+    // on top of it — without it a straight screen is simply a taller wall, and
+    // a taller wall is what "the buildings look like boxes" means.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(kit.cap.clone()),
+        Transform::from_xyz(front.x, eaves + CORNICE * 0.5, front.y)
+            .with_rotation(turn)
+            .with_scale(Vec3::new(
+                frontage + CORNICE_OUT,
+                CORNICE,
+                THICK + CORNICE_OUT,
+            )),
+        close.clone(),
+    ));
+
+    let bands = screen.bands(steps);
+    for index in 0..bands {
+        let up = (index + 1) as f32 / bands as f32;
+        let was = index as f32 / bands as f32;
+        // The band is as wide as the *bottom* of its own slice, so a curve
+        // comes out as a staircase whose treads follow it rather than as one
+        // that cuts the corner off every turn.
+        let width = frontage * screen.across(was).max(MIN_PIER);
         let top = eaves + rise * up;
-        let previous = if index == 0 {
-            eaves
-        } else {
-            eaves + rise * step(index - 1, steps).1
-        };
-        let band = top - previous;
+        let bottom = eaves + rise * was;
+        let band = top - bottom;
 
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(kit.cube.clone()),
             MeshMaterial3d(wall.clone()),
-            Transform::from_xyz(front.x, previous + band * 0.5, front.y)
+            Transform::from_xyz(front.x, bottom + band * 0.5, front.y)
                 .with_rotation(turn)
                 .with_scale(Vec3::new(width, band, THICK)),
             range.clone(),
         ));
-        // The coping: a slab of stone across the top of each step, oversailing
-        // it a little. Without it the steps are a wall with notches cut in it,
-        // and with it they are a gable.
+        // The coping: a slab of stone across the top of each band, oversailing
+        // it a little. Without it a stepped screen is a wall with notches cut
+        // in it, and with it it is a gable. On a curve every band would be a
+        // ladder of ledges, so only the last one is capped — the rest of the
+        // curve is the wall itself, which is what a rendered `Schweifgiebel`
+        // is.
+        let capped = match screen {
+            Screen::Curved => index + 1 == bands,
+            _ => true,
+        };
+        if capped {
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(kit.cube.clone()),
+                MeshMaterial3d(kit.cap.clone()),
+                Transform::from_xyz(front.x, top + 0.06, front.y)
+                    .with_rotation(turn)
+                    .with_scale(Vec3::new(width + 0.22, 0.12, THICK + 0.16)),
+                close.clone(),
+            ));
+        }
+    }
+
+    // The oriel, on the houses that have one.
+    //
+    // An `Erker` is the other half of what an Inn-Salzach front is: a flat,
+    // nearly rectangular wall with one thing standing out of it. It is worth
+    // more to the silhouette of a street than anything else on the facade,
+    // because it is the only part of the building that is not in the plane of
+    // the building — a row of houses with one is a row of houses, and a row
+    // without is a row of walls.
+    if rng.random_range(0.0..1.0) < ORIEL && frontage > ORIEL_MIN_FRONT {
+        oriel(
+            commands, kit, wall, &mut rng, front, outward, turn, frontage, eaves, height, chunk,
+            &range, &close,
+        );
+    }
+
+    // The drain. A `Grabendach` falls inwards and lets the water out through
+    // the screen, and the spout is the one thing on an Inn-Salzach front that
+    // says out loud there is a roof behind it.
+    for side in [-1.0f32, 1.0] {
+        let across = Vec2::new(outward.y, -outward.x) * (side * frontage * 0.36);
+        let at = front + across;
         commands.spawn((
             ChunkOf(chunk),
-            Mesh3d(kit.cube.clone()),
-            MeshMaterial3d(kit.cap.clone()),
-            Transform::from_xyz(front.x, top + 0.06, front.y)
-                .with_rotation(turn)
-                .with_scale(Vec3::new(width + 0.22, 0.12, THICK + 0.16)),
+            Mesh3d(kit.round.clone()),
+            MeshMaterial3d(kit.metal.clone()),
+            Transform::from_xyz(at.x, eaves + rise * 0.22, at.y)
+                .with_rotation(turn * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::new(0.075, SPOUT, 0.075)),
             close.clone(),
         ));
     }
@@ -457,6 +611,124 @@ pub fn spawn(
     ridge
 }
 
+/// How often a house carries an oriel, and the narrowest frontage that can.
+///
+/// Not every house: an `Erker` was a thing you paid for, and a street where
+/// every front has one reads as a pattern rather than as a town. The width
+/// floor is because a bay a third of a four-metre frontage is a bay a metre
+/// across, which from a pavement is a pipe.
+const ORIEL: f32 = 0.34;
+const ORIEL_MIN_FRONT: f32 = 7.0;
+
+/// Its proportions: how much of the frontage it takes, how far it stands out,
+/// and which band of the wall it occupies.
+const ORIEL_WIDE: (f32, f32) = (0.34, 0.52);
+const ORIEL_OUT: (f32, f32) = (0.55, 0.95);
+// Two storeys of a four-storey house. The first pass ran to 0.86 and the bay
+// came out taller than it was wide by three to one, which is not an oriel, it
+// is a lift shaft bolted to the front.
+const ORIEL_BAND: (f32, f32) = (0.36, 0.76);
+
+/// A bay window standing out of the front wall.
+///
+/// Five boxes: the corbel it sits on, the body, glazing on the front and both
+/// returns, and the little roof over it. Glazed on three faces, because a bay
+/// that is only glazed at the front is a cupboard — the whole point of the
+/// thing is that you can see up and down the street from inside it.
+#[allow(clippy::too_many_arguments)]
+fn oriel(
+    commands: &mut Commands,
+    kit: &GableKit,
+    wall: &Handle<StandardMaterial>,
+    rng: &mut ChaCha8Rng,
+    front: Vec2,
+    outward: Vec2,
+    turn: Quat,
+    frontage: f32,
+    eaves: f32,
+    height: f32,
+    chunk: IVec2,
+    range: &VisibilityRange,
+    close: &VisibilityRange,
+) {
+    let wide = frontage * rng.random_range(ORIEL_WIDE.0..ORIEL_WIDE.1);
+    let out = rng.random_range(ORIEL_OUT.0..ORIEL_OUT.1);
+    // Off centre as often as not: a bay is on the room it belongs to.
+    let along =
+        Vec2::new(outward.y, -outward.x) * (rng.random_range(-0.22..0.22) * (frontage - wide));
+    let base = eaves - height * (1.0 - ORIEL_BAND.0);
+    let top = eaves - height * (1.0 - ORIEL_BAND.1);
+    let tall = top - base;
+    if tall < 2.0 {
+        return;
+    }
+    let middle = front + along + outward * (out * 0.5);
+
+    // The corbel: a wedge under the bay, narrower than it and shallower, so
+    // the bay reads as carried rather than as stuck on.
+    let corbel = front + along + outward * (out * 0.32);
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(kit.cap.clone()),
+        Transform::from_xyz(corbel.x, base - CORBEL * 0.5, corbel.y)
+            .with_rotation(turn)
+            .with_scale(Vec3::new(wide * 0.86, CORBEL, out * 0.64)),
+        close.clone(),
+    ));
+
+    // The body.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(wall.clone()),
+        Transform::from_xyz(middle.x, base + tall * 0.5, middle.y)
+            .with_rotation(turn)
+            .with_scale(Vec3::new(wide, tall, out)),
+        range.clone(),
+    ));
+
+    // Glazing on the front and the two returns, standing a little proud so it
+    // is a window in a wall rather than a decal on one.
+    let glass = front + along + outward * (out + 0.02);
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(kit.glass.clone()),
+        Transform::from_xyz(glass.x, base + tall * 0.52, glass.y)
+            .with_rotation(turn)
+            .with_scale(Vec3::new(wide * 0.7, tall * 0.62, 0.05)),
+        close.clone(),
+    ));
+    for side in [-1.0f32, 1.0] {
+        let cheek = middle + Vec2::new(outward.y, -outward.x) * (side * (wide * 0.5 + 0.02));
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.glass.clone()),
+            Transform::from_xyz(cheek.x, base + tall * 0.52, cheek.y)
+                .with_rotation(turn)
+                .with_scale(Vec3::new(0.05, tall * 0.62, out * 0.66)),
+            close.clone(),
+        ));
+    }
+
+    // And the little roof over it, oversailing on three sides.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(kit.cube.clone()),
+        MeshMaterial3d(kit.metal.clone()),
+        Transform::from_xyz(middle.x, top + ORIEL_CAP * 0.5, middle.y)
+            .with_rotation(turn)
+            .with_scale(Vec3::new(wide + 0.26, ORIEL_CAP, out + 0.20)),
+        close.clone(),
+    ));
+}
+
+/// How deep the corbel under an oriel is, and the lid over it.
+const CORBEL: f32 = 0.34;
+const ORIEL_CAP: f32 = 0.16;
+
 /// Puts one or two dormers on a roof leaf.
 ///
 /// Three boxes each: the cheeks, the glazing set into the front of them, and a
@@ -557,38 +829,48 @@ fn dormers(
 mod tests {
     use super::*;
 
-    /// The steps reach the middle exactly once.
+    /// Every screen starts at the width of the wall and never gets wider.
+    ///
+    /// The two failures this guards against are the ones that make a screen
+    /// look wrong rather than broken: a profile that does not start at the
+    /// wall leaves a ledge at the eaves, and one that widens anywhere grows a
+    /// shoulder halfway up.
     #[test]
-    fn a_gable_comes_to_a_point() {
-        for steps in STEPS.0..=STEPS.1 {
-            let (first_across, _) = step(0, steps);
+    fn a_screen_starts_at_the_wall_and_only_narrows() {
+        for screen in [Screen::Straight, Screen::Stepped, Screen::Curved] {
             assert!(
-                (first_across - 1.0).abs() < 1e-6,
-                "the bottom step is not the width of the wall"
+                (screen.across(0.0) - 1.0).abs() < 1e-6,
+                "{screen:?} does not start at the width of the wall"
             );
-            let (last_across, last_up) = step(steps - 1, steps);
-            assert!(
-                (last_up - 1.0).abs() < 1e-6,
-                "the top step does not reach the top"
-            );
-            assert!(
-                last_across > 0.0 && last_across <= 1.0 / steps as f32 + 1e-6,
-                "the top step is {last_across} of the wall, not a pier"
-            );
+            let mut previous = 1.0;
+            for step in 0..=40 {
+                let up = step as f32 / 40.0;
+                let across = screen.across(up);
+                assert!(
+                    across <= previous + 1e-6,
+                    "{screen:?} widens at {up}: {across} against {previous}"
+                );
+                assert!((0.0..=1.0).contains(&across), "{screen:?} is {across} wide");
+                previous = across;
+            }
         }
     }
 
-    /// It only ever narrows, and only ever rises.
+    /// A stepped gable comes to a pier and a curve comes to a point.
     #[test]
-    fn the_steps_march_one_way() {
-        for steps in STEPS.0..=STEPS.1 {
-            for index in 1..steps {
-                let (across, up) = step(index, steps);
-                let (before, lower) = step(index - 1, steps);
-                assert!(across < before, "step {index} of {steps} got wider");
-                assert!(up > lower, "step {index} of {steps} went down");
-            }
-        }
+    fn each_screen_ends_the_way_its_name_says() {
+        // The staircase reaches nothing at the very top, and the pier below it
+        // is one step wide — that is what the last step of a Treppengiebel is.
+        assert!(Screen::Stepped.across(1.0).abs() < 1e-6);
+        // The curve holds full width through its shoulder and only then falls
+        // away, which is the whole of what makes it an ogee rather than a
+        // triangle.
+        assert!((Screen::Curved.across(CURVE_SHOULDER * 0.5) - 1.0).abs() < 1e-6);
+        assert!(Screen::Curved.across(1.0).abs() < 1e-6);
+        // And a straight top is straight all the way to the coping.
+        assert!((Screen::Straight.across(1.0) - 1.0).abs() < 1e-6);
+        // A curve is drawn with enough bands that the steps are not countable.
+        assert!(Screen::Curved.bands(4) > Screen::Stepped.bands(4) * 2);
     }
 
     /// A narrow house gets a steep gable and a wide one a shallow gable.

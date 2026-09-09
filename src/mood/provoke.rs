@@ -392,7 +392,8 @@ fn spread_ripples(
         ripple.age += dt;
         let along = ripple.age / RIPPLE_LIFE;
         if along >= 1.0 {
-            commands.entity(entity).despawn();
+            // Forgiving: this hangs off a citizen who may already be gone.
+            commands.entity(entity).try_despawn();
             continue;
         }
         // Fast at first and slowing, which reads as something spreading out

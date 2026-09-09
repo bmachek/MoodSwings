@@ -174,7 +174,11 @@ fn shelter(
     if weather.rain < SHUT {
         // Dry. Everything comes down, and everybody is asked again next time.
         for part in &up {
-            commands.entity(part).despawn();
+            // `try_despawn`: the part hangs off a citizen, and a citizen
+            // despawned by `maintain_population` takes its descendants with
+            // it. Reaching for the part afterwards is reaching for an id
+            // something else has already reused.
+            commands.entity(part).try_despawn();
         }
         for figure in &covered {
             commands.entity(figure).remove::<Sheltered>();

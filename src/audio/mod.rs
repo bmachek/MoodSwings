@@ -79,7 +79,10 @@ impl Plugin for AudioPlugin {
 /// own watch caught it on the first take — which is what both of them are for.
 fn hush(mut commands: Commands, fresh: Query<Entity, Added<PlaybackSettings>>) {
     for sound in &fresh {
-        commands.entity(sound).despawn();
+        // Forgiving: a one-shot spawned as a child of something that is
+        // despawned in the same frame — a citizen walking off the ring while
+        // grumbling — is already gone by the time this runs.
+        commands.entity(sound).try_despawn();
     }
 }
 
