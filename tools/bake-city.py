@@ -428,10 +428,19 @@ PART_SEGMENT = 40.0
 # Metres of pavement the width cap leaves either side of a carriageway. The
 # game's own pavement is 3.2 m but it tolerates one; 2.2 is what the Altstadt
 # actually has between its kerb and its doorsteps.
-PAVEMENT = 2.2
+# The pavement the game lays on each side of every carriageway
+# (`citygen::SIDEWALK_WIDTH`), which is what a building's front stands behind.
+PAVEMENT = 3.2
 # A street that was folded out of several parallel ways is a band by design,
 # and the cap may not take it below this share of that band.
-BAND_FLOOR = 0.6
+# The narrowest a band may be capped to, in metres: absolute, not a share of
+# the band, so a second bake of the file does not floor it a second time.
+BAND_FLOOR = 8.0
+# How far either side of a band's line its walls are looked for, and how much
+# narrower a measured width has to be than the file's before it counts.
+BAND_REACH = 45.0
+STREET_REACH = 18.0
+CAP_SLACK = 0.5
 # Closer than this to a centreline, a building is in the road at any width
 # the game can draw, and the cap leaves it to the runtime.
 IN_ROAD = NARROWEST * 0.5
@@ -697,8 +706,18 @@ def iou(a, b):
     return a.intersection(b).area / union if union > 0 else 0.0
 
 
-def decompose(polygon):
+# The kinds the game builds out of one box and its own idea of the anatomy: a
+# church is a nave, a tower and a spire raised on its footprint by
+# `world::church`, and cut into wings it would be three small churches; a
+# parking garage is decks and ramps by `world::garage`. These keep the one box
+# a landmark always was, and are never cut for length.
+ONE_BOX_KINDS = {"Church", "Cathedral", "Gate", "Tower", "Stadium", "ParkingGarage"}
+
+
+def decompose(polygon, whole=False):
     """One building polygon (metres, world frame) into parts.
+
+    `whole` keeps the one box whatever the polygon does — see `ONE_BOX_KINDS`.
 
     Returns (parts, iou, iou of the one box, method). The decomposition is
     measured against the one box the bake used to emit, and the box is kept
@@ -713,6 +732,8 @@ def decompose(polygon):
     (bx, bz), byaw, bwide, bdeep = fitted
     box_part = {"centre": (bx, bz), "yaw": byaw, "frontage": bwide, "depth": bdeep}
     iou_box = iou(rectangle_of(box_part), polygon)
+    if whole:
+        return [box_part], iou_box, iou_box, "box"
 
     angle = principal_angle(polygon)
     pivot = polygon.centroid
@@ -999,8 +1020,11 @@ def bake_buildings(candidates, half):
             stats["big"] += 1
             continue
         parts, weights, boxes = [], [], []
+        # Not `whole`: that name is the union of the polygons a few lines
+        # down, and it is truthy.
+        one_box = cand["kind"] in ONE_BOX_KINDS
         for polygon in polygons:
-            found, score, score_box, method = decompose(polygon)
+            found, score, score_box, method = decompose(polygon, one_box)
             if not found:
                 continue
             stats[method] += 1
@@ -1019,10 +1043,14 @@ def bake_buildings(candidates, half):
         parts_hist[len(parts)] += 1
         pieces = []
         for part in parts:
-            cut = split_long(part)
+            cut = [part] if one_box else split_long(part)
             if len(cut) > 1:
                 stats["split"] += 1
             pieces.extend(cut)
+        # Largest first, after the cutting: the runtime reads the first part
+        # of a group as the building -- where it stands, which district, which
+        # height band -- so the first part has to be the one that matters.
+        pieces.sort(key=lambda piece: -(piece["frontage"] * piece["depth"]))
         for piece in pieces:
             entries.append({
                 "name": cand["name"],
@@ -1419,6 +1447,7 @@ def streets_from_overpass(data, lat0, lon0, half):
 # trusts them.
 RECENTRE_MAX = 16.0
 RECENTRE_REACH = 40.0
+RECENTRE_DEAD = 1.0
 
 
 def shared_points(streets):
@@ -1433,7 +1462,7 @@ def shared_points(streets):
     return shared
 
 
-def recentre_bands(streets, entries, half):
+def recentre_bands_once(streets, entries, half, tree, rectangles, centres, welds):
     """Moves a folded band's centreline into the middle of its street wall.
 
     `merge_parallel` widens the survivor to the band it covers but leaves its
@@ -1453,12 +1482,6 @@ def recentre_bands(streets, entries, half):
     is what keeps the junction a junction — the side street simply reaches
     that much further into the square, which is where it always went.
     """
-    if not entries:
-        return 0
-    rectangles = [rectangle_of(e) for e in entries]
-    centres = np.asarray([e["centre"] for e in entries])
-    tree = shapely.STRtree(rectangles)
-    welds = shared_points(streets)
     moves = {}
     moved_bands = 0
     for street in streets:
@@ -1497,6 +1520,13 @@ def recentre_bands(streets, entries, half):
             if not offsets[index]:
                 continue
             shift = max(-RECENTRE_MAX, min(RECENTRE_MAX, statistics.median(offsets[index])))
+            # A line already within a metre of the middle stays put, which is
+            # what makes a second bake of the same file the same file: the
+            # first pass leaves every point a few decimetres off the exact
+            # median of its walls, and without a dead band the second pass
+            # would chase that and the cap would measure a different street.
+            if abs(shift) < RECENTRE_DEAD:
+                continue
             behind = points[max(index - 1, 0)]
             ahead = points[min(index + 1, len(points) - 1)]
             dx, dy = ahead[0] - behind[0], ahead[1] - behind[1]
@@ -1511,19 +1541,47 @@ def recentre_bands(streets, entries, half):
                 at[1] + normal[1] * shift,
             )
     if not moves:
-        return 0
+        return 0, 0, 0
     # Apply, to the band and to every street welded to a moved point.
     for street in streets:
         street["points"] = [
             moves.get((round(p[0], 1), round(p[1], 1)), p) for p in street["points"]
         ]
     moved_welds = sum(1 for key in moves if key in welds)
-    print(
-        f"{moved_bands} bands recentred between their walls ({len(moves)} points moved, "
-        f"{moved_welds} of them junctions taken along)",
-        file=sys.stderr,
-    )
-    return moved_bands
+    return moved_bands, len(moves), moved_welds
+
+
+# How many times the recentring is run. One pass measures each segment
+# against walls it then moves away from, so the line lands a little short of
+# the middle; three more settle it, and a bake run again on its own output
+# then finds nothing left to move -- which is what makes the file the bake
+# writes a fixed point of the bake.
+RECENTRE_PASSES = 4
+
+
+def recentre_bands(streets, entries, half):
+    """See `recentre_bands_once`; this runs it to convergence."""
+    if not entries:
+        return 0
+    rectangles = [rectangle_of(e) for e in entries]
+    centres = np.asarray([e["centre"] for e in entries])
+    tree = shapely.STRtree(rectangles)
+    welds = shared_points(streets)
+    bands = points = junctions = 0
+    for _ in range(RECENTRE_PASSES):
+        b, p, j = recentre_bands_once(streets, entries, half, tree, rectangles, centres, welds)
+        bands = max(bands, b)
+        points += p
+        junctions += j
+        if p == 0:
+            break
+    if points:
+        print(
+            f"{bands} bands recentred between their walls ({points} point moves over "
+            f"the passes, {junctions} of them junctions taken along)",
+            file=sys.stderr,
+        )
+    return bands
 
 
 def cap_widths(streets, entries, half, quantile=0.0):
@@ -1551,7 +1609,7 @@ def cap_widths(streets, entries, half, quantile=0.0):
     every weld, so one wall is three metres off and the other twenty-five.
     What is wanted there is the band's wall-to-wall clearance, so a band is
     read as the median of left plus right over the segments that see both
-    walls, and keeps at least `BAND_FLOOR` of itself whatever that says.
+    walls, and is never capped below `BAND_FLOOR` whatever that says.
     Runs after the merge for exactly that reason.
     """
     if not entries:
@@ -1565,7 +1623,10 @@ def cap_widths(streets, entries, half, quantile=0.0):
             continue
         band = bool(street.get("band"))
         points = street["points"]
-        reach = (street["width"] if band else street["width"] * 0.5) + PAVEMENT
+        # How far out to look for a wall. Fixed rather than read off the
+        # width being capped, or a second bake of the file looks less far
+        # than the first did and caps the same street again.
+        reach = BAND_REACH if band else STREET_REACH
         tights, clearances = [], []
         for a, b in zip(points, points[1:]):
             if not (inside(a, half) or inside(b, half)):
@@ -1593,13 +1654,16 @@ def cap_widths(streets, entries, half, quantile=0.0):
             if not clearances:
                 continue
             width = statistics.median(clearances) - 2.0 * PAVEMENT
-            width = max(width, BAND_FLOOR * street["width"])
+            width = max(width, BAND_FLOOR)
         else:
             if not tights:
                 continue
             width = 2.0 * float(np.quantile(tights, quantile)) - 2.0 * PAVEMENT
         width = round(min(street["width"], max(NARROWEST, width)), 1)
-        if width < street["width"]:
+        # Only a real narrowing: the gaps are measured off coordinates the
+        # file keeps to a decimetre, and chasing the last two decimetres would
+        # narrow every street a little more on every bake.
+        if width < street["width"] - CAP_SLACK:
             narrowed.append((street["name"], street["width"], width, band))
             street["width"] = width
     return narrowed
@@ -1755,7 +1819,10 @@ def bake_relief(dem, streets, half, lat0, lon0):
         sys.exit("no street inside the square to take a datum from")
     lat, lon = unproject([x for x, _ in samples], [z for _, z in samples], lat0, lon0)
     under = dem.sample(lat, lon)
-    datum = float(np.nanmedian(under))
+    # To the decimetre before anything is measured from it, so the file
+    # carries the same datum it says it does and a re-bake subtracts the
+    # same number.
+    datum = round(float(np.nanmedian(under)), 1)
 
     near = relief_grid(dem, NEAR_STEP, NEAR_HALF, lat0, lon0)
     far = relief_grid(dem, FAR_STEP, FAR_HALF, lat0, lon0)
@@ -1800,7 +1867,7 @@ POINT = re.compile(r"\(([-\d.]+),([-\d.]+)\)")
 STREET = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), '
     r"arterial: (?P<arterial>true|false), surface: (?P<surface>\w+), "
-    r"points: \[(?P<points>.*)\]\),?$"
+    r"points: \[(?P<points>.*)\](?:, band: (?P<band>true|false))?\),?$"
 )
 WATER = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), points: \[(?P<points>.*)\]\),?$'
@@ -1854,10 +1921,15 @@ def read_ron(path):
             "surface": m["surface"],
             "points": points,
             "length": sum(math.dist(a, b) for a, b in zip(points, points[1:])),
-            # The merge already happened when this was written and the file
-            # does not say which ways it folded; a street wider than any
-            # single way can be is one of them.
-            "band": width > WIDEST,
+            # The merge already happened when this was written. A file from
+            # after the flag was added says which ways it folded; one from
+            # before is read the only way it can be, by width -- which a
+            # capped band no longer passes, so that file must not be capped
+            # twice.
+            "band": (m["band"] == "true") if m["band"] else width > WIDEST,
+            # A file that says which ways it folded was written by a bake
+            # that had already put its bands between their walls.
+            "recentred": m["band"] is not None,
             "covered": "tunnel" in m["name"].lower(),
         })
     waters = []
@@ -1921,7 +1993,9 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 f'        (name: "{label}", width: {street["width"]}, '
                 f'arterial: {str(street["arterial"]).lower()}, '
                 f'surface: {street["surface"]}, '
-                f'points: {ron_points(street["points"])}),\n'
+                f'points: {ron_points(street["points"])}'
+                + (", band: true" if street.get("band") else "")
+                + "),\n"
             )
         out.write("    ],\n")
 
@@ -1933,7 +2007,7 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 f"centre: ({b['centre'][0]:.1f},{b['centre'][1]:.1f}), "
                 f"yaw: {b['yaw']:.4f}, frontage: {b['frontage']:.1f}, "
                 f"depth: {b['depth']:.1f}, height: {ron_option(b['height'])}, "
-                f"kind: {ron_option(b['kind'])}, group: {b['group']}, "
+                f"kind: {ron_option(b['kind'])}, group: Some({b['group']}), "
                 f"area: {b['area']:.1f}, roof: {ron_option(b['roof'])}, "
                 f"levels: {ron_option(b['levels'])}),\n"
             )
@@ -2133,7 +2207,14 @@ def main():
 
     # A band sits between its walls, and then no street is wider than the
     # buildings allow. After the merge: the band is the thing being measured.
-    recentre_bands(streets, buildings, half)
+    #
+    # Not twice. A file this bake wrote has its bands where the walls put
+    # them, and measuring them again against the same walls moves them by
+    # the decimetres the measurement is uncertain by -- and the cap, which
+    # reads the moved line, then narrows a different street. Once is the
+    # fixed point; a second bake of the file reproduces it.
+    if not any(street.get("recentred") for street in streets):
+        recentre_bands(streets, buildings, half)
     narrowed = cap_widths(streets, buildings, half, args.cap_quantile)
     if buildings:
         taken = sorted(was - now for _, was, now, _ in narrowed)

@@ -285,6 +285,13 @@ impl Species {
         ]
     }
 
+    /// What a wood on a valley side is made of: the round-crowned broadleaves,
+    /// and nothing anybody planted. No cherries and no poplars — the one is a
+    /// garden tree and the other a line somebody drew.
+    fn in_woods() -> [(Species, u32); 2] {
+        [(Species::Lime, 5), (Species::Plane, 3)]
+    }
+
     fn pick(table: &[(Species, u32)], rng: &mut ChaCha8Rng) -> Species {
         let total: u32 = table.iter().map(|(_, weight)| weight).sum();
         let mut ticket = rng.random_range(0..total);
@@ -1014,6 +1021,7 @@ pub fn spawn_ground(
     kit: &FoliageKit,
     rng: &mut ChaCha8Rng,
     ground: &super::citygen::OpenGround,
+    terrain: &super::terrain::Terrain,
     chunk: IVec2,
     range: f32,
 ) {
@@ -1065,18 +1073,95 @@ pub fn spawn_ground(
                 continue;
             }
             let species = Species::pick(&palette, rng);
+            // On the ground, wherever the ground is: a mapped meadow has no
+            // kerb slab under it, and the one on the Hofberg is forty metres
+            // up. The trunk mesh stands on its own origin.
             plant(
                 commands,
                 kit,
                 chunk,
                 point,
-                SIDEWALK_HEIGHT,
+                terrain.height(point),
                 species,
                 rng,
                 range,
             );
         }
         at.y += COMMONS_SPACING;
+    }
+}
+
+/// How far above the valley floor the open ground becomes a wood, and how
+/// thickly it is planted there.
+///
+/// Landshut's Hofberg is wooded on the face it turns to the town — that is
+/// what the Altstadt sees when it looks south — and the map never said so:
+/// the extract asked for `landuse` and `leisure`, and a wood is `natural`.
+/// The relief says so instead. Above this line, on ground no street holds,
+/// the hillside is planted as a wood; it is the one planting here that comes
+/// off the shape of the ground rather than off a polygon.
+const WOOD_ABOVE: f32 = 6.0;
+const WOOD_DENSITY: f32 = 0.62;
+/// The hillside's own grid, coarser than a park's: a wood seen from four
+/// hundred metres is a texture of crowns, and eleven metres apart is a
+/// thousand trees on one hill.
+const WOOD_SPACING: f32 = 13.0;
+
+/// Plants the hillside in this chunk, where the relief says there is one.
+///
+/// Only where the level field has let go entirely: the fade round a street
+/// is the bank behind somebody's house, and a tree stood in it is a tree
+/// growing out of a wall. A pitch, a car park or a cemetery up there would be
+/// planted over — none of Landshut's is on the hill, and a wood has no
+/// business asking.
+pub fn spawn_hillside(
+    commands: &mut Commands,
+    kit: &FoliageKit,
+    rng: &mut ChaCha8Rng,
+    terrain: &super::terrain::Terrain,
+    chunk: IVec2,
+    range: f32,
+) {
+    if !terrain.has_relief() {
+        return;
+    }
+    let cell = super::streaming::chunk_center(chunk);
+    let half = super::streaming::CHUNK_SIZE * 0.5;
+    let (low, high) = (cell - Vec2::splat(half), cell + Vec2::splat(half));
+    let first = (low / WOOD_SPACING).ceil() * WOOD_SPACING;
+    let mut at = first;
+    while at.y < high.y {
+        at.x = first.x;
+        while at.x < high.x {
+            let here = at;
+            at.x += WOOD_SPACING;
+            // Drawn before the tests, so a tree that is not planted still
+            // costs its draws and the ones after it stay where they were.
+            let roll = rng.random_range(0.0..1.0);
+            let jitter = Vec2::new(
+                rng.random_range(-WOOD_SPACING * 0.42..WOOD_SPACING * 0.42),
+                rng.random_range(-WOOD_SPACING * 0.42..WOOD_SPACING * 0.42),
+            );
+            let point = here + jitter;
+            if roll > WOOD_DENSITY {
+                continue;
+            }
+            if terrain.relief_at(point) < WOOD_ABOVE || terrain.level_at(point) > 0.02 {
+                continue;
+            }
+            let species = Species::pick(&Species::in_woods(), rng);
+            plant(
+                commands,
+                kit,
+                chunk,
+                point,
+                terrain.height(point),
+                species,
+                rng,
+                range,
+            );
+        }
+        at.y += WOOD_SPACING;
     }
 }
 
@@ -1112,7 +1197,6 @@ fn inside(ring: &[Vec2], at: Vec2, margin: f32) -> bool {
     }
     within
 }
-
 
 #[cfg(test)]
 mod tests {

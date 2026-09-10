@@ -142,6 +142,10 @@ pub mod stream {
     /// the key would mean that a re-bake of the extract moved every street
     /// tree in the town.
     pub const COMMONS: u64 = 34;
+    /// The wood on the hillside, planted off the relief rather than off a
+    /// polygon. Its own key for the reason `COMMONS` has one: the parks must
+    /// not reshuffle because the hill grew a tree.
+    pub const WOODS: u64 = 35;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

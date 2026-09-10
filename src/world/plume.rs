@@ -289,7 +289,7 @@ pub fn maybe_chimney(
         commands,
         kit,
         at,
-        super::buildings::SIDEWALK_HEIGHT + building.height + standing,
+        super::buildings::SIDEWALK_HEIGHT + building.ground + building.height + standing,
         yaw,
         chunk,
         range,

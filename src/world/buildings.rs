@@ -510,7 +510,13 @@ fn concrete_slab(
     tint: Color,
     tiling: Vec2,
 ) -> StandardMaterial {
-    slab_of(library, images, super::material::set::CONCRETE_ROUGH, tint, tiling)
+    slab_of(
+        library,
+        images,
+        super::material::set::CONCRETE_ROUGH,
+        tint,
+        tiling,
+    )
 }
 
 /// The same, out of whichever scanned set is asked for.
@@ -1130,13 +1136,19 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                 SIDEWALK_HEIGHT,
                 site.span.y + APRON * 2.0,
             );
+            // Up on the hill a landmark's apron sits on the plateau the
+            // terrain raises under it — see `Building::ground`.
             commands.spawn((
                 ChunkOf(chunk),
                 Mesh3d(assets.unit_cube.clone()),
                 MeshMaterial3d(assets.kerb.clone()),
-                Transform::from_xyz(site.centre.x, SIDEWALK_HEIGHT * 0.5, site.centre.y)
-                    .with_rotation(Quat::from_rotation_y(site.yaw))
-                    .with_scale(slab),
+                Transform::from_xyz(
+                    site.centre.x,
+                    building.ground + SIDEWALK_HEIGHT * 0.5,
+                    site.centre.y,
+                )
+                .with_rotation(Quat::from_rotation_y(site.yaw))
+                .with_scale(slab),
                 RigidBody::Static,
                 Collider::cuboid(1.0, 1.0, 1.0),
             ));
@@ -1149,7 +1161,8 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
                     // A slot of its own: an apron is seven tenths of a metre
                     // proud all round, so in a terrace every one of them
                     // overlaps both of its neighbours.
-                    super::layer::FOOTWAY
+                    building.ground
+                        + super::layer::FOOTWAY
                         + super::layer::slot(seed as u32, super::layer::FOOTWAY_SLOTS),
                     site.centre.y,
                 )
@@ -1303,6 +1316,16 @@ fn spawn_building(
     let center = site.centre;
     let height = building.height;
     let class = FacadeClass::for_height(height);
+    // Where this building's ground floor starts: the pavement, or up on the
+    // hill the plateau the terrain holds under a landmark kept there. Every
+    // y below is written off this rather than off the kerb, which is the
+    // whole of what `Building::ground` asks of a spawner.
+    let floor = SIDEWALK_HEIGHT + building.ground;
+    // A building up on the hill keeps its walls and its roof and nothing
+    // that assumes a street: no doorway to walk in through, nothing put out
+    // on a pavement it does not have, no poster for traffic that never
+    // passes.
+    let uphill = building.ground > 0.0;
 
     // One seed for everything about this building's roof, derived from where it
     // stands. Chunks regenerate on re-entry, so anything keyed on spawn order
@@ -1344,7 +1367,7 @@ fn spawn_building(
     // the scale axes swapped to match. A plain building keeps the unrotated
     // transform it always had; rotating it too would be free, but a diff
     // that moves every wall in the city to open a few doors is not.
-    let door_shell = if building.kind.enterable() {
+    let door_shell = if building.kind.enterable() && !uphill {
         ctx.shells.door(class, variant)
     } else {
         None
@@ -1390,6 +1413,7 @@ fn spawn_building(
             commands,
             assets,
             center,
+            building.ground,
             frontage,
             throat,
             building.height,
@@ -1409,6 +1433,7 @@ fn spawn_building(
             commands,
             assets,
             center,
+            building.ground,
             frontage,
             throat,
             height,
@@ -1461,19 +1486,21 @@ fn spawn_building(
     // by rather than from `front` a second time, so the pipe cannot end up down
     // the back of a building whose door faces the street.
     let outward = Vec2::new(yaw.sin(), yaw.cos());
-    super::frontage::spawn(
-        commands,
-        ctx.frontage,
-        ctx.seed,
-        ctx.lod_scale,
-        building,
-        class,
-        center + outward * (throat * 0.5),
-        outward,
-        frontage,
-        apron,
-        chunk,
-    );
+    if !uphill {
+        super::frontage::spawn(
+            commands,
+            ctx.frontage,
+            ctx.seed,
+            ctx.lod_scale,
+            building,
+            class,
+            center + outward * (throat * 0.5),
+            outward,
+            frontage,
+            apron,
+            chunk,
+        );
+    }
 
     // Every box this building is made of stands on one frame: centred on the
     // site, and turned onto the street if it has one to be turned onto.
@@ -1502,10 +1529,7 @@ fn spawn_building(
     };
     // `frontage` and `throat` are `size.x` and `size.y` — the site's own frame,
     // which is the frame this box is scaled in whichever way it is turned.
-    let wall = stand(
-        height * 0.5 + SIDEWALK_HEIGHT,
-        Vec3::new(frontage, height, throat),
-    );
+    let wall = stand(height * 0.5 + floor, Vec3::new(frontage, height, throat));
 
     commands.spawn((
         ChunkOf(chunk),
@@ -1545,13 +1569,13 @@ fn spawn_building(
     // real lights and moves it to whichever of these are nearest; a light per
     // building would be several hundred in a district, almost all of them
     // behind the camera.
-    if class != FacadeClass::House {
+    if class != FacadeClass::House && !uphill {
         let outward = Quat::from_rotation_y(yaw) * Vec3::Z;
         commands.spawn((
             ChunkOf(chunk),
             crate::world::interior::Shopfront,
             Transform::from_translation(
-                Vec3::new(center.x, SIDEWALK_HEIGHT, center.y)
+                Vec3::new(center.x, floor, center.y)
                     + outward * (throat * 0.5 + 1.1)
                     + Vec3::Y * crate::world::interior::SPILL_HEIGHT,
             ),
@@ -1628,7 +1652,7 @@ fn spawn_building(
             frontage,
             throat,
             height,
-            height + SIDEWALK_HEIGHT,
+            height + floor,
             yaw,
             chunk,
             ctx.lod_scale,
@@ -1675,7 +1699,7 @@ fn spawn_building(
             Mesh3d(assets.stone_cube.clone()),
             MeshMaterial3d(assets.roof_material(size.x.max(size.y))),
             stand(
-                height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
+                height + floor + parapet.thickness * 0.5,
                 Vec3::new(
                     frontage + parapet.overhang * 2.0,
                     parapet.thickness,
@@ -1698,7 +1722,7 @@ fn spawn_building(
             Mesh3d(assets.stone_cube.clone()),
             MeshMaterial3d(assets.kerb.clone()),
             stand(
-                SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5,
+                floor + PLINTH_HEIGHT * 0.5,
                 Vec3::new(
                     frontage + PLINTH_PROUD * 2.0,
                     PLINTH_HEIGHT,
@@ -1728,7 +1752,7 @@ fn spawn_building(
         site,
         yaw,
         frontage,
-        SIDEWALK_HEIGHT + storey * 0.875,
+        floor + storey * 0.875,
         chunk,
     );
 
@@ -1742,6 +1766,7 @@ fn spawn_building(
         building.kind,
         BuildingKind::Apartments | BuildingKind::Offices
     ) && height >= 12.0
+        && !uphill
         && (seed >> 27) & 0b111 < ctx.style.advert_appetite()
     {
         let (mesh, material, poster) = ctx.signs.advert((seed >> 33) as u32);
@@ -1764,7 +1789,7 @@ fn spawn_building(
                 ChunkOf(chunk),
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(material.clone()),
-                Transform::from_xyz(at.x, SIDEWALK_HEIGHT + height * 0.6, at.y)
+                Transform::from_xyz(at.x, floor + height * 0.6, at.y)
                     .with_rotation(Quat::from_rotation_y(side_yaw))
                     .with_scale(Vec3::splat(fit)),
                 VisibilityRange {
@@ -1785,8 +1810,8 @@ fn spawn_building(
     // starting above it, and stops under the fascia the sign hangs on.
     if let Some((mesh, material)) = ctx.signs.frontage(building.kind) {
         let at = site.in_front(0.14);
-        let foot = SIDEWALK_HEIGHT + PLINTH_HEIGHT + 0.02;
-        let top = SIDEWALK_HEIGHT + storey * texture::FASCIA.0 - 0.05;
+        let foot = floor + PLINTH_HEIGHT + 0.02;
+        let top = floor + storey * texture::FASCIA.0 - 0.05;
         let strip = (top - foot).max(1.2);
         let sign_draw = (crate::world::signage::RANGE * ctx.lod_scale).max(1.0);
         commands.spawn((
@@ -1817,7 +1842,7 @@ fn spawn_building(
         ctx.roofs,
         ChunkOf(chunk),
         center,
-        height + SIDEWALK_HEIGHT + parapet.thickness,
+        height + floor + parapet.thickness,
         // The plan is in the footprint's axes, and for a building placed along
         // a street the footprint is measured in the site's frame — so the deck
         // turns with the walls. A generated block's footprint is already a

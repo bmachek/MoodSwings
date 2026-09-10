@@ -316,6 +316,13 @@ pub struct Street {
     #[serde(default)]
     pub surface: Surface,
     pub points: Vec<(f32, f32)>,
+    /// Whether the bake folded several parallel ways into this one — the
+    /// Altstadt's carriageway, parking lanes and pedestrian halves as one
+    /// street as wide as the band they covered. The game does not read it;
+    /// it is carried so a re-bake from this file knows which streets to
+    /// measure wall to wall rather than to the nearest kerb.
+    #[serde(default)]
+    pub band: bool,
 }
 
 /// How close two points have to be to be the same junction, in metres.
@@ -455,7 +462,13 @@ fn nearest_street(graph: &RoadGraph, at: Vec2) -> Option<Vec2> {
     // How far to look. Past this a building is not on a street in any sense
     // that would decide which way its front door is.
     const REACH: f32 = 60.0;
-    let mut best = (REACH * REACH, Vec2::ZERO);
+    street_within(graph, at, REACH).map(|(_, towards)| towards)
+}
+
+/// The nearest carriageway within `reach` of `at`: how far to its edge, and
+/// which way it lies.
+fn street_within(graph: &RoadGraph, at: Vec2, reach: f32) -> Option<(f32, Vec2)> {
+    let mut best = (reach, Vec2::ZERO);
     for edge in graph.edges() {
         let (a, b) = (graph.node(edge.a).pos, graph.node(edge.b).pos);
         let span = b - a;
@@ -465,12 +478,14 @@ fn nearest_street(graph: &RoadGraph, at: Vec2) -> Option<Vec2> {
         }
         let t = ((at - a).dot(span) / length).clamp(0.0, 1.0);
         let foot = a + span * t;
-        let away = (foot - at).length_squared();
+        // To the kerb, not the centreline: what the terrain holds level
+        // runs from the pavement's edge outward, and so should this.
+        let away = (foot - at).length() - edge.width * 0.5 - super::citygen::SIDEWALK_WIDTH;
         if away < best.0 {
             best = (away, foot - at);
         }
     }
-    (best.0 < REACH * REACH).then(|| best.1.normalize_or_zero())
+    (best.0 < reach).then(|| (best.0.max(0.0), best.1.normalize_or_zero()))
 }
 
 /// The town's water, clipped to the square the game builds.
@@ -567,16 +582,36 @@ pub fn footprints(
         // the hill puts it. The ground under the whole building is one
         // height — the highest of its parts' — so a castle wing does not step
         // down its own slope; the terrain raises a plateau to meet it.
+        //
+        // Unless a street still holds the ground under it. The terrain keeps
+        // everything within `terrain::LEVEL_REACH` of a pavement at exactly
+        // zero and fades to the hill over `LEVEL_FADE` past that, and a
+        // landmark any part of which stands inside that reach is on the
+        // street's ground, not the hill's: the hill has been cut away round
+        // the street, and the building goes with the street. So the test is
+        // from the building's farthest corner, not its middle.
         let ground = match relief {
             Some(relief) if relief.is_hill(centre) => {
                 if !landmark {
                     uphill += 1;
                     continue;
                 }
-                parts
+                let spread = parts
                     .iter()
-                    .map(|part| relief.at(Vec2::new(part.centre.0, part.centre.1)))
-                    .fold(0.0f32, f32::max)
+                    .map(|part| {
+                        let at = Vec2::new(part.centre.0, part.centre.1);
+                        at.distance(centre) + Vec2::new(part.frontage, part.depth).length() * 0.5
+                    })
+                    .fold(0.0f32, f32::max);
+                let held = super::terrain::LEVEL_REACH + super::terrain::LEVEL_FADE + spread;
+                if street_within(graph, centre, held).is_some() {
+                    0.0
+                } else {
+                    parts
+                        .iter()
+                        .map(|part| relief.at(Vec2::new(part.centre.0, part.centre.1)))
+                        .fold(0.0f32, f32::max)
+                }
             }
             _ => 0.0,
         };
@@ -673,7 +708,10 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
     let relief = atlas.relief.as_ref().filter(|relief| {
         let sound = relief.near.is_sound() && relief.far.is_sound();
         if !sound {
-            warn!("{}: the relief grids are not the size they say; ignored", atlas.name);
+            warn!(
+                "{}: the relief grids are not the size they say; ignored",
+                atlas.name
+            );
         }
         sound
     });
@@ -804,6 +842,7 @@ mod tests {
             arterial: false,
             surface: Surface::Asphalt,
             points: points.to_vec(),
+            band: false,
         }
     }
 
@@ -812,9 +851,25 @@ mod tests {
     /// somewhere. Nothing else in the test suite would notice if a re-bake
     /// changed the shape of the file, or if `surface` quietly went back to
     /// defaulting because the baker stopped writing it.
+    /// The committed extract, or nothing: a checkout without the file is not
+    /// a failure, but a file that is there and does not parse is — `load`
+    /// answers `None` to both, and for as long as every test here returned
+    /// early on `None`, a bake that wrote a field the runtime could not read
+    /// passed every one of them while the game fell back to the generator.
+    fn committed() -> Option<Atlas> {
+        let path = crate::core::assets::root().join("cities/landshut.ron");
+        let town = load("landshut");
+        assert!(
+            town.is_some() || !path.exists(),
+            "{} is on disk and does not load as an atlas",
+            path.display()
+        );
+        town
+    }
+
     #[test]
     fn the_committed_landshut_still_says_what_it_is_paved_with() {
-        let Some(town) = load("landshut") else {
+        let Some(town) = committed() else {
             // A checkout without the extract is not a failure; the game falls
             // back to the generator and says so.
             return;
@@ -844,9 +899,11 @@ mod tests {
             .map(|street| street.width)
             .fold(0.0f32, f32::max);
         // The literature gives it as about thirty metres wide, which is what
-        // makes it a Platz rather than a road.
+        // makes it a Platz rather than a road — wall to wall. The bake takes
+        // the pavement off each side of that, because the width here is the
+        // carriageway and the game lays its own pavements beside it.
         assert!(
-            (22.0..=34.0).contains(&broadest),
+            (13.0..=34.0).contains(&broadest),
             "the Altstadt's widest way is {broadest} m; the town says thirty"
         );
 
@@ -881,7 +938,7 @@ mod tests {
     /// that started emitting a retail shed the length of a street.
     #[test]
     fn the_committed_landshut_stands_its_own_buildings_on_its_own_ground() {
-        let Some(town) = load("landshut") else {
+        let Some(town) = committed() else {
             return;
         };
         assert!(
@@ -902,7 +959,21 @@ mod tests {
         // of a street were throwing away exactly the buildings the town is
         // known for.
         for plot in &town.buildings {
-            let (longest, deepest) = if plot.name.is_empty() {
+            // A church, a gate or a tower is the one box its module raises its
+            // own anatomy on, cut for nothing; everything else is a part.
+            use crate::world::citygen::BuildingKind as Kind;
+            let whole = matches!(
+                plot.kind,
+                Some(
+                    Kind::Church
+                        | Kind::Cathedral
+                        | Kind::Gate
+                        | Kind::Tower
+                        | Kind::Stadium
+                        | Kind::ParkingGarage
+                )
+            );
+            let (longest, deepest) = if plot.name.is_empty() && !whole {
                 (60.5, 60.5)
             } else {
                 (130.0, 70.0)
@@ -1049,7 +1120,7 @@ mod tests {
     /// Landshut's: a flat valley floor with the Hofberg south of the Altstadt.
     #[test]
     fn the_committed_landshut_stands_in_its_valley() {
-        let Some(town) = load("landshut") else {
+        let Some(town) = committed() else {
             return;
         };
         let relief = town.relief.as_ref().expect("no relief in the atlas");
@@ -1063,7 +1134,10 @@ mod tests {
         );
         // The Altstadt is on the floor.
         let altstadt = relief.at(Vec2::new(50.0, 150.0));
-        assert!(altstadt.abs() < 6.0, "the Altstadt is {altstadt} m off the floor");
+        assert!(
+            altstadt.abs() < 6.0,
+            "the Altstadt is {altstadt} m off the floor"
+        );
         assert!(!relief.is_hill(Vec2::new(50.0, 150.0)));
         // The castle hill is not.
         let trausnitz = relief.at(Vec2::new(150.0, 680.0));
@@ -1270,7 +1344,7 @@ mod tests {
     /// what you see from the street and cannot see from above.
     #[test]
     fn every_building_turns_its_front_to_the_road() {
-        let Some(town) = load("landshut") else {
+        let Some(town) = committed() else {
             return;
         };
         let (layout, _) = layout(&town, 1, 1_000.0);

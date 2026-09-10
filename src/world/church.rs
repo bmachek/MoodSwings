@@ -44,6 +44,7 @@ pub fn spawn(
     commands: &mut Commands,
     assets: &CityAssets,
     center: Vec2,
+    ground: f32,
     width: f32,
     depth: f32,
     height: f32,
@@ -61,7 +62,9 @@ pub fn spawn(
     chunk: IVec2,
 ) {
     let spin = Quat::from_rotation_y(yaw);
-    let place = |at: Vec3| spin * at + Vec3::new(center.x, SIDEWALK_HEIGHT, center.y);
+    // On the pavement, or on the plateau the terrain holds under a chapel
+    // kept up on the hill — see `Building::ground`.
+    let place = |at: Vec3| spin * at + Vec3::new(center.x, ground + SIDEWALK_HEIGHT, center.y);
     // A measured church is a real one, and the real ones here are brick. The
     // generator's own stamped churches stay rendered, because a city grown from
     // a seed has no reason to be Bavarian.
