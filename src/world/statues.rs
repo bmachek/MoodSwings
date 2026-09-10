@@ -68,7 +68,7 @@ fn plaque_texture(monument: Monument) -> Image {
     let title = encode(title);
     let subline = encode(subline);
     painted_rect(456, 176, TextureFormat::Rgba8UnormSrgb, move |u, v| {
-        if u < 0.02 || u > 0.98 || v < 0.05 || v > 0.95 {
+        if !(0.02..=0.98).contains(&u) || !(0.05..=0.95).contains(&v) {
             return [64, 46, 28, 255];
         }
         let lit =

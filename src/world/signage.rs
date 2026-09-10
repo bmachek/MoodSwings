@@ -253,7 +253,7 @@ fn board_texture(plaque: &Plaque) -> Image {
     painted_rect(width, height, TextureFormat::Rgba8UnormSrgb, move |u, v| {
         // A pressed rim, same trick as the plates: it is what you see of a
         // sign at any distance where the letters have stopped resolving.
-        if u < 0.012 || u > 0.988 || v < 0.05 || v > 0.95 {
+        if !(0.012..=0.988).contains(&u) || !(0.05..=0.95).contains(&v) {
             return [
                 (field[0] / 2).saturating_sub(8),
                 (field[1] / 2).saturating_sub(8),
@@ -410,7 +410,7 @@ fn frontage_texture(kind: BuildingKind) -> Option<Image> {
             }
             for centre in [0.14f32, 0.30, 0.70, 0.86] {
                 if (u - centre).abs() < 0.055 && (0.15..0.60).contains(&v) {
-                    let frame = (u - centre).abs() > 0.048 || v < 0.17 || v > 0.58;
+                    let frame = (u - centre).abs() > 0.048 || !(0.17..=0.58).contains(&v);
                     return if frame {
                         [236, 230, 218, 255]
                     } else {
@@ -591,7 +591,7 @@ fn poster_texture(advert: &Advert) -> Image {
     painted_rect(384, 540, TextureFormat::Rgba8UnormSrgb, move |u, v| {
         // A pale paper margin, so the poster reads as pasted on rather than
         // painted into the wall.
-        if u < 0.02 || u > 0.98 || v < 0.015 || v > 0.985 {
+        if !(0.02..=0.98).contains(&u) || !(0.015..=0.985).contains(&v) {
             return [230, 226, 216, 255];
         }
         for (band, text) in &lines {

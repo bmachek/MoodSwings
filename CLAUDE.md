@@ -223,6 +223,21 @@ separating-axis test rather than a box overlap. Street names ride beside the
 layout in `atlas::Signposts` — a name is a fact about a street and an edge is
 one segment of one.
 
+The atlas also carries the town's real buildings, each polygon cut at bake time
+into the rectangles that cover it (`Footprint::group` gathers the parts of one
+building back into one `Block` sharing a height, a palette and a kind — an L is
+two parts, a courtyard block four, and `streetside::lots` files every part), the
+roof shape where the map recorded one (`Building::roof`), and the shape of the
+ground (`atlas::Relief`, two grids of metres above the valley floor off the
+Copernicus elevation model). The bake is `tools/bake-city.py`; it reads Overture
+Maps for the polygons and the DEM tile for the relief because Overpass cannot
+supply either, and a bake of its own output is its own output — `--from-ron`
+regenerates the buildings and the relief from a committed file, so do not add a
+step that measures something the previous bake already moved. The tests on the
+committed file fail when the file is there and does not load; they used to
+return early, which is how a bake that wrote `group: 0` where the runtime wanted
+`Some(0)` passed every test while the game quietly fell back to the generator.
+
 ### The traps
 
 Six things here have bitten more than once and none of them fail loudly:
@@ -231,10 +246,18 @@ Six things here have bitten more than once and none of them fail loudly:
   and about thirty spawners write a world y directly (`SIDEWALK_HEIGHT`,
   `resting_height(spec)`, a bare `0.0`) meaning "the ground here is at zero".
   That stays true only because `Terrain::height` returns *exactly* zero inside
-  a corridor rasterised from the road graph. Anything new that places geometry
-  well away from a street has to ask `Terrain` for the height, and anything
-  that widens where the town builds has to widen `terrain::LEVEL_REACH` with
-  it. A test walks every edge in Landshut and asserts the corridor.
+  a corridor rasterised from the road graph — and, with a real relief under
+  Landshut, because `atlas::HILL` clips any street the map takes more than
+  twelve metres up the Hofberg rather than cutting the hill away round it.
+  Anything new that places geometry well away from a street has to ask
+  `Terrain` for the height (the hillside wood and the mapped open ground do),
+  and anything that widens where the town builds has to widen
+  `terrain::LEVEL_REACH` with it. The one thing built off the floor is a
+  landmark kept up on the hill: it carries `Building::ground`, every y in its
+  path is written off that, and the terrain holds a plateau at that height
+  under it — the level field carries a height as well as a weight for exactly
+  this. A test walks every edge of the committed Landshut and asserts the
+  corridor, and another asserts the plateau under the castle.
 - **Nothing flat may be laid at the same height as anything else flat.**
   `world::layer` owns the whole ground stack in whole millimetres, with a slot
   per instance. The depth buffer is not the constraint — it resolves microns —

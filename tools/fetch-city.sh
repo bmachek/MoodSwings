@@ -50,7 +50,6 @@ esac
 raw="$(mktemp)"
 built="$(mktemp)"
 ground="$(mktemp)"
-trap 'rm -f "$raw" "$built" "$ground"' EXIT
 
 roads="[out:json][timeout:180];
 (
@@ -69,6 +68,9 @@ out geom;"
 # the game had no river at all: the centrelines are `waterway=river` (Isar,
 # Große Isar, Kleine Isar) and the surface is one `natural=water` multipolygon
 # whose inner rings are the islands.
+# Kept for a bake without Overture (`--extras "$built"` still works and goes
+# through the same polygon pipeline); not fetched by default, since the
+# Overture theme carries the same footprints with roof shapes as well.
 buildings="[out:json][timeout:240];
 (
   way[\"building\"]($south,$west,$north,$east);
@@ -86,16 +88,40 @@ land="[out:json][timeout:240];
 );
 out geom;"
 
+# Two more datasets, from Amazon S3 rather than Overpass, because Overpass
+# cannot supply either: the buildings as *polygons* with roof shapes (Overture
+# Maps, which is OpenStreetMap's buildings plus Microsoft's traced ones, ODbL)
+# and the shape of the ground (Copernicus DEM GLO-30). `tools/fetch-overture.py`
+# does both with plain HTTPS range requests; see its header for the licences.
+#
+# A machine that can reach the buckets but not Overpass can regenerate the
+# buildings and the relief alone from the committed file:
+#
+#   python3 tools/bake-city.py --from-ron assets/cities/landshut.ron assets/cities/landshut.ron \
+#       --buildings-parquet data/landshut_buildings.parquet --dem data/Copernicus_DSM_*.tif
+#
+# which keeps the streets, water and open ground the file already has. A bake
+# of its own output is its own output, so running it twice changes nothing.
+overture="${OVERTURE_RELEASE:-2026-08-19.0}"
+data="$(mktemp -d)"
+trap 'rm -rf "$raw" "$built" "$ground" "$data"' EXIT
+
 echo "asking Overpass for $label ($south,$west .. $north,$east)"
 curl -fsS -m 300 -X POST -d "$roads" https://overpass-api.de/api/interpreter -o "$raw"
-echo "asking Overpass for its buildings"
-curl -fsS -m 400 -X POST -d "$buildings" https://overpass-api.de/api/interpreter -o "$built"
 echo "asking Overpass for its water and its open ground"
 curl -fsS -m 400 -X POST -d "$land" https://overpass-api.de/api/interpreter -o "$ground"
+echo "asking Overture ($overture) for its buildings"
+python3 tools/fetch-overture.py buildings --release "$overture" \
+    --bbox "$west" "$south" "$east" "$north" --out "$data/buildings.parquet"
+echo "asking Copernicus for the ground"
+python3 tools/fetch-overture.py dem --bbox "$west" "$south" "$east" "$north" --out-dir "$data"
 
 mkdir -p assets/cities
+dems=()
+for tile in "$data"/Copernicus_DSM_*.tif; do dems+=(--dem "$tile"); done
 python3 tools/bake-city.py "$raw" "assets/cities/$town.ron" \
-    --extras "$built" --extras "$ground" \
+    --extras "$ground" --buildings-parquet "$data/buildings.parquet" "${dems[@]}" \
     --centre "$lat" "$lon" --name "$label"
 
-echo "map data (c) OpenStreetMap contributors, ODbL 1.0 — see CREDITS.md"
+echo "map data (c) OpenStreetMap contributors and (c) Microsoft, ODbL 1.0;"
+echo "relief (c) DLR e.V. and (c) Airbus Defence and Space GmbH, Copernicus — see CREDITS.md"
