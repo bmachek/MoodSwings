@@ -1855,16 +1855,13 @@ pub fn lots(
         // skyline, in other words — because a medieval street is narrower
         // between its walls than its traffic lanes imply.
         let tolerance = match building.kind {
-            // A gate is *supposed* to be in the road. That is what a gate is,
-            // and Landshut's are twin brick towers with the street running
-            // under a pointed arch between them. The game has no arch, so a
-            // gate here would be a solid box across a carriageway — which the
-            // patrol would walk into and traffic would pile up behind. Left
-            // out until it can be built as what it is.
-            BuildingKind::Gate => {
-                in_the_way += 1;
-                continue;
-            }
+            // A gate is *supposed* to be in the road — that is what a gate is,
+            // the street runs under it — so it is not asked whether it is in
+            // one. It was left out of the town entirely for as long as it
+            // would have been drawn as a solid box, which across a carriageway
+            // is a wall the traffic piles up behind. `world::gate` builds the
+            // hole, so it can come back.
+            BuildingKind::Gate => f32::NEG_INFINITY,
             // A church and a tower are not tested at all. St. Martin has stood
             // where it stands since 1500 and its footprint is measured off the
             // building; the carriageway it appears to be standing in is a

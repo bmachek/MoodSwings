@@ -1377,6 +1377,21 @@ fn spawn_building(
         );
         return;
     }
+    // The gate owns its whole structure too, and for one reason the others do
+    // not have: what it mostly is, is a hole. See `world::gate`.
+    if building.kind == super::citygen::BuildingKind::Gate {
+        super::gate::spawn(
+            commands,
+            assets,
+            center,
+            frontage,
+            throat,
+            building.height,
+            yaw,
+            chunk,
+        );
+        return;
+    }
     // The church replaces its box the same way the garage does: the whole
     // structure comes from `world::church`, plus the sign on the nave. The
     // cathedral is the same anatomy at postcard scale.

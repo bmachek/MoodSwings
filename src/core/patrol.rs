@@ -481,7 +481,15 @@ fn keep_watch(
             Some(before) if before.distance(here) < 0.6 => {
                 watch.still_for += 1;
                 if watch.still_for == 12 {
-                    complain("the player has not moved for twelve seconds".into());
+                    // Where, and not just that. A patrol that stops is a patrol
+                    // that has walked into something, and the only useful
+                    // question about it is what — which means the position, the
+                    // way every other complaint here carries one.
+                    complain(format!(
+                        "the player has not moved for twelve seconds, at \
+                         ({:.0}, {:.1}, {:.0})",
+                        here.x, here.y, here.z
+                    ));
                 }
             }
             _ => watch.still_for = 0,

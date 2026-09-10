@@ -4,6 +4,7 @@ pub mod atlas;
 pub mod buildings;
 pub mod bunting;
 pub mod church;
+pub mod gate;
 pub mod citygen;
 pub mod decals;
 pub mod facade;
