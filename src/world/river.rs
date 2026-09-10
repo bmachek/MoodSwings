@@ -237,7 +237,11 @@ pub fn spawn_waters(
     // surface gets the reflection for nothing and the sky comes free from the
     // atmosphere probe.
     let water = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.10, 0.20, 0.24),
+        // The Isar is a glacial river and comes down from the Alps grey-green,
+        // not the ink the first pass here was; from above it reads as a pale
+        // jade band between the trees, and that is what the town's own
+        // postcards show.
+        base_color: Color::srgb(0.18, 0.30, 0.29),
         perceptual_roughness: 0.08,
         metallic: 0.0,
         ..default()

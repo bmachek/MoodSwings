@@ -128,14 +128,20 @@ pub enum Species {
     Poplar,
     /// Small and ornamental, for a forecourt or a park path.
     Cherry,
+    /// The wood on the hill. Tall, dark, a high dome on a long trunk — a
+    /// beech is what the Isar's valley sides are made of, and it is built
+    /// of fewer, bigger blobs than a street tree because a wood is seen as a
+    /// canopy from four hundred metres, not as a tree from ten.
+    Beech,
 }
 
 impl Species {
-    pub const ALL: [Species; 4] = [
+    pub const ALL: [Species; 5] = [
         Species::Plane,
         Species::Lime,
         Species::Poplar,
         Species::Cherry,
+        Species::Beech,
     ];
 
     fn index(self) -> usize {
@@ -144,6 +150,7 @@ impl Species {
             Species::Lime => 1,
             Species::Poplar => 2,
             Species::Cherry => 3,
+            Species::Beech => 4,
         }
     }
 
@@ -154,6 +161,7 @@ impl Species {
             Species::Lime => (0.19, 2.6),
             Species::Poplar => (0.17, 2.4),
             Species::Cherry => (0.13, 1.9),
+            Species::Beech => (0.26, 3.6),
         }
     }
 
@@ -203,12 +211,20 @@ impl Species {
             (Vec3::new(0.8, 0.8, -0.4), 0.95),
             (Vec3::new(0.1, 1.8, 0.3), 0.80),
         ];
+        // Three big blobs and nothing small: a beech in a wood is a dome
+        // twelve metres across, and the hill wears four thousand of them.
+        const BEECH: [(Vec3, f32); 3] = [
+            (Vec3::new(0.0, 2.8, 0.0), 3.8),
+            (Vec3::new(0.6, 5.0, -0.4), 2.8),
+            (Vec3::new(-1.2, 1.5, 0.8), 2.4),
+        ];
 
         match self {
             Species::Plane => &PLANE,
             Species::Lime => &LIME,
             Species::Poplar => &POPLAR,
             Species::Cherry => &CHERRY,
+            Species::Beech => &BEECH,
         }
     }
 
@@ -231,6 +247,7 @@ impl Species {
             Species::Lime => 0.7,
             Species::Poplar => 1.0,
             Species::Cherry => 0.9,
+            Species::Beech => 0.95,
         }
     }
 
@@ -263,6 +280,9 @@ impl Species {
             Species::Lime => Color::srgb(0.29, 0.40, 0.17),
             Species::Poplar => Color::srgb(0.26, 0.37, 0.20),
             Species::Cherry => Color::srgb(0.34, 0.40, 0.22),
+            // Darker than anything on a street: a wood's canopy shades
+            // itself, and from the town it reads a blue-green.
+            Species::Beech => Color::srgb(0.17, 0.29, 0.14),
         }
     }
 
@@ -288,8 +308,8 @@ impl Species {
     /// What a wood on a valley side is made of: the round-crowned broadleaves,
     /// and nothing anybody planted. No cherries and no poplars — the one is a
     /// garden tree and the other a line somebody drew.
-    fn in_woods() -> [(Species, u32); 2] {
-        [(Species::Lime, 5), (Species::Plane, 3)]
+    fn in_woods() -> [(Species, u32); 3] {
+        [(Species::Beech, 7), (Species::Lime, 2), (Species::Plane, 1)]
     }
 
     fn pick(table: &[(Species, u32)], rng: &mut ChaCha8Rng) -> Species {
@@ -1101,11 +1121,12 @@ pub fn spawn_ground(
 /// the hillside is planted as a wood; it is the one planting here that comes
 /// off the shape of the ground rather than off a polygon.
 const WOOD_ABOVE: f32 = 6.0;
-const WOOD_DENSITY: f32 = 0.62;
-/// The hillside's own grid, coarser than a park's: a wood seen from four
-/// hundred metres is a texture of crowns, and eleven metres apart is a
-/// thousand trees on one hill.
-const WOOD_SPACING: f32 = 13.0;
+const WOOD_DENSITY: f32 = 0.8;
+/// The hillside's own grid. A beech crown is twelve metres across, so at
+/// ten and a half metres the crowns close over into a canopy, which is what a
+/// wood is from the town; the first pass at thirteen metres and six in ten
+/// was an orchard.
+const WOOD_SPACING: f32 = 10.5;
 
 /// Plants the hillside in this chunk, where the relief says there is one.
 ///
@@ -1395,8 +1416,14 @@ mod tests {
         let streets: Vec<_> = Species::on_streets().iter().map(|(s, _)| *s).collect();
         assert!(!streets.contains(&Species::Cherry));
         let parks: Vec<_> = Species::in_parks().iter().map(|(s, _)| *s).collect();
+        let woods: Vec<_> = Species::in_woods().iter().map(|(s, _)| *s).collect();
+        // A wood is beeches; a park is not.
+        assert!(woods.contains(&Species::Beech) && !parks.contains(&Species::Beech));
         for species in Species::ALL {
-            assert!(parks.contains(&species), "{species:?} grows nowhere");
+            assert!(
+                parks.contains(&species) || woods.contains(&species),
+                "{species:?} grows nowhere"
+            );
         }
     }
 

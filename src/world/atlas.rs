@@ -759,9 +759,7 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
             // Hofberg is one the game cannot build without cutting the hill
             // away round it. What the game builds instead is the hill.
             if relief.is_some_and(|relief| relief.is_hill(at)) {
-                if previous.is_some() {
-                    uphill += 1;
-                }
+                uphill += 1;
                 previous = None;
                 continue;
             }
@@ -789,7 +787,7 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
 
     info!(
         "{}: {} streets under {} names, {} junctions, {} roads \
-         ({clipped} runs clipped at the edge, {uphill} left to the hill) \
+         ({clipped} runs clipped at the edge, {uphill} points left to the hill) \
          — map data (c) OpenStreetMap contributors, ODbL 1.0",
         atlas.name,
         atlas.streets.len(),
