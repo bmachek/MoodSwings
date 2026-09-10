@@ -33,6 +33,27 @@ const LAMP_GLOBE_RADIUS: f32 = 0.30;
 /// how many sides they are drawn with — see [`super::props::cylinder_sides`].
 const COLUMN_RADIUS: f32 = 0.075;
 const ARM_RADIUS: f32 = 0.055;
+/// The old town's lamp, off the photographs.
+///
+/// Landshut's Altstadt is not lit by the straight cantilever arm with a globe
+/// on the end that every post-war street in the game wears. It carries a
+/// wrought-iron column whose top curves over in a *Schwanenhals* — a double
+/// scroll reaching out over the carriageway — with a small tapered lantern
+/// hanging point-down from the end of it and a conical cap on top.
+///
+/// Drawn as a chain of short segments rather than a curve, because the whole
+/// city is boxes and cylinders and a swept tube here would be the only
+/// exception. Seven segments is enough that the joints do not read as corners
+/// at the distance a lamp is looked at.
+const SCROLL_SEGMENTS: usize = 7;
+/// The scroll's radius, and how much of a half turn it sweeps through.
+const SCROLL_RADIUS: f32 = 0.92;
+const SCROLL_SWEEP: f32 = 1.75;
+/// The lantern: how tall, how wide at the shoulder, and its cap.
+const LANTERN_HEIGHT: f32 = 0.52;
+const LANTERN_WIDTH: f32 = 0.26;
+const LANTERN_CAP: f32 = 0.16;
+
 /// How far back from the kerb line the column stands, on the pavement.
 ///
 /// A lamp post is street furniture, and street furniture stands on the
@@ -129,6 +150,14 @@ pub struct ShopGlow;
 #[derive(Component)]
 pub struct LampBeam;
 
+/// The modern lamp's ironwork, and the old town's. Every pooled lamp carries
+/// both and shows one, because a post is assigned to a pooled entity at
+/// runtime and the two towns are mixed street by street.
+#[derive(Component)]
+struct ModernLamp;
+#[derive(Component)]
+struct WroughtLamp;
+
 #[derive(Component)]
 pub struct StreetLight;
 
@@ -139,6 +168,11 @@ pub struct StreetLight;
 /// Where a lamp stands, and which way it leans out over the road.
 #[derive(Clone, Copy)]
 pub struct LampPost {
+    /// Whether this stretch of street is the old town, and therefore carries
+    /// the wrought-iron lamp rather than the modern one. Decided by what the
+    /// street is paved with, which is the same thing: the Altstadt and the
+    /// Neustadt are the setts and the slabs.
+    pub old_town: bool,
     /// The column's foot, just inside the kerb.
     pub foot: Vec2,
     /// Unit vector from the kerb towards the middle of the road.
@@ -221,6 +255,13 @@ impl LampPosts {
                 };
                 placed.entry(cell_of(foot)).or_default().push(foot);
                 posts.push(LampPost {
+                    // Setts and sawn slabs are the old town; asphalt is not.
+                    // The same fact the paving already carries, read a second
+                    // way — see `atlas::Surface`.
+                    old_town: matches!(
+                        edge.surface,
+                        super::atlas::Surface::Sett | super::atlas::Surface::Slabs
+                    ),
                     foot,
                     // Whichever kerb it stands on, the arm reaches the other
                     // way — out over the carriageway.
@@ -292,6 +333,21 @@ fn spawn_pool(
     // roundness the buildings were missing.
     let column = meshes.add(super::props::cylinder(COLUMN_RADIUS, LAMP_HEIGHT));
     let arm = meshes.add(super::props::cylinder(ARM_RADIUS, ARM_REACH));
+    // The old town's ironwork: one scroll segment, one lantern body, one cap.
+    let link = meshes.add(super::props::cylinder(
+        ARM_RADIUS * 0.85,
+        SCROLL_RADIUS * SCROLL_SWEEP / SCROLL_SEGMENTS as f32 * 1.25,
+    ));
+    let lantern = meshes.add(Mesh::from(
+        Cone {
+            radius: LANTERN_WIDTH * 0.5,
+            height: LANTERN_HEIGHT,
+        },
+    ));
+    let cap = meshes.add(Mesh::from(Cone {
+        radius: LANTERN_WIDTH * 0.62,
+        height: LANTERN_CAP,
+    }));
     let steel = materials.add(StandardMaterial {
         base_color: Color::srgb(0.20, 0.21, 0.22),
         perceptual_roughness: 0.62,
@@ -300,7 +356,7 @@ fn spawn_pool(
     });
 
     for i in 0..POOL_SIZE {
-        commands.spawn((
+        let lamp = commands.spawn((
             Name::new(format!("Street Light {i}")),
             StreetLight,
             // Parked far below the world until assigned a lamp post.
@@ -327,6 +383,7 @@ fn spawn_pool(
                 (
                     Mesh3d(head.clone()),
                     MeshMaterial3d(glass.clone()),
+                    ModernLamp,
                     Transform::default(),
                 ),
                 // The column stands under the light, not under the entity: the
@@ -335,18 +392,89 @@ fn spawn_pool(
                 (
                     Mesh3d(column.clone()),
                     MeshMaterial3d(steel.clone()),
+                    ModernLamp,
                     Transform::from_xyz(ARM_REACH, -LAMP_HEIGHT * 0.5, 0.0),
                 ),
                 (
                     Mesh3d(arm.clone()),
                     MeshMaterial3d(steel.clone()),
+                    ModernLamp,
                     // Cylinders run along Y; lay it across to the column.
                     Transform::from_xyz(ARM_REACH * 0.5, 0.0, 0.0)
                         .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
                 ),
             ],
-        ));
+        )).id();
+        commands.entity(lamp).with_children(|lamp| {
+            wrought_iron(lamp, &column, &link, &lantern, &cap, &steel, &glass);
+        });
     }
+}
+
+/// The old town's lamp: a column, a scroll over the road, a hanging lantern.
+///
+/// Built in the pooled entity's own frame, where the origin is the *light* —
+/// out over the carriageway — and `+X` runs back to the kerb, which is where
+/// the column stands. So the scroll is walked backwards, from the light to the
+/// column top, and the column hangs off the far end of it.
+fn wrought_iron(
+    lamp: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    column: &Handle<Mesh>,
+    link: &Handle<Mesh>,
+    lantern: &Handle<Mesh>,
+    cap: &Handle<Mesh>,
+    steel: &Handle<StandardMaterial>,
+    glass: &Handle<StandardMaterial>,
+) {
+    // The scroll, as a chord walk. Each segment is a short cylinder laid along
+    // the tangent of a circular arc that starts vertical at the column and
+    // finishes horizontal over the road, which is the shape a Schwanenhals is.
+    let step = SCROLL_SWEEP / SCROLL_SEGMENTS as f32;
+    let mut at = Vec3::ZERO;
+    for i in 0..SCROLL_SEGMENTS {
+        // Swept from the light back towards the column: at the light the
+        // tangent is horizontal, at the column it is vertical.
+        let angle = step * (i as f32 + 0.5);
+        let tangent = Vec3::new(angle.cos(), angle.sin(), 0.0);
+        let along = SCROLL_RADIUS * step;
+        let middle = at + tangent * along * 0.5;
+        lamp.spawn((
+            Mesh3d(link.clone()),
+            MeshMaterial3d(steel.clone()),
+            WroughtLamp,
+            Visibility::Hidden,
+            // A cylinder runs along Y, so turn Y onto the tangent.
+            Transform::from_translation(middle).with_rotation(Quat::from_rotation_z(
+                -(tangent.x).atan2(tangent.y),
+            )),
+        ));
+        at += tangent * along;
+    }
+    // The column, hanging off the end of the scroll and reaching the ground.
+    lamp.spawn((
+        Mesh3d(column.clone()),
+        MeshMaterial3d(steel.clone()),
+        WroughtLamp,
+        Visibility::Hidden,
+        Transform::from_xyz(at.x, at.y - LAMP_HEIGHT * 0.5, 0.0),
+    ));
+    // The lantern, point down under the light, with its cap over it. A cone is
+    // built tip-up, so the body is turned over and the cap is not.
+    lamp.spawn((
+        Mesh3d(lantern.clone()),
+        MeshMaterial3d(glass.clone()),
+        WroughtLamp,
+        Visibility::Hidden,
+        Transform::from_xyz(0.0, -LANTERN_HEIGHT * 0.25, 0.0)
+            .with_rotation(Quat::from_rotation_x(std::f32::consts::PI)),
+    ));
+    lamp.spawn((
+        Mesh3d(cap.clone()),
+        MeshMaterial3d(steel.clone()),
+        WroughtLamp,
+        Visibility::Hidden,
+        Transform::from_xyz(0.0, LANTERN_HEIGHT * 0.25 + LANTERN_CAP * 0.5, 0.0),
+    ));
 }
 
 /// Snaps the pool onto the nearest intersections to the camera.
@@ -444,7 +572,11 @@ fn reposition_lamps(
     corridors: Option<Res<super::streetside::Corridors>>,
     mut posts: ResMut<LampPosts>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
-    mut lamps: Query<&mut Transform, With<StreetLight>>,
+    mut lamps: Query<(&mut Transform, &Children), With<StreetLight>>,
+    mut shapes: Query<
+        (&mut Visibility, Option<&ModernLamp>, Option<&WroughtLamp>),
+        Without<StreetLight>,
+    >,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
@@ -467,7 +599,29 @@ fn reposition_lamps(
     let take = POOL_SIZE.min(nearest.len());
     nearest.select_nth_unstable_by(take.saturating_sub(1), |a, b| a.0.total_cmp(&b.0));
 
-    for (mut transform, (_, post)) in lamps.iter_mut().zip(nearest.iter().take(take)) {
+    for ((mut transform, parts), (_, post)) in lamps.iter_mut().zip(nearest.iter().take(take)) {
+        // Which town this lamp is standing in. Both shapes hang off every
+        // pooled lamp and one is shown, because a post is assigned to a pooled
+        // entity at runtime and the old town and the new are mixed street by
+        // street.
+        for &part in parts {
+            let Ok((mut visible, modern, wrought)) = shapes.get_mut(part) else {
+                continue;
+            };
+            // The beam carries neither marker and is left alone. Deciding by
+            // "is it modern?" alone would have switched the light off with the
+            // ironwork on every asphalt street.
+            let wanted = match (modern.is_some(), wrought.is_some()) {
+                (true, _) => !post.old_town,
+                (_, true) => post.old_town,
+                _ => continue,
+            };
+            *visible = if wanted {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
         // The entity *is* the lamp head, out over the road; the column and arm
         // hang off it back towards the kerb. Yaw is set so the lamp's local +X
         // points that way, which is where those two children sit.
@@ -569,6 +723,7 @@ mod tests {
         // middle of the road or inside the building behind it.
         for inward in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
             let post = LampPost {
+                old_town: false,
                 foot: Vec2::new(12.0, -5.0),
                 inward,
             };
@@ -611,6 +766,7 @@ mod tests {
         for side in [1.0f32, -1.0] {
             let normal = Vec2::new(0.0, 1.0);
             let post = LampPost {
+                old_town: false,
                 foot: normal * 6.0 * side,
                 inward: -normal * side,
             };

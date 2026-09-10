@@ -168,8 +168,15 @@ pub fn spawn(
     else {
         return;
     };
-    // Facing back at the junction: `+Z` towards where somebody is coming from.
-    let yaw = (-direction.x).atan2(-direction.y);
+    // Across the street, not along it.
+    //
+    // This faced back down the street at the junction, on the reasoning that a
+    // sign should look at whoever is coming — and what that draws is a plate
+    // seen edge-on by everybody. A Straßenschild is a sheet of enamel bolted
+    // flat against the run of the street it names, so you read it walking along
+    // that street or standing on the corner of the one that crosses it. Its
+    // face is *parallel* to its own street; its normal is the street's normal.
+    let yaw = normal.x.atan2(normal.y);
     let visibility = VisibilityRange {
         start_margin: 0.0..0.0,
         end_margin: range..(range * 1.1),
@@ -184,14 +191,15 @@ pub fn spawn(
             .with_scale(Vec3::new(0.030, HEIGHT, 0.030)),
         visibility.clone(),
     ));
-    // Off to one side of its own post, the way a plate is bolted on.
+    // Off to one side of its own post, the way a plate is bolted on — along
+    // the street now that the plate lies along it, rather than across.
     //
     // Two quads back to back rather than one double-sided one, because the
     // back face of a quad shows its texture *mirrored*: a single plate marked
     // `double_sided` reads Karlsbader Straße from in front and ƎSSAЯTS from
     // behind. A real sign is a sheet of enamel with the name on both faces,
     // and this is that, at the cost of one more quad on a corner.
-    let plate = foot + normal * (PLATE.x * 0.42);
+    let plate = foot + *direction * (PLATE.x * 0.42);
     for turn in [0.0, std::f32::consts::PI] {
         commands.spawn((
             ChunkOf(chunk),
