@@ -544,7 +544,14 @@ const CROWN_ROW: f32 = 4.0;
 /// carriageway ribbon runs [`KERB_UNDERLAP`] past its own width on each side so
 /// the asphalt goes *under* the kerb; that overhang has to stay flat, because
 /// it is what the kerb slab sits on.
-fn cambered(width: f32, underlap: f32, length: f32, reach: f32, tile: f32, flat: (bool, bool)) -> Mesh {
+fn cambered(
+    width: f32,
+    underlap: f32,
+    length: f32,
+    reach: f32,
+    tile: f32,
+    flat: (bool, bool),
+) -> Mesh {
     let (hw, hl) = (width * 0.5 + underlap, reach * 0.5);
     let rows = ((reach / CROWN_ROW).ceil() as usize).max(2);
     let mut positions = Vec::with_capacity(CROWN_COLUMNS * (rows + 1));
@@ -1674,12 +1681,7 @@ impl Corridors {
     /// appearing inside a dynamic body*. Avian resolves that the only way it
     /// can, and the patrol has caught it twice: parked cars leaving the ground
     /// at fourteen metres a second.
-    pub fn under_another_kerb(
-        &self,
-        at: Vec2,
-        radius: f32,
-        own: super::roadgraph::EdgeId,
-    ) -> bool {
+    pub fn under_another_kerb(&self, at: Vec2, radius: f32, own: super::roadgraph::EdgeId) -> bool {
         let thing = Oblong {
             centre: at,
             axis: Vec2::X,
@@ -1708,10 +1710,7 @@ impl Corridors {
             axis: Vec2::X,
             half: Vec2::splat(radius),
         };
-        let cell = (
-            (at.x / CELL).floor() as i32,
-            (at.y / CELL).floor() as i32,
-        );
+        let cell = ((at.x / CELL).floor() as i32, (at.y / CELL).floor() as i32);
         (-1..=1).any(|dx| {
             (-1..=1).any(|dz| {
                 self.0.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
@@ -1856,67 +1855,87 @@ pub fn lots(
 
     let mut mapped = 0usize;
     let mut in_the_way = 0usize;
-    for block in real {
-        let building = block.buildings[0];
-        let yaw = building.facing.unwrap_or(0.0);
-        let plot = Oblong {
-            centre: building.footprint.center(),
-            // `facing` turns +Z outwards, so local +X — the frontage — is the
-            // way the street runs.
-            axis: Vec2::new(yaw.cos(), -yaw.sin()),
-            half: building.footprint.size() * 0.5,
-        };
-        // A real building can still be standing in the game's road, and it is
-        // the road that is wrong: a carriageway width here is guessed from the
-        // `lanes` tag at three metres a lane, and a medieval market street is
-        // narrower between its houses than its traffic lanes imply. Measured,
-        // 425 of Landshut's 2629 footprints have a corner inside one. The
-        // patrol found it before this test did — it walked one junction in
-        // forty seconds and then reported that the player had stopped moving.
+    let mut parts = 0usize;
+    for mut block in real {
+        // A real building arrives as one block of one or more parts — the
+        // rectangles its polygon was cut into at bake time, sharing one
+        // height, one palette and one kind — and every part is tested and
+        // filed on its own. Filing only the first, which is what this did when
+        // a building was one box, left an L-wing and a courtyard block's three
+        // other sides invisible to the marcher, which then ran a terrace
+        // straight through them.
         //
-        // Against the tarmac rather than the corridor, and with a metre of
-        // slack, because a real house genuinely does stand on the back of the
-        // pavement and that is not the failure. Whatever is dropped here, the
-        // terrace marcher fills.
-        // How far into the game's idea of a road this one may stand.
-        //
-        // A landmark gets a great deal more room than a house, and the reason
-        // is which of the two is guessed. A carriageway width here comes off
-        // the `lanes` tag at three metres a lane; St. Martin's footprint comes
-        // off the church. At a house's tolerance the test threw away the
-        // basilica, four more churches and the Wittelsbacherturm — the
-        // skyline, in other words — because a medieval street is narrower
-        // between its walls than its traffic lanes imply.
-        let tolerance = match building.kind {
-            // A gate is *supposed* to be in the road — that is what a gate is,
-            // the street runs under it — so it is not asked whether it is in
-            // one. It was left out of the town entirely for as long as it
-            // would have been drawn as a solid box, which across a carriageway
-            // is a wall the traffic piles up behind. `world::gate` builds the
-            // hole, so it can come back.
-            BuildingKind::Gate => f32::NEG_INFINITY,
-            // A church and a tower are not tested at all. St. Martin has stood
-            // where it stands since 1500 and its footprint is measured off the
-            // building; the carriageway it appears to be standing in is a
-            // guess off the `lanes` tag at three metres a lane. At six metres
-            // of tolerance the test still threw away the basilica and the
-            // Wittelsbacherturm — which is not the church being in the way, it
-            // is the road being wrong about how wide a medieval market street
-            // is between its walls.
-            BuildingKind::Church | BuildingKind::Cathedral | BuildingKind::Tower => {
-                f32::NEG_INFINITY
+        // The parts of one building are not tested against each other: they
+        // touch along the cuts, and touching is the point.
+        let mut kept = Vec::with_capacity(block.buildings.len());
+        for building in &block.buildings {
+            let building = *building;
+            let yaw = building.facing.unwrap_or(0.0);
+            let plot = Oblong {
+                centre: building.footprint.center(),
+                // `facing` turns +Z outwards, so local +X — the frontage — is the
+                // way the street runs.
+                axis: Vec2::new(yaw.cos(), -yaw.sin()),
+                half: building.footprint.size() * 0.5,
+            };
+            // A real building can still be standing in the game's road, and it is
+            // the road that is wrong: a carriageway width here is guessed from the
+            // `lanes` tag at three metres a lane, and a medieval market street is
+            // narrower between its houses than its traffic lanes imply. Measured,
+            // 425 of Landshut's 2629 footprints have a corner inside one. The
+            // patrol found it before this test did — it walked one junction in
+            // forty seconds and then reported that the player had stopped moving.
+            //
+            // Against the tarmac rather than the corridor, and with a metre of
+            // slack, because a real house genuinely does stand on the back of the
+            // pavement and that is not the failure. Whatever is dropped here, the
+            // terrace marcher fills.
+            // How far into the game's idea of a road this one may stand.
+            //
+            // A landmark gets a great deal more room than a house, and the reason
+            // is which of the two is guessed. A carriageway width here comes off
+            // the `lanes` tag at three metres a lane; St. Martin's footprint comes
+            // off the church. At a house's tolerance the test threw away the
+            // basilica, four more churches and the Wittelsbacherturm — the
+            // skyline, in other words — because a medieval street is narrower
+            // between its walls than its traffic lanes imply.
+            let tolerance = match building.kind {
+                // A gate is *supposed* to be in the road — that is what a gate is,
+                // the street runs under it — so it is not asked whether it is in
+                // one. It was left out of the town entirely for as long as it
+                // would have been drawn as a solid box, which across a carriageway
+                // is a wall the traffic piles up behind. `world::gate` builds the
+                // hole, so it can come back.
+                BuildingKind::Gate => f32::NEG_INFINITY,
+                // A church and a tower are not tested at all. St. Martin has stood
+                // where it stands since 1500 and its footprint is measured off the
+                // building; the carriageway it appears to be standing in is a
+                // guess off the `lanes` tag at three metres a lane. At six metres
+                // of tolerance the test still threw away the basilica and the
+                // Wittelsbacherturm — which is not the church being in the way, it
+                // is the road being wrong about how wide a medieval market street
+                // is between its walls.
+                BuildingKind::Church | BuildingKind::Cathedral | BuildingKind::Tower => {
+                    f32::NEG_INFINITY
+                }
+                // A big civic block is a different case: it is a modern building on
+                // a modern plot, so if it reads as standing in a street then one of
+                // the two is wrong and it is not obviously the street.
+                BuildingKind::TownHall | BuildingKind::Museum => LANDMARK_IN_THE_ROAD,
+                _ => 1.0,
+            };
+            if tolerance.is_finite() && on_the_carriageway(&roads, &plot, tolerance) {
+                in_the_way += 1;
+                continue;
             }
-            // A big civic block is a different case: it is a modern building on
-            // a modern plot, so if it reads as standing in a street then one of
-            // the two is wrong and it is not obviously the street.
-            BuildingKind::TownHall | BuildingKind::Museum => LANDMARK_IN_THE_ROAD,
-            _ => 1.0,
-        };
-        if tolerance.is_finite() && on_the_carriageway(&roads, &plot, tolerance) {
-            in_the_way += 1;
+            file(&mut taken, plot);
+            kept.push(building);
+            parts += 1;
+        }
+        if kept.is_empty() {
             continue;
         }
-        file(&mut taken, plot);
+        block.buildings = kept;
         blocks.push(block);
         mapped += 1;
     }
@@ -2023,6 +2042,8 @@ pub fn lots(
                             height,
                             palette: rng.random_range(0..PALETTE_SIZE),
                             kind: kind_for(&mut rng, district, terrace.arterial),
+                            roof: None,
+                            ground: 0.0,
                         }],
                         vacants: Vec::new(),
                         arterial: [terrace.arterial; 4],
@@ -2083,6 +2104,8 @@ pub fn lots(
                                 height: yards.random_range(BACK_HEIGHT.0..BACK_HEIGHT.1),
                                 palette: yards.random_range(0..PALETTE_SIZE),
                                 kind: BuildingKind::Apartments,
+                                roof: None,
+                                ground: 0.0,
                             }],
                             vacants: Vec::new(),
                             arterial: [false; 4],
@@ -2148,9 +2171,9 @@ pub fn lots(
     }
 
     info!(
-        "{mapped} of the town's buildings are its own ({in_the_way} of them stood \
-         in a street and were left out); {} more were invented to fill what the \
-         map does not know",
+        "{mapped} of the town's buildings are its own, in {parts} parts ({in_the_way} \
+         parts stood in a street and were left out); {} more were invented to fill \
+         what the map does not know",
         blocks.len() - mapped
     );
     (blocks, holes)
@@ -3008,6 +3031,7 @@ mod tests {
         let layout = CityLayout {
             grounds: Vec::new(),
             waters: Vec::new(),
+            relief: None,
             seed: 1,
             half_extent: 400.0,
             x_streets: Vec::new(),

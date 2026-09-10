@@ -26,3 +26,4 @@ shots/*/
 
 # Auditioned sound, written by `cargo run -- --audition`
 /shots/audio/
+__pycache__/

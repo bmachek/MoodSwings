@@ -266,6 +266,28 @@ pub fn quarter_for(seed: u64, center: Vec2) -> Option<Quarter> {
     }
 }
 
+/// What a building's roof does, where the map says.
+///
+/// Read off OSM's `roof:shape` at bake time and carried per building because
+/// it is the one fact about a roofline a style cannot guess: a Landshut street
+/// is Giebelhäuser at one end and a fifties infill with a hip at the other,
+/// and the map knows which is which. `None` leaves it to the style, which
+/// decides from the district and the kind — see `world::roof`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
+pub enum RoofShape {
+    /// Two slopes meeting at a ridge, the ends closed by triangular walls.
+    Gabled,
+    /// Four slopes, no gable ends.
+    Hipped,
+    /// A gable whose top is clipped into a small hip.
+    HalfHipped,
+    Flat,
+    /// Four slopes meeting at a point: a tower cap, a kiosk.
+    Pyramidal,
+    /// One slope: a lean-to, a shed.
+    Skillion,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Building {
     pub footprint: Rect,
@@ -284,6 +306,18 @@ pub struct Building {
     /// Index into the district's material palette.
     pub palette: u8,
     pub kind: BuildingKind,
+    /// What the map says the roof is, if it says anything. Everything the
+    /// generator invents carries `None` and lets the style decide.
+    pub roof: Option<RoofShape>,
+    /// How far above the town's datum the ground under this building stands.
+    ///
+    /// Zero for the whole of the town — `world::terrain` holds the ground at
+    /// exactly zero wherever a street runs, and every spawner writes a y off
+    /// that — and non-zero only for a landmark kept up on the relief where no
+    /// street reaches: the castle on the Hofberg. Such a building is spawned
+    /// with this added to every y it writes, and the terrain stamps a plateau
+    /// at this height under it so the ground meets its plinth.
+    pub ground: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -333,6 +367,10 @@ pub struct CityLayout {
     /// and axis-aligned, and the Isar is a braided river that goes where it
     /// goes. The generator keeps its canal; a town read off a map gets these.
     pub waters: Vec<Waterway>,
+    /// The shape of the ground, read off a digital elevation model at bake
+    /// time. `None` for the generator, whose landscape is noise past the edge
+    /// of town — see `world::terrain` for what a real one does inside it.
+    pub relief: Option<super::atlas::Relief>,
 }
 
 /// A piece of ground the map says is not built on.
@@ -413,6 +451,7 @@ pub fn generate(seed: u64, half_extent: f32, style: CityStyle) -> CityLayout {
     CityLayout {
         grounds: Vec::new(),
         waters: Vec::new(),
+        relief: None,
         seed,
         half_extent,
         x_streets,
@@ -693,6 +732,8 @@ fn lay_out_buildings(
             height: rng.random_range(min_h..max_h),
             palette: rng.random_range(0..PALETTE_SIZE),
             kind: common_kind(seed, &footprint, district),
+            roof: None,
+            ground: 0.0,
         });
     }
     (buildings, vacants)
