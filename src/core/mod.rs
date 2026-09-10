@@ -8,6 +8,7 @@ pub mod rng;
 pub mod schedule;
 pub mod settings;
 pub mod states;
+pub mod survey;
 
 use bevy::prelude::*;
 
