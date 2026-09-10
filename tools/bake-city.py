@@ -301,6 +301,23 @@ LANDMARK_CLASSES = {"church", "cathedral", "chapel", "castle", "temple", "tower"
 # either source, and the kind here stands in wherever the source's own class
 # says nothing -- so the skyline survives the change of source, and a future
 # Overpass bake, which reads the tags, agrees with this one.
+# And what a landmark is called, where the parquet carries no tag to say so.
+# Overture keeps a building's name and drops `historic`, `wikidata` and
+# `tourism`, which is what the Overpass bake read; so the wings of the castle
+# -- Dürnitztrakt, Fürstenbau, Damenstock, Kellereigebäude, the Torhaus --
+# arrived as anonymous houses and, standing up on the Hofberg, were left to
+# the hill along with everything else up there. A name with one of these in it
+# is a building somebody would walk up a hill to look at. A shop's name is not
+# on this list, and a shop is not a landmark: a landmark's measured height is
+# believed as it stands and its box is never cut, which a shopping centre
+# mapped as one polygon must not be given.
+LANDMARK_WORDS = re.compile(
+    r"(turm|torwart|tor$|kapelle|kirche|kloster|schlo(ss|ß)|trakt|bau$|stock$|stöckl|"
+    r"residenz|rathaus|zeughaus|münz|burg\b|dom$|basilika|spital|palais|museum|theater|"
+    r"bibliothek|gericht|dürnitz|torhaus|pfaffen|jägerhaus|gerichtsdiener)",
+    re.IGNORECASE,
+)
+
 KNOWN_LANDMARKS = {
     "Afrakapelle": "Church",
     "Alt St. Nikola": "Church",
@@ -973,6 +990,7 @@ def candidates_from_overture(path, lat0, lon0):
         cls, subtype = rows["class"][i], rows["subtype"][i]
         landmark = bool(name) and (
             cls in LANDMARK_CLASSES or subtype == "religious" or name in KNOWN_LANDMARKS
+            or LANDMARK_WORDS.search(name) is not None
         )
         height = None
         raw = rows["height"][i]

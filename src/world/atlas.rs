@@ -639,9 +639,13 @@ pub fn footprints(
             .unwrap_or_else(|| match first.kind {
                 // A town-wall tower is not a thin house. The map gives its
                 // footprint and almost never its height, and a masonry tower
-                // runs about six times its own base: Landshut's are four to
-                // six metres square and twenty-five to thirty-five tall.
-                Some(BuildingKind::Tower) => first.frontage.min(first.depth) * 6.0,
+                // runs about four times its own base: Landshut's are four to
+                // seven metres square and fifteen to twenty-five tall. Six
+                // times, which this said first, stood the Hungerturm up on
+                // the Hofberg like a thirty-metre office block.
+                Some(BuildingKind::Tower) => {
+                    (first.frontage.min(first.depth) * 4.0).clamp(12.0, 26.0)
+                }
                 // A gate carries a room over the arch and crenellations over
                 // that. The Ländtor is the one the map measured, at ten.
                 Some(BuildingKind::Gate) => 14.0,
