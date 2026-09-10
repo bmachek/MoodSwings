@@ -469,6 +469,156 @@ def thin_ring(points):
     return out
 
 
+# One street is often several ways, and the game cannot afford to believe that.
+#
+# "Altstadt" is twenty-two ways in this extract: 1908 m of centreline for a
+# street the literature gives as seven hundred metres long and thirty wide,
+# because the carriageway, the parking lanes and the pedestrian halves are each
+# mapped separately. The runtime draws every one of them as a full street with
+# a carriageway and two pavements, and what that produces is not a market
+# square -- it is nine parallel stripes of alternating paving, a thicket of
+# lamp posts, and kerbs marooned in the middle of it with nothing behind them.
+#
+# So ways of one name that run alongside each other become one way as wide as
+# the band they cover. Two things keep it honest: they must actually be
+# parallel (a street that turns a corner and keeps its name is not two lanes of
+# itself), and the survivor is moved to the middle of the band rather than left
+# on whichever lane happened to be longest.
+PARALLEL_GAP = 34.0
+PARALLEL_ANGLE = 0.44  # about 25 degrees
+# How much of a way has to run alongside the other before it is the same street.
+PARALLEL_SHARE = 0.6
+
+
+def bearing_of(a, b):
+    return math.atan2(b[1] - a[1], b[0] - a[0])
+
+
+def nearest_on(points, at):
+    """Distance from `at` to a polyline, and the bearing of the segment it is
+    nearest to."""
+    best = (float("inf"), 0.0, 0.0)
+    for behind, ahead in zip(points, points[1:]):
+        dx, dy = ahead[0] - behind[0], ahead[1] - behind[1]
+        span = dx * dx + dy * dy
+        if span < 1e-9:
+            continue
+        t = max(0.0, min(1.0, ((at[0] - behind[0]) * dx + (at[1] - behind[1]) * dy) / span))
+        foot = (behind[0] + dx * t, behind[1] + dy * t)
+        gap = math.dist(at, foot)
+        if gap < best[0]:
+            # Signed: which side of the line this point is on, so a band's
+            # extent can be measured rather than just its width.
+            side = ((at[0] - behind[0]) * dy - (at[1] - behind[1]) * dx) / math.sqrt(span)
+            best = (gap, bearing_of(behind, ahead), side)
+    return best
+
+
+def alongside(leader, other):
+    """Does `other` run beside `leader`? Returns the signed offsets if so."""
+    offsets = []
+    beside = 0
+    for at in other["points"]:
+        gap, bearing, side = nearest_on(leader["points"], at)
+        if gap > PARALLEL_GAP:
+            continue
+        # Modulo a half turn: a way mapped in the opposite direction is still
+        # the same street.
+        turn = abs((bearing_of(*other["points"][:2]) - bearing + math.pi / 2) % math.pi - math.pi / 2)
+        if turn > PARALLEL_ANGLE:
+            continue
+        beside += 1
+        offsets.append(side)
+    if beside < max(2, len(other["points"]) * PARALLEL_SHARE):
+        return None
+    return offsets
+
+
+# Over how many metres the shift eases away from a junction.
+WELD_EASE = 22.0
+
+
+def distance_to_weld(street):
+    """How far each point is, along the way, from the nearest shared one."""
+    points, welds = street["points"], street.get("welds") or []
+    count = len(points)
+    far = [float("inf")] * count
+    # The two ends are joins too, whether or not the extract marked them: a way
+    # that stops is a way another one may start at.
+    for index in range(count):
+        if index == 0 or index == count - 1 or (index < len(welds) and welds[index]):
+            far[index] = 0.0
+    for index in range(1, count):
+        step = math.dist(points[index - 1], points[index])
+        far[index] = min(far[index], far[index - 1] + step)
+    for index in range(count - 2, -1, -1):
+        step = math.dist(points[index], points[index + 1])
+        far[index] = min(far[index], far[index + 1] + step)
+    return far
+
+
+def merge_parallel(streets):
+    """Folds ways of one name that run alongside each other into one."""
+    by_name = {}
+    for street in streets:
+        by_name.setdefault(street["name"], []).append(street)
+
+    out, folded = [], 0
+    for name, group in by_name.items():
+        if not name or len(group) < 2:
+            out.extend(group)
+            continue
+        # Longest first, so the survivor is the one that describes the street.
+        group.sort(key=lambda s: -s["length"])
+        taken = [False] * len(group)
+        for i, leader in enumerate(group):
+            if taken[i]:
+                continue
+            taken[i] = True
+            low = -leader["width"] * 0.5
+            high = leader["width"] * 0.5
+            for j in range(i + 1, len(group)):
+                if taken[j]:
+                    continue
+                offsets = alongside(leader, group[j])
+                if offsets is None:
+                    continue
+                taken[j] = True
+                folded += 1
+                half = group[j]["width"] * 0.5
+                low = min(low, min(offsets) - half)
+                high = max(high, max(offsets) + half)
+            width = min(high - low, PARALLEL_GAP)
+            if width > leader["width"]:
+                # Move the survivor to the middle of the band it now covers,
+                # rather than leaving it on whichever lane happened to be
+                # longest -- but never move a weld.
+                #
+                # A shared coordinate is the only thing that joins two streets
+                # into one graph when the runtime loads this, so a shifted
+                # junction is a junction that stops existing. Moving them all
+                # cost the town its connectivity: the patrol went from walking
+                # fifteen junctions a minute to one.
+                #
+                # So the shift eases in from every weld over `WELD_EASE` metres
+                # and is full only where the street is on its own.
+                shift = (high + low) * 0.5
+                free = distance_to_weld(leader)
+                moved = []
+                for index, at in enumerate(leader["points"]):
+                    behind = leader["points"][max(index - 1, 0)]
+                    ahead = leader["points"][min(index + 1, len(leader["points"]) - 1)]
+                    bearing = bearing_of(behind, ahead)
+                    ease = min(free[index] / WELD_EASE, 1.0)
+                    # The normal, on the same hand `nearest_on` measures from.
+                    moved.append((at[0] + math.sin(bearing) * shift * ease,
+                                  at[1] - math.cos(bearing) * shift * ease))
+                leader["points"] = moved
+                leader["width"] = round(width, 1)
+            out.append(leader)
+    return out, folded
+
+
 def carriageway(tags, kind):
     """How wide to draw this way, in metres.
 
@@ -585,12 +735,19 @@ def main():
         if len(thinned) < 2:
             continue
 
+        points = [(x, z) for x, z, _ in thinned]
         streets.append({
             "name": tags.get("name", ""),
             "width": width,
             "arterial": kind in ARTERIAL,
             "surface": surface,
-            "points": [(x, z) for x, z, _ in thinned],
+            "points": points,
+            # Which of those points another way also uses. The merge below must
+            # not move one: a shared coordinate is the *only* thing that welds
+            # two streets into one graph at load time, so shifting one silently
+            # disconnects every side street that met there.
+            "welds": [bool(j) for _, _, j in thinned],
+            "length": sum(math.dist(a, b) for a, b in zip(points, points[1:])),
         })
 
     # ---------------------------------------------------------- extras ----
@@ -689,6 +846,15 @@ def main():
             f"{len(waters)} waterways, {len(grounds)} open areas",
             file=sys.stderr,
         )
+
+    # One street, not the four ways the mappers drew it as. See `merge_parallel`.
+    before = len(streets)
+    streets, folded = merge_parallel(streets)
+    print(
+        f"{folded} parallel ways folded into the street they belong to "
+        f"({before} -> {len(streets)})",
+        file=sys.stderr,
+    )
 
     def ron_points(points):
         return "[" + ",".join(f"({x:.1f},{z:.1f})" for x, z in points) + "]"

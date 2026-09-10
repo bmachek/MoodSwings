@@ -78,13 +78,21 @@ const CAR_EVERY: f32 = 25.0;
 /// How far a junction may be and still be worth walking to.
 const LEG: f32 = 140.0;
 
-/// How far off the centreline a waypoint is nudged, onto the pavement.
+/// How far behind the kerb a waypoint is nudged, onto the pavement.
 ///
-/// Wider than the widest half-carriageway plus a pavement, so it lands past the
-/// kerb on any street in the town. Overshooting puts the waypoint in a wall,
-/// which the arrival radius forgives; undershooting puts it in the traffic,
-/// which nothing does.
-const PAVEMENT_WALK: f32 = 6.5;
+/// Measured from the kerb rather than from the centreline, which is the whole
+/// of what was wrong with it. It used to be 6.5 m off the *middle* of the
+/// street on the argument that this was "wider than the widest half-carriageway
+/// plus a pavement" — and that was not true even then, because the widest
+/// arterial here is 16.9 m and its kerb is at 8.45. Once the bake began folding
+/// a street's parallel ways into one, the Altstadt became twenty-nine metres
+/// across and a waypoint 6.5 m off its centreline landed in the middle of the
+/// carriageway, among the parked cars. The patrol walked into one and stopped,
+/// four times a minute, and reported that the player had not moved.
+///
+/// Overshooting puts the waypoint in a wall, which the arrival radius forgives;
+/// undershooting puts it in the traffic, which nothing does.
+const PAVEMENT_WALK: f32 = 1.7;
 
 /// Above this, in metres, something that belongs on the road is not on it.
 ///
@@ -192,12 +200,23 @@ fn plan(city: &crate::world::City, here: Vec2, elapsed: f32) -> Vec<Vec2> {
     // route walks the same city on the surface it was mitred for.
     let mut walked = Vec::with_capacity(route.len());
     let mut previous = here;
+    let mut behind: Option<crate::world::roadgraph::NodeId> = None;
     for node in route {
         let at = graph.node(node).pos;
         if let Ok(direction) = Dir2::new(at - previous) {
-            walked.push(at + crate::ai::steering::right_of(*direction) * PAVEMENT_WALK);
+            // This street's own kerb, not a number that hopes to clear every
+            // street in the town. A city read off a map runs from a five-metre
+            // lane to a twenty-nine-metre market square, and no single offset
+            // is on the pavement of both.
+            let half = behind
+                .and_then(|from| graph.neighbors(from).find(|(to, _)| *to == node))
+                .map_or(4.0, |(_, edge)| graph.edge(edge).width * 0.5);
+            walked.push(
+                at + crate::ai::steering::right_of(*direction) * (half + PAVEMENT_WALK),
+            );
         }
         previous = at;
+        behind = Some(node);
     }
     // The waypoint the patrol is already standing on is not a waypoint; walking
     // to where you are is how a route ends before it starts.

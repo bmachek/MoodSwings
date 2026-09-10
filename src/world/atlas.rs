@@ -517,7 +517,36 @@ mod tests {
             // back to the generator and says so.
             return;
         };
-        assert!(town.streets.len() > 400, "{} streets", town.streets.len());
+        assert!(town.streets.len() > 300, "{} streets", town.streets.len());
+
+        // One street, not the four ways the mappers drew it as. The Altstadt is
+        // twenty-two ways in the raw extract -- carriageway, parking lanes and
+        // pedestrian halves each mapped separately -- and the runtime draws
+        // every one of them as a full street with two pavements. The bake folds
+        // ways of one name that run alongside each other into one as wide as
+        // the band they cover, so what arrives here is a market square rather
+        // than nine parallel stripes of paving with kerbs marooned between
+        // them.
+        let altstadt: Vec<&Street> = town
+            .streets
+            .iter()
+            .filter(|street| street.name == "Altstadt")
+            .collect();
+        assert!(
+            altstadt.len() < 12,
+            "the Altstadt is still {} separate ways",
+            altstadt.len()
+        );
+        let broadest = altstadt
+            .iter()
+            .map(|street| street.width)
+            .fold(0.0f32, f32::max);
+        // The literature gives it as about thirty metres wide, which is what
+        // makes it a Platz rather than a road.
+        assert!(
+            (22.0..=34.0).contains(&broadest),
+            "the Altstadt's widest way is {broadest} m; the town says thirty"
+        );
 
         let widths: Vec<f32> = town.streets.iter().map(|street| street.width).collect();
         let narrowest = widths.iter().copied().fold(f32::MAX, f32::min);
