@@ -82,6 +82,13 @@ pub struct Atlas {
 /// courtyard should be, and an invented terrace is better than a wrong solid.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Footprint {
+    /// What the town calls it, where the town calls it anything.
+    ///
+    /// Only landmarks carry one — the two thousand houses that make up the
+    /// street wall are anonymous, and a town where every building announces
+    /// itself is an airport. Empty for those.
+    #[serde(default)]
+    pub name: String,
     pub centre: (f32, f32),
     /// Which way the frontage runs, in the same convention `Building::facing`
     /// uses: `+Z` out across the pavement.
@@ -336,10 +343,32 @@ pub fn footprints(atlas: &Atlas, seed: u64, half_extent: f32, style: CityStyle) 
         // invented one, so a Landshut townhouse is a Landshut townhouse whether
         // or not somebody typed its storeys into OSM.
         let (low, high) = style.heights(district.height_range());
+        // A landmark's measured height is believed as it stands. Everything
+        // else is clamped into the style's band, because an OSM `height` on an
+        // ordinary house is as often the ridge as the eaves and as often a typo
+        // as either — but St. Martin really is a hundred and thirty metres, and
+        // clamping that to a Landshut townhouse is how a town loses its tower.
+        let landmark = !plot.name.is_empty();
         let height = plot
             .height
-            .map(|metres| metres.clamp(low.min(high), high.max(low) * 1.6))
-            .unwrap_or_else(|| rng.random_range(low..high));
+            .map(|metres| {
+                if landmark {
+                    metres
+                } else {
+                    metres.clamp(low.min(high), high.max(low) * 1.6)
+                }
+            })
+            .unwrap_or_else(|| match plot.kind {
+                // A town-wall tower is not a thin house. The map gives its
+                // footprint and almost never its height, and a masonry tower
+                // runs about six times its own base: Landshut's are four to
+                // six metres square and twenty-five to thirty-five tall.
+                Some(BuildingKind::Tower) => plot.frontage.min(plot.depth) * 6.0,
+                // A gate carries a room over the arch and crenellations over
+                // that. The Ländtor is the one the map measured, at ten.
+                Some(BuildingKind::Gate) => 14.0,
+                _ => rng.random_range(low..high),
+            });
         blocks.push(Block {
             area: Rect::new(centre - Vec2::splat(half.length()), centre + Vec2::splat(half.length())),
             paved: false,
@@ -534,19 +563,69 @@ mod tests {
         // this town is about 17 m by 11; the bake drops anything under 24 m² as
         // a bin store and anything over 78 m by 46 as something the game has no
         // mesh for.
+        //
+        // A *landmark* is exempt from that, and has to be: St. Martin is
+        // ninety-one metres long and the Stadtresidenz fifty-nine deep, so the
+        // limits that keep a retail shed from being drawn as a box the length
+        // of a street were throwing away exactly the buildings the town is
+        // known for.
         for plot in &town.buildings {
+            let (longest, deepest) = if plot.name.is_empty() {
+                (78.0, 46.0)
+            } else {
+                (120.0, 66.0)
+            };
             assert!(
-                plot.frontage >= 1.0 && plot.frontage <= 78.0,
-                "a {} m frontage at {:?}",
+                plot.frontage >= 1.0 && plot.frontage <= longest,
+                "a {} m frontage at {:?} ({})",
                 plot.frontage,
-                plot.centre
+                plot.centre,
+                plot.name
             );
-            assert!(plot.depth >= 1.0 && plot.depth <= 46.0, "{} m deep", plot.depth);
+            assert!(plot.depth >= 1.0 && plot.depth <= deepest, "{} m deep", plot.depth);
             assert!(plot.frontage >= plot.depth, "a plot deeper than it is wide");
             if let Some(height) = plot.height {
                 assert!((2.0..=140.0).contains(&height), "{height} m tall");
             }
         }
+
+        // The town is a skyline before it is a street plan, and the skyline is
+        // one building: the tallest brick tower in the world, at the south end
+        // of the Altstadt. Losing it to a size limit is how Landshut stops
+        // being Landshut.
+        let martin = town
+            .buildings
+            .iter()
+            .find(|plot| plot.name == "Basilika Sankt Martin")
+            .expect("St. Martin is not in the atlas");
+        assert_eq!(martin.height, Some(130.6));
+        assert!(
+            martin.frontage > 85.0,
+            "St. Martin is only {} m long; the literature says 92",
+            martin.frontage
+        );
+        assert_eq!(martin.kind, Some(crate::world::citygen::BuildingKind::Church));
+
+        // And the rest of what a person walks across town to look at. Only a
+        // landmark is named — the five hundred listed townhouses that make up
+        // an Altstadt street wall are not, because a name here means the
+        // height is believed as it stands.
+        let named = town.buildings.iter().filter(|plot| !plot.name.is_empty());
+        let mut kinds = std::collections::HashMap::new();
+        for plot in named {
+            *kinds.entry(plot.kind).or_insert(0usize) += 1;
+        }
+        use crate::world::citygen::BuildingKind::{Church, Gate, Tower};
+        for (kind, least) in [(Church, 12), (Tower, 5), (Gate, 3)] {
+            let count = kinds.get(&Some(kind)).copied().unwrap_or(0);
+            assert!(count >= least, "only {count} of {kind:?} in Landshut");
+        }
+        let total: usize = kinds.values().sum();
+        assert!(
+            (40..400).contains(&total),
+            "{total} named landmarks, which is either a town with none or one \
+             where every listed house counts as one"
+        );
 
         // Landshut is a town on a braided river and the atlas has to know it.
         // Three arms, each better than three kilometres inside the square.

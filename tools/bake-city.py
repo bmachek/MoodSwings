@@ -153,6 +153,59 @@ KIND = {
 # most of another.
 STOREY = 3.15
 
+# What makes a building a landmark: something a person would walk across town to
+# look at, and would call by name.
+#
+# Deliberately narrower than `heritage`, which in an Altstadt is on every second
+# townhouse. Two things hang off this and both want the narrow reading. A
+# landmark is exempt from the size limits below, because those exist to stop a
+# retail shed being drawn as a box the length of a street and they were throwing
+# away exactly the buildings the town is known for -- St. Martin is ninety-one
+# metres long against a seventy-eight metre limit. And a landmark's height is
+# believed as it stands rather than clamped into the city style's band, because
+# an OSM `height` on an ordinary house is as often the ridge as the eaves and as
+# often a typo as either. St. Martin really is a hundred and thirty metres; the
+# listed house next to it is not, and a hundred-metre terrace mapped as one
+# polygon is neither.
+def is_named(tags):
+    if not tags.get("name"):
+        return False
+    if tags.get("man_made") in ("tower", "water_tower", "observatory"):
+        return True
+    if tags.get("historic") in ("church", "castle", "city_gate", "tower", "monastery", "chapel"):
+        return True
+    if tags.get("building") in ("church", "cathedral", "chapel", "castle", "temple"):
+        return True
+    if tags.get("tourism") in ("attraction", "museum"):
+        return True
+    return bool(tags.get("wikidata"))
+
+
+# The one thing a landmark needs that neither the map nor a photograph can be
+# read for: how tall it is.
+#
+# Only numbers that have a source. The rest are left to `kind_of` and the city
+# style, because a guessed skyline is worse than an honest one -- and the game
+# has always been able to make a plausible church out of a footprint.
+#
+# St. Martin is the tallest brick tower in the world and the reason Landshut has
+# a skyline at all: 130.6 m, and the footprint the map gives it (91 m long)
+# matches the 92 m interior the literature quotes, so the two agree.
+LANDMARK_HEIGHT = {
+    "Basilika Sankt Martin": 130.6,
+}
+
+# And what a landmark is, where the plain building tag does not say. A gate is
+# not a house with a hole in it and a tower is not a thin house.
+LANDMARK_KIND = {
+    "castle": "TownHall",
+    "city_gate": "Gate",
+    "tower": "Tower",
+    "chapel": "Church",
+    "church": "Church",
+    "monastery": "Church",
+}
+
 # What the game will build. Anything smaller is a bin store, a garden shed or a
 # mapping artefact, and stamping it costs a draw call to show a doorstep.
 SMALLEST = 24.0
@@ -169,6 +222,14 @@ BIGGEST = 9000.0
 # the right *kind* of wrong.
 LONGEST = 78.0
 DEEPEST = 46.0
+
+# A landmark is allowed past those, but not past these. The exemption exists for
+# St. Martin at 91 m long and the Stadtresidenz at 59 deep; what it must not let
+# through is the two buildings that qualify as landmarks only because somebody
+# gave them a Wikidata item -- a shopping centre at 114 by 98 and an ice rink at
+# 92 by 90. Those are exactly the shed the limits were written for.
+NAMED_LONGEST = 120.0
+NAMED_DEEPEST = 66.0
 
 # How much of a rectangle a footprint has to be before the rectangle is a fair
 # stand-in for it. An L-shaped block fills about two thirds of its own bounding
@@ -275,6 +336,12 @@ def storeys(tags):
 
 
 def kind_of(tags):
+    if tags.get("man_made") in ("tower", "water_tower", "observatory"):
+        return "Tower"
+    for key in ("historic", "castle_type"):
+        value = tags.get(key)
+        if value and value in LANDMARK_KIND:
+            return LANDMARK_KIND[value]
     for key in ("building", "amenity", "shop", "man_made"):
         value = tags.get(key)
         if value and value in KIND:
@@ -534,38 +601,44 @@ def main():
             elements += json.load(open(path, encoding="utf-8")).get("elements", [])
         extras = {"elements": elements}
         half = args.half_extent
-        kept = dropped_small = dropped_big = dropped_ragged = 0
+        kept = dropped_small = dropped_big = dropped_ragged = landmarks = 0
         for element in extras.get("elements", []):
             tags = element.get("tags", {}) or {}
 
             if "building" in tags:
+                named = is_named(tags)
                 for ring in outer_rings(element):
                     metres = [project(lat, lon, lat0, lon0) for lat, lon in ring]
                     if not any(abs(x) <= half and abs(z) <= half for x, z in metres):
                         continue
                     footprint = area_of(metres)
-                    if footprint < SMALLEST:
+                    if footprint < SMALLEST and not named:
                         dropped_small += 1
                         continue
-                    if footprint > BIGGEST:
+                    if footprint > BIGGEST * (4.0 if named else 1.0):
                         dropped_big += 1
                         continue
                     box = smallest_box(metres)
                     if box is None:
                         continue
                     (cx, cz), yaw, wide, deep = box
-                    if wide > LONGEST or deep > DEEPEST:
+                    longest, deepest = (NAMED_LONGEST, NAMED_DEEPEST) if named else (LONGEST, DEEPEST)
+                    if wide > longest or deep > deepest:
                         dropped_big += 1
                         continue
                     # How much of its own box the building actually fills. A
                     # courtyard block is a ring, and a rectangle stamped over one
-                    # is a solid lump where a courtyard should be.
-                    if footprint < wide * deep * SQUARENESS:
+                    # is a solid lump where a courtyard should be. A landmark is
+                    # exempt: a church *is* a ring of buttresses round a nave,
+                    # and it is not drawn as a box anyway.
+                    if not named and footprint < wide * deep * SQUARENESS:
                         dropped_ragged += 1
                         continue
-                    height = storeys(tags)
+                    name = tags.get("name", "") if named else ""
+                    height = LANDMARK_HEIGHT.get(name) or storeys(tags)
                     kind = kind_of(tags)
                     buildings.append({
+                        "name": name,
                         "centre": (cx, cz),
                         "yaw": yaw,
                         "frontage": wide,
@@ -574,6 +647,8 @@ def main():
                         "kind": kind,
                     })
                     kept += 1
+                    if named:
+                        landmarks += 1
                 continue
 
             waterway = tags.get("waterway")
@@ -608,7 +683,8 @@ def main():
                 continue
 
         print(
-            f"  {kept} buildings ({dropped_small} too small, {dropped_big} too "
+            f"  {kept} buildings ({landmarks} of them landmarks; "
+            f"{dropped_small} too small, {dropped_big} too "
             f"big, {dropped_ragged} too ragged for a rectangle), "
             f"{len(waters)} waterways, {len(grounds)} open areas",
             file=sys.stderr,
@@ -639,8 +715,10 @@ def main():
         for b in buildings:
             height = f"Some({b['height']})" if b["height"] is not None else "None"
             kind = f"Some({b['kind']})" if b["kind"] else "None"
+            name = b["name"].replace('"', "'")
             out.write(
-                f"        (centre: ({b['centre'][0]:.1f},{b['centre'][1]:.1f}), "
+                f'        (name: "{name}", '
+                f"centre: ({b['centre'][0]:.1f},{b['centre'][1]:.1f}), "
                 f"yaw: {b['yaw']:.4f}, frontage: {b['frontage']:.1f}, "
                 f"depth: {b['depth']:.1f}, height: {height}, kind: {kind}),\n"
             )

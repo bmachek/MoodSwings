@@ -140,6 +140,12 @@ pub enum BuildingKind {
     Museum,
     /// Where the city's children learn to hop quietly.
     School,
+    /// A tower standing on its own: a watchtower, a water tower, what is left
+    /// of a town wall. Landshut has seven of them.
+    Tower,
+    /// A city gate. Not a house with a hole in it — Landshut's are twin brick
+    /// towers with a pointed arch between them and crenellations on top.
+    Gate,
     /// The one building that is not a box: `world::church` raises a nave,
     /// a tower and a spire where the stamped building's box would stand.
     Church,

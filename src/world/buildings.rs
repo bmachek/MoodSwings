@@ -105,6 +105,7 @@ pub struct CityAssets {
     /// scaled to, so the tiling that suits a thirty-metre strip a quarter of a
     /// metre tall does not suit anything else in the city.
     concrete: Handle<StandardMaterial>,
+    brick: Handle<StandardMaterial>,
     /// One per entry in [`GROUND_BUCKETS`].
     paving: Vec<Handle<StandardMaterial>>,
     /// One per entry in [`GROUND_BUCKETS`], and not a `StandardMaterial`: open
@@ -509,12 +510,23 @@ fn concrete_slab(
     tint: Color,
     tiling: Vec2,
 ) -> StandardMaterial {
+    slab_of(library, images, super::material::set::CONCRETE_ROUGH, tint, tiling)
+}
+
+/// The same, out of whichever scanned set is asked for.
+fn slab_of(
+    library: &super::material::MaterialLibrary,
+    images: &mut Assets<Image>,
+    set: &str,
+    tint: Color,
+    tiling: Vec2,
+) -> StandardMaterial {
     let mut slab = StandardMaterial {
         uv_transform: Affine2::from_scale(tiling),
         perceptual_roughness: 0.95,
         ..default()
     };
-    match library.get(super::material::set::CONCRETE_ROUGH) {
+    match library.get(set) {
         Some(scanned) => {
             scanned.apply(&mut slab);
             slab.base_color = tint;
@@ -781,6 +793,18 @@ pub fn build_assets(
             Color::srgb(0.50, 0.50, 0.51),
             Vec2::splat(7.0),
         )),
+        // Brick, for the buildings that are honestly made of it. Landshut's
+        // are: St. Martin is 1.86 million bricks and nineteen thousand tonnes
+        // of them, and the reason it is worth its own material rather than a
+        // tint on the concrete is that the whole point of the tower is the
+        // colour it is against the sky.
+        brick: materials.add(slab_of(
+            library,
+            images,
+            super::material::set::BRICK_OLD,
+            Color::srgb(0.46, 0.24, 0.18),
+            Vec2::splat(9.0),
+        )),
         paving,
         grass,
         // Eight sides, not four. A four-sided cone is a pyramid, and it
@@ -855,6 +879,11 @@ impl CityAssets {
     /// The kerb concrete, for structures that are honestly made of it.
     pub fn concrete(&self) -> Handle<StandardMaterial> {
         self.concrete.clone()
+    }
+
+    /// Fired brick, for the ones that are honestly made of *that*.
+    pub fn brick(&self) -> Handle<StandardMaterial> {
+        self.brick.clone()
     }
 
     /// The tarred-roof material for a surface this many metres across.
@@ -1362,6 +1391,10 @@ fn spawn_building(
             frontage,
             throat,
             height,
+            // A church read off a map carries its measured tower; one the
+            // zoning pass stamped carries a claim. `Building::facing` is only
+            // ever set by the atlas, so it is also what says which this is.
+            building.facing.map(|_| height),
             yaw,
             building.kind == super::citygen::BuildingKind::Cathedral,
             chunk,

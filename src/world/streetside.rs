@@ -1634,6 +1634,12 @@ const IN_THE_ROAD: f32 = 0.20;
 /// middle of another.
 const PAVED_OVER: f32 = 1.2;
 
+/// How far a landmark may stand into the game's idea of a carriageway.
+///
+/// Six metres, against the hand's width a house gets, and the asymmetry is the
+/// point: the church is measured and the road is guessed.
+const LANDMARK_IN_THE_ROAD: f32 = 6.0;
+
 /// Every road, filed by cell, so a candidate plot only tests the handful of
 /// streets that could possibly be under it.
 ///
@@ -1818,7 +1824,7 @@ pub fn lots(
     let mut mapped = 0usize;
     let mut in_the_way = 0usize;
     for block in real {
-        let building = &block.buildings[0];
+        let building = block.buildings[0];
         let yaw = building.facing.unwrap_or(0.0);
         let plot = Oblong {
             centre: building.footprint.center(),
@@ -1839,7 +1845,44 @@ pub fn lots(
         // slack, because a real house genuinely does stand on the back of the
         // pavement and that is not the failure. Whatever is dropped here, the
         // terrace marcher fills.
-        if on_the_carriageway(&roads, &plot, 1.0) {
+        // How far into the game's idea of a road this one may stand.
+        //
+        // A landmark gets a great deal more room than a house, and the reason
+        // is which of the two is guessed. A carriageway width here comes off
+        // the `lanes` tag at three metres a lane; St. Martin's footprint comes
+        // off the church. At a house's tolerance the test threw away the
+        // basilica, four more churches and the Wittelsbacherturm — the
+        // skyline, in other words — because a medieval street is narrower
+        // between its walls than its traffic lanes imply.
+        let tolerance = match building.kind {
+            // A gate is *supposed* to be in the road. That is what a gate is,
+            // and Landshut's are twin brick towers with the street running
+            // under a pointed arch between them. The game has no arch, so a
+            // gate here would be a solid box across a carriageway — which the
+            // patrol would walk into and traffic would pile up behind. Left
+            // out until it can be built as what it is.
+            BuildingKind::Gate => {
+                in_the_way += 1;
+                continue;
+            }
+            // A church and a tower are not tested at all. St. Martin has stood
+            // where it stands since 1500 and its footprint is measured off the
+            // building; the carriageway it appears to be standing in is a
+            // guess off the `lanes` tag at three metres a lane. At six metres
+            // of tolerance the test still threw away the basilica and the
+            // Wittelsbacherturm — which is not the church being in the way, it
+            // is the road being wrong about how wide a medieval market street
+            // is between its walls.
+            BuildingKind::Church | BuildingKind::Cathedral | BuildingKind::Tower => {
+                f32::NEG_INFINITY
+            }
+            // A big civic block is a different case: it is a modern building on
+            // a modern plot, so if it reads as standing in a street then one of
+            // the two is wrong and it is not obviously the street.
+            BuildingKind::TownHall | BuildingKind::Museum => LANDMARK_IN_THE_ROAD,
+            _ => 1.0,
+        };
+        if tolerance.is_finite() && on_the_carriageway(&roads, &plot, tolerance) {
             in_the_way += 1;
             continue;
         }
