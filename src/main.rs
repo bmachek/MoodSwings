@@ -64,6 +64,19 @@ fn main() {
                         // saved choice on the first frame.
                         resolution: crate::core::config::Resolution::default().size().into(),
                         present_mode: PresentMode::AutoVsync,
+                        // A capture opens no window anybody can see.
+                        //
+                        // It cannot open *no* window: the harness renders to an
+                        // offscreen texture, but wgpu still wants a surface to
+                        // pick a device against, and window capture returns
+                        // black when the OS never composited the window — which
+                        // is why this is an offscreen render in the first place.
+                        // What it can do is never show the thing. Held back
+                        // rather than closed, so a run does not steal focus,
+                        // does not tile itself over whatever is on the desktop,
+                        // and does not raise a Dock icon in front of somebody
+                        // working.
+                        visible: !crate::core::capture::is_capture_mode(),
                         ..default()
                     }),
                     ..default()
