@@ -149,6 +149,7 @@ fn generate_city(
             .map(|atlas| {
                 atlas::footprints(
                     atlas,
+                    &layout.graph,
                     config.world_seed,
                     config.world.half_extent,
                     config.city,

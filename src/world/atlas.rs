@@ -281,6 +281,64 @@ fn open_ground(atlas: &Atlas, half_extent: f32) -> Vec<super::citygen::OpenGroun
     out
 }
 
+/// Turns a footprint to face the street it stands on.
+///
+/// Returns the yaw and the frontage and depth that go with it: fronting the
+/// short side of a box means the two swap, because `Building::footprint` is
+/// read as `frontage x depth` in the building's own frame.
+///
+/// The convention `buildings::site_in` reads is that a yaw of theta sends the
+/// building's local `+Z` outward, across the pavement — so the front is the
+/// side whose outward normal has the largest dot with the direction of the
+/// nearest road.
+fn facing_the_street(graph: &RoadGraph, centre: Vec2, plot: &Footprint) -> (f32, f32, f32) {
+    let Some(towards) = nearest_street(graph, centre) else {
+        return (plot.yaw, plot.frontage, plot.depth);
+    };
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let mut best = (plot.yaw, plot.frontage, plot.depth);
+    let mut score = f32::MIN;
+    for turn in 0..4 {
+        let yaw = plot.yaw + quarter * turn as f32;
+        let outward = Vec2::new(yaw.sin(), yaw.cos());
+        let facing = outward.dot(towards);
+        if facing > score {
+            score = facing;
+            // A quarter or three quarters of a turn swaps which side is the
+            // frontage.
+            best = if turn % 2 == 0 {
+                (yaw, plot.frontage, plot.depth)
+            } else {
+                (yaw, plot.depth, plot.frontage)
+            };
+        }
+    }
+    best
+}
+
+/// The direction from `at` to the nearest carriageway, if there is one near.
+fn nearest_street(graph: &RoadGraph, at: Vec2) -> Option<Vec2> {
+    // How far to look. Past this a building is not on a street in any sense
+    // that would decide which way its front door is.
+    const REACH: f32 = 60.0;
+    let mut best = (REACH * REACH, Vec2::ZERO);
+    for edge in graph.edges() {
+        let (a, b) = (graph.node(edge.a).pos, graph.node(edge.b).pos);
+        let span = b - a;
+        let length = span.length_squared();
+        if length < 1e-6 {
+            continue;
+        }
+        let t = ((at - a).dot(span) / length).clamp(0.0, 1.0);
+        let foot = a + span * t;
+        let away = (foot - at).length_squared();
+        if away < best.0 {
+            best = (away, foot - at);
+        }
+    }
+    (best.0 < REACH * REACH).then(|| best.1.normalize_or_zero())
+}
+
 /// The town's water, clipped to the square the game builds.
 ///
 /// Clipped the way a street is — an arm that leaves and comes back is two
@@ -322,7 +380,13 @@ fn waters(atlas: &Atlas, half_extent: f32) -> Vec<super::citygen::Waterway> {
 /// atlas city: a real block is not a rectangle and nothing downstream wants one
 /// to be. Anything whose middle is outside the square the game builds is
 /// dropped, the same rule the streets take.
-pub fn footprints(atlas: &Atlas, seed: u64, half_extent: f32, style: CityStyle) -> Vec<Block> {
+pub fn footprints(
+    atlas: &Atlas,
+    graph: &RoadGraph,
+    seed: u64,
+    half_extent: f32,
+    style: CityStyle,
+) -> Vec<Block> {
     use crate::core::rng::{stream, stream_for};
     use rand::RngExt;
 
@@ -336,7 +400,19 @@ pub fn footprints(atlas: &Atlas, seed: u64, half_extent: f32, style: CityStyle) 
         if centre.x.abs() > half_extent || centre.y.abs() > half_extent {
             continue;
         }
-        let half = Vec2::new(plot.frontage, plot.depth) * 0.5;
+        // Which way it faces, which the bake cannot know and this can.
+        //
+        // A minimum-area box has two axes and the baker picks the longer one,
+        // because a plot is usually wider on the street than it is deep. Usually
+        // is not always, and the sign is arbitrary either way — so a quarter of
+        // the town wore its front on its flank and another quarter on its back.
+        // What that draws is a Giebelhaus with its stepped screen standing off
+        // to one side of its own roof, which is what a wrong Dachfront is.
+        //
+        // The street knows. Take the four sides the box can present, and front
+        // the one whose outward normal best points at the nearest carriageway.
+        let (yaw, frontage, depth) = facing_the_street(graph, centre, plot);
+        let half = Vec2::new(frontage, depth) * 0.5;
         let district = super::streetside::district_at(centre, half_extent, false);
         // What the mappers counted, where they counted it. Where they did not —
         // four buildings in five — the style decides, exactly as it does for an
@@ -375,7 +451,7 @@ pub fn footprints(atlas: &Atlas, seed: u64, half_extent: f32, style: CityStyle) 
             district,
             buildings: vec![Building {
                 footprint: Rect::new(centre - half, centre + half),
-                facing: Some(plot.yaw),
+                facing: Some(yaw),
                 height,
                 palette: rng.random_range(0..super::citygen::PALETTE_SIZE),
                 kind: plot.kind.unwrap_or(BuildingKind::Apartments),
@@ -686,6 +762,50 @@ mod tests {
             town.grounds.len() > 40,
             "only {} pieces of open ground",
             town.grounds.len()
+        );
+    }
+
+    /// A building faces the street, not whichever way its bounding box came
+    /// out.
+    ///
+    /// This is what a wrong Dachfront was. A minimum-area box has two axes and
+    /// the bake picks the longer one; the sign is arbitrary and the longer side
+    /// is not always the street side, so a quarter of the town wore its front
+    /// on its flank and another quarter on its back. On a Giebelhaus that draws
+    /// the stepped screen standing off to one side of its own roof, which is
+    /// what you see from the street and cannot see from above.
+    #[test]
+    fn every_building_turns_its_front_to_the_road() {
+        let Some(town) = load("landshut") else {
+            return;
+        };
+        let (layout, _) = layout(&town, 1, 1_000.0);
+        let blocks = footprints(&town, &layout.graph, 1, 1_000.0, CityStyle::Landshuepf);
+        assert!(blocks.len() > 2_000, "{} buildings", blocks.len());
+
+        let mut faced = 0usize;
+        let mut counted = 0usize;
+        for block in &blocks {
+            let building = &block.buildings[0];
+            let centre = building.footprint.center();
+            let Some(towards) = nearest_street(&layout.graph, centre) else {
+                continue;
+            };
+            counted += 1;
+            let yaw = building.facing.expect("an atlas building faces somewhere");
+            // The convention `buildings::site_in` reads: a yaw of theta sends
+            // the building's local +Z outward, across the pavement.
+            let outward = Vec2::new(yaw.sin(), yaw.cos());
+            if outward.dot(towards) > 0.55 {
+                faced += 1;
+            }
+        }
+        let share = faced as f32 / counted.max(1) as f32;
+        assert!(
+            share > 0.9,
+            "only {faced} of {counted} buildings ({:.0}%) face the street they \
+             stand on",
+            share * 100.0
         );
     }
 
