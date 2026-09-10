@@ -346,7 +346,20 @@ pub fn update_streaming(
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
-                spawn_edge(&mut commands, &street.paint, id, edge, from, to, chunk);
+                spawn_edge(
+                    &mut commands,
+                    &street.paint,
+                    id,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    (
+                        city.graph.node(edge.a).edges.len() >= 3,
+                        city.graph.node(edge.b).edges.len() >= 3,
+                    ),
+                    street.ribbons.as_ref().and_then(|it| it.crossing(id)),
+                );
                 super::props::spawn_edge(
                     &mut commands,
                     &street.props,

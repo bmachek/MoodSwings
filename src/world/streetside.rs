@@ -350,6 +350,15 @@ pub struct Ribbons {
     plates: Vec<Option<Handle<Mesh>>>,
     /// One material per [`super::atlas::Surface`], indexed by its own `index`.
     paving: [Handle<super::road::RoadMaterial>; 4],
+    /// The zebra at each end of each street, indexed by `EdgeId`, carrying the
+    /// crown of the road it is painted on. `None` on any street that gets no
+    /// crossing — a cobbled one, or one too short to want one.
+    ///
+    /// A crossing has to be a mesh of its own rather than the shared quad every
+    /// other marking uses, because it is the one marking that spans the *width*
+    /// of a cambered road. A centre line does not: it sits on the crown, which
+    /// is a single number.
+    crossings: Vec<Option<Handle<Mesh>>>,
     /// The two pavements of each street, indexed by `EdgeId` then by side —
     /// 0 for the clockwise side of the run from `a` to `b`, 1 for the
     /// anticlockwise one. `None` where the street is too short to carry one
@@ -417,6 +426,11 @@ struct Strip {
 }
 
 impl Ribbons {
+    /// The zebra for one street, already carrying that street's crown.
+    pub fn crossing(&self, id: super::roadgraph::EdgeId) -> Option<&Handle<Mesh>> {
+        self.crossings.get(id.0 as usize).and_then(|it| it.as_ref())
+    }
+
     fn material(&self, surface: super::atlas::Surface) -> Handle<super::road::RoadMaterial> {
         self.paving[surface.index()].clone()
     }
@@ -464,6 +478,121 @@ fn ribbon(width: f32, length: f32, tile: f32) -> Mesh {
     // culled: two thousand invisible roads, and a town that looked like it had
     // grass where its carriageways should be.
     .with_inserted_indices(bevy::render::mesh::Indices::U32(vec![0, 2, 1, 0, 3, 2]))
+}
+
+/// One zebra, carrying the crown of the road under it.
+///
+/// Full size rather than a unit quad scaled to fit: the whole point is the
+/// curve across it, and a curve does not survive being scaled by a transform
+/// that knows nothing about it.
+fn crossing_quad(width: f32, depth: f32, level: f32) -> Mesh {
+    let (hw, hl) = (width * 0.46, depth * 0.5);
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    for row in 0..2 {
+        let z = if row == 0 { -hl } else { hl };
+        for column in 0..CROWN_COLUMNS {
+            let u = column as f32 / (CROWN_COLUMNS - 1) as f32;
+            let x = -hw + u * hw * 2.0;
+            positions.push([x, super::road::crown(width, x) * level, z]);
+            let slope = super::road::crown_slope(width, x) * level;
+            normals.push(Vec3::new(-slope, 1.0, 0.0).normalize().to_array());
+            uvs.push([u, row as f32]);
+        }
+    }
+    let mut indices = Vec::new();
+    for column in 0..CROWN_COLUMNS - 1 {
+        let here = column as u32;
+        let across = CROWN_COLUMNS as u32;
+        indices.extend([here, here + across, here + 1]);
+        indices.extend([here + 1, here + across, here + across + 1]);
+    }
+    Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::render::mesh::Indices::U32(indices))
+}
+
+/// How finely a cambered carriageway is cut across its width and along its
+/// length.
+///
+/// Seven columns rather than two, because the crown is a parabola and two
+/// columns make it a flat plane; and a row every four metres, because the
+/// crown fades into a junction over nine and a fade drawn in one step is a
+/// crease. That is 7 x N vertices for a street instead of 4 — about sixty for
+/// the median Landshut segment, against the two thousand a building costs.
+const CROWN_COLUMNS: usize = 7;
+const CROWN_ROW: f32 = 4.0;
+
+/// A carriageway with a crown on it.
+///
+/// The same quad as [`ribbon`] with its middle lifted. Two things about how it
+/// is lifted matter more than the shape.
+///
+/// It is built *upward* from the road bed and never below it. The ground under
+/// this town is one plane at exactly zero with the bed fourteen millimetres
+/// over it, so a gutter cut below the bed is eaten by the ground and comes out
+/// as a stripe of back-land grit down every kerb. The gutters stay where the
+/// road was and the middle goes up.
+///
+/// And the lift stops at the kerb line rather than at the mesh's edge. A
+/// carriageway ribbon runs [`KERB_UNDERLAP`] past its own width on each side so
+/// the asphalt goes *under* the kerb; that overhang has to stay flat, because
+/// it is what the kerb slab sits on.
+fn cambered(width: f32, underlap: f32, length: f32, reach: f32, tile: f32, flat: (bool, bool)) -> Mesh {
+    let (hw, hl) = (width * 0.5 + underlap, reach * 0.5);
+    let rows = ((reach / CROWN_ROW).ceil() as usize).max(2);
+    let mut positions = Vec::with_capacity(CROWN_COLUMNS * (rows + 1));
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+
+    for row in 0..=rows {
+        let t = row as f32 / rows as f32;
+        let z = -hl + t * reach;
+        // Where this row is along the *street*, which is shorter than the
+        // ribbon: a ribbon overhangs both its nodes by half its own width so
+        // consecutive ones overlap at a bend.
+        let along = z + length * 0.5;
+        let (level, rate) = super::road::crown_fade(along.clamp(0.0, length), length, flat);
+        for column in 0..CROWN_COLUMNS {
+            let u = column as f32 / (CROWN_COLUMNS - 1) as f32;
+            let x = -hw + u * hw * 2.0;
+            let lift = super::road::crown(width, x);
+            positions.push([x, lift * level, z]);
+            // The surface of y = f(x, z) has normal (-df/dx, 1, -df/dz).
+            let slope = super::road::crown_slope(width, x) * level;
+            let run = lift * rate;
+            normals.push(Vec3::new(-slope, 1.0, -run).normalize().to_array());
+            uvs.push([(x + hw) / tile, (z + hl) / tile]);
+        }
+    }
+
+    let mut indices = Vec::with_capacity(rows * (CROWN_COLUMNS - 1) * 6);
+    for row in 0..rows {
+        for column in 0..CROWN_COLUMNS - 1 {
+            let here = (row * CROWN_COLUMNS + column) as u32;
+            let across = CROWN_COLUMNS as u32;
+            // Wound the same way round as `ribbon`, which is the way round that
+            // faces up — see the note there, and the two thousand invisible
+            // roads that established it.
+            indices.extend([here, here + across, here + 1]);
+            indices.extend([here + 1, here + across, here + across + 1]);
+        }
+    }
+
+    Mesh::new(
+        bevy::render::mesh::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::render::mesh::Indices::U32(indices))
 }
 
 /// How shallow a crossing has to be before the mitre stops being believed.
@@ -1037,10 +1166,20 @@ pub fn build_ribbons(
             // road level exactly where the pavement should have been, in
             // whatever the street is paved with: on the Altstadt, a cobbled
             // strip along the kerb.
-            meshes.add(super::buildings::with_tangents(ribbon(
-                edge.width + KERB_UNDERLAP * 2.0,
+            // Flat into a real junction and straight through a bend: a
+            // street that merely turns keeps its crown, and six nodes in seven
+            // of a town read off a map are turns.
+            let flat = (
+                layout.graph.node(edge.a).edges.len() >= 3,
+                layout.graph.node(edge.b).edges.len() >= 3,
+            );
+            meshes.add(super::buildings::with_tangents(cambered(
+                edge.width,
+                KERB_UNDERLAP,
+                edge.length,
                 edge.length + edge.width,
                 TILE,
+                flat,
             )))
         })
         .collect();
@@ -1078,9 +1217,41 @@ pub fn build_ribbons(
                 .unwrap_or_default()
         })
         .collect();
+    // The zebras, on the same crown their road carries. Built here rather than
+    // in `markings` for the reason every other per-edge mesh is: a mesh knows
+    // its own size, and there is exactly one of these per street.
+    let crossings = layout
+        .graph
+        .edges()
+        .map(|edge| {
+            if edge.surface != super::atlas::Surface::Asphalt
+                || edge.length < super::markings::MIN_CROSSING_LENGTH
+            {
+                return None;
+            }
+            let flat = (
+                layout.graph.node(edge.a).edges.len() >= 3,
+                layout.graph.node(edge.b).edges.len() >= 3,
+            );
+            let setback = edge.width * super::markings::CROSSING_SETBACK;
+            // Both ends share one mesh, at whichever of them has flattened
+            // further. They differ only where one end is a junction and the
+            // other a bend, and the error is a few millimetres of paint.
+            let level = super::road::crown_fade(setback, edge.length, flat)
+                .0
+                .min(super::road::crown_fade(edge.length - setback, edge.length, flat).0);
+            Some(meshes.add(super::buildings::with_tangents(crossing_quad(
+                edge.width,
+                super::markings::CROSSING_DEPTH,
+                level,
+            ))))
+        })
+        .collect();
+
     Ribbons {
         roads,
         plates,
+        crossings,
         paving,
         strips,
         slabs,

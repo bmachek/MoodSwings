@@ -114,6 +114,99 @@ impl Default for RoadSettings {
     }
 }
 
+/// How far a carriageway's middle stands above its gutters, as a fraction of
+/// its half-width.
+///
+/// Two per cent. A real crossfall is two to two and a half, and it is there so
+/// the road drains — which is exactly why it is worth having here: it is what
+/// puts the standing water at the kerb rather than in the middle of the lane,
+/// and it is why a wet street reflects in two bands and not one sheet.
+pub const CROSSFALL: f32 = 0.014;
+
+/// The most a crown may rise, in metres.
+///
+/// The Altstadt is thirteen metres wide and a market square is wider still;
+/// unbounded, the crossfall would put a fifteen-centimetre hump down the middle
+/// of it, which is a hump a car climbs rather than a road that drains. Real
+/// wide streets crown less, not more.
+pub const CROWN_CAP: f32 = 0.045;
+
+// Checked where it is written down rather than in a test, the way `layer`'s
+// stack is: a crown is what a car's tyre has to hide, because traffic rides the
+// flat ground collider under the road rather than the road itself. Past about a
+// seventh of a wheel it stops reading as camber and starts reading as a rut.
+const _: () = assert!(CROWN_CAP < 0.05);
+
+/// How far a crown takes to flatten out into a junction, in metres.
+///
+/// A crossing is flat: it has to be, because two crowns meeting at right
+/// angles is a saddle, and a pedestrian crossing painted over a saddle is
+/// four stripes at four heights. Real junctions are laid flat and drained to
+/// their corners for the same reason.
+pub const CROWN_FLAT: f32 = 9.0;
+
+/// How high a carriageway stands above its own bed, `across` metres from its
+/// centreline.
+///
+/// A parabola, which is what a road is: the crown is not a roof with a ridge,
+/// it is a continuous curve, and the tell of getting it wrong is a hard line
+/// down the middle of the street where the two planes meet.
+pub fn crown(width: f32, across: f32) -> f32 {
+    let half = (width * 0.5).max(0.1);
+    let u = (across / half).abs().min(1.0);
+    (half * CROSSFALL).min(CROWN_CAP) * (1.0 - u * u)
+}
+
+/// The slope of that curve, for the surface normal.
+///
+/// Analytic rather than sampled, because these normals are the whole point:
+/// what a two-centimetre crown actually shows at eye height is not its
+/// silhouette, it is the two halves of the road catching the sky differently.
+pub fn crown_slope(width: f32, across: f32) -> f32 {
+    let half = (width * 0.5).max(0.1);
+    if across.abs() >= half {
+        return 0.0;
+    }
+    (half * CROSSFALL).min(CROWN_CAP) * -2.0 * across / (half * half)
+}
+
+/// How much of the crown survives this far along a street, and how fast that
+/// is changing.
+///
+/// `flat` says which of the two ends is a junction. A bend is not: a street
+/// that merely turns keeps its crown right through the turn, which matters
+/// here because six nodes in seven of a town read off a map are bends and the
+/// median segment between them is under fourteen metres. Flattening at every
+/// node would leave a town with no crown anywhere.
+pub fn crown_fade(along: f32, length: f32, flat: (bool, bool)) -> (f32, f32) {
+    let reach = CROWN_FLAT.min(length * 0.5);
+    if reach <= 0.0 {
+        return (1.0, 0.0);
+    }
+    let mut level = 1.0f32;
+    let mut rate = 0.0f32;
+    for (at_end, distance) in [(flat.0, along), (flat.1, length - along)] {
+        if !at_end || distance >= reach {
+            continue;
+        }
+        let t = (distance / reach).clamp(0.0, 1.0);
+        // Smoothstep, so the crown does not arrive at the junction with a
+        // crease across it.
+        let eased = t * t * (3.0 - 2.0 * t);
+        if eased < level {
+            level = eased;
+            // d/d(along) of the smoothstep, signed by which end it is.
+            let slope = 6.0 * t * (1.0 - t) / reach;
+            rate = if at_end && distance == along {
+                slope
+            } else {
+                -slope
+            };
+        }
+    }
+    (level, rate)
+}
+
 /// The standing-water half of the road material.
 #[derive(Asset, AsBindGroup, Reflect, Clone, Default)]
 pub struct RoadSheen {
@@ -181,6 +274,88 @@ fn soak_the_road(
 
 #[cfg(test)]
 mod tests {
+    /// A road drains to its gutters, and does it as a curve.
+    #[test]
+    fn a_carriageway_stands_highest_down_its_middle() {
+        let width = 7.5f32;
+        let ridge = crown(width, 0.0);
+        assert!(
+            (0.02..=CROWN_CAP).contains(&ridge),
+            "a {width} m street crowns {ridge} m"
+        );
+        // Zero at the kerb line and never negative: the crown is built upward
+        // from the road bed, because the ground under this town is one plane
+        // fourteen millimetres below it and anything cut lower comes out as a
+        // stripe of back-land grit down the gutter.
+        assert_eq!(crown(width, width * 0.5), 0.0);
+        assert_eq!(crown(width, width), 0.0);
+        for step in 0..40 {
+            let across = step as f32 / 39.0 * width;
+            assert!(crown(width, across) >= 0.0);
+            assert_eq!(crown(width, across), crown(width, -across));
+        }
+        // A curve, not a roof: no hard line down the middle. The gradient at
+        // the crown is zero and grows away from it.
+        assert!(crown_slope(width, 0.0).abs() < 1e-6);
+        assert!(crown_slope(width, 1.0) < crown_slope(width, 0.5));
+        assert!(crown_slope(width, -1.0) > 0.0);
+        // And it matches the height it claims to differentiate.
+        let step = 0.01;
+        for across in [-3.0f32, -1.0, 0.5, 2.0] {
+            let measured = (crown(width, across + step) - crown(width, across - step)) / (2.0 * step);
+            assert!(
+                (measured - crown_slope(width, across)).abs() < 1e-3,
+                "at {across} m the slope says {} and the height says {measured}",
+                crown_slope(width, across)
+            );
+        }
+    }
+
+    /// A wide street crowns less steeply, not more.
+    #[test]
+    fn a_market_square_is_not_a_hump() {
+        // Up to the cap a wider street crowns higher, because the crossfall is
+        // a gradient and it has further to fall.
+        assert!(crown(6.0, 0.0) > crown(4.0, 0.0));
+        // Past it they are all the same, which is the point of having one: the
+        // Altstadt is thirteen metres wide and a market square is wider still,
+        // and an honest crossfall across one of those is a hump a car climbs
+        // rather than a road that drains. Real wide streets crown less.
+        for width in [12.0f32, 20.0, 30.0] {
+            assert_eq!(crown(width, 0.0), CROWN_CAP, "{width} m");
+        }
+    }
+
+    /// The crown flattens into a junction and runs straight through a bend.
+    #[test]
+    fn a_crown_flattens_into_a_crossing_but_not_into_a_corner() {
+        let length = 60.0;
+        // A bend at both ends: full crown from end to end, because six nodes in
+        // seven of a town read off a map are bends and the median segment
+        // between them is under fourteen metres. Flattening at every node would
+        // leave the town with no crown at all.
+        for along in [0.0f32, 5.0, 30.0, 55.0, 60.0] {
+            assert_eq!(crown_fade(along, length, (false, false)).0, 1.0);
+        }
+        // A junction at the start only.
+        let flat = (true, false);
+        assert_eq!(crown_fade(0.0, length, flat).0, 0.0, "not flat at the crossing");
+        assert!(crown_fade(CROWN_FLAT * 0.5, length, flat).0 > 0.1);
+        assert_eq!(crown_fade(CROWN_FLAT, length, flat).0, 1.0);
+        assert_eq!(crown_fade(length, length, flat).0, 1.0, "the far end is a bend");
+        // Monotonic on the way in, so there is no crease across the approach.
+        let mut last = -1.0;
+        for step in 0..=20 {
+            let level = crown_fade(step as f32 / 20.0 * CROWN_FLAT, length, flat).0;
+            assert!(level >= last, "the fade went backwards at step {step}");
+            last = level;
+        }
+        // A street shorter than two fade lengths still crowns somewhere in the
+        // middle rather than being flat end to end.
+        let short = 10.0;
+        assert!(crown_fade(short * 0.5, short, (true, true)).0 > 0.5);
+    }
+
     use super::*;
 
     /// The puddle field and the asphalt are two patterns laid over the same

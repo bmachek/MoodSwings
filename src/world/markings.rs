@@ -36,12 +36,12 @@ const DASH_PERIOD: f32 = 9.0;
 /// Metres of that period which are actually painted.
 const DASH_LENGTH: f32 = 3.2;
 /// Depth of a crossing measured along the road, in metres.
-const CROSSING_DEPTH: f32 = 2.6;
+pub const CROSSING_DEPTH: f32 = 2.6;
 /// How far back from a junction the crossing sits, as a fraction of the
 /// street's half-width.
-const CROSSING_SETBACK: f32 = 1.35;
+pub const CROSSING_SETBACK: f32 = 1.35;
 /// Streets shorter than this get no crossings; there is no room between them.
-const MIN_CROSSING_LENGTH: f32 = 26.0;
+pub const MIN_CROSSING_LENGTH: f32 = 26.0;
 
 const PAINT_SIZE: u32 = 256;
 
@@ -152,6 +152,11 @@ pub fn spawn_edge(
     from: Vec2,
     to: Vec2,
     chunk: IVec2,
+    // Which of this street's two ends is a real junction, so the paint knows
+    // where the crown has flattened out, and the zebra for it — already
+    // carrying that crown. `None` where the street gets none.
+    flat: (bool, bool),
+    zebra: Option<&Handle<Mesh>>,
 ) {
     if edge.surface != Surface::Asphalt {
         return;
@@ -164,6 +169,10 @@ pub fn spawn_edge(
     // other, and two segments of one street lay dashes that overlap where the
     // ribbons do. A slot each, so no two of them are ever coplanar.
     let height = super::layer::PAINT + super::layer::slot(id.0, super::layer::PAINT_SLOTS);
+    // The road is not flat any more, so the paint on it is not either. A centre
+    // line is the easy case: it lies on the crown itself, which is one number
+    // per point along the street rather than a curve across it.
+    let ridge = super::road::crown(edge.width, 0.0);
 
     // One quad per dash. Spacing a pattern by placing geometry rather than by
     // tiling a texture is what keeps the dashes the same length on a short
@@ -172,30 +181,33 @@ pub fn spawn_edge(
     let dashes = dash_repeats(edge.length);
     let period = edge.length / dashes as f32;
     for i in 0..dashes {
-        let at = from + *direction * (period * (i as f32 + 0.5));
+        let along = period * (i as f32 + 0.5);
+        let at = from + *direction * along;
+        let lift = ridge * super::road::crown_fade(along, edge.length, flat).0;
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(assets.quad.clone()),
             MeshMaterial3d(assets.centre_line.clone()),
-            Transform::from_xyz(at.x, height, at.y)
+            Transform::from_xyz(at.x, height + lift, at.y)
                 .with_rotation(Quat::from_rotation_y(yaw))
                 .with_scale(Vec3::new(LINE_WIDTH, 1.0, DASH_LENGTH.min(period * 0.6))),
         ));
     }
 
-    if edge.length < MIN_CROSSING_LENGTH {
+    let (Some(zebra), true) = (zebra, edge.length >= MIN_CROSSING_LENGTH) else {
         return;
-    }
-    // One at each end, set back far enough to clear the junction itself.
+    };
+    // One at each end, set back far enough to clear the junction itself. Full
+    // size in the mesh rather than a unit quad scaled to fit, because what it
+    // carries is the curve across the road and a curve does not survive being
+    // scaled by a transform that knows nothing about it.
     let setback = edge.width * CROSSING_SETBACK;
     for end in [from + *direction * setback, to - *direction * setback] {
         commands.spawn((
             ChunkOf(chunk),
-            Mesh3d(assets.quad.clone()),
+            Mesh3d(zebra.clone()),
             MeshMaterial3d(assets.crossing.clone()),
-            Transform::from_xyz(end.x, height, end.y)
-                .with_rotation(Quat::from_rotation_y(yaw))
-                .with_scale(Vec3::new(edge.width * 0.92, 1.0, CROSSING_DEPTH)),
+            Transform::from_xyz(end.x, height, end.y).with_rotation(Quat::from_rotation_y(yaw)),
         ));
     }
 }
