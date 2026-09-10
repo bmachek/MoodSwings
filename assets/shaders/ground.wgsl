@@ -269,14 +269,24 @@ fn vary(input: PbrInput) -> PbrInput {
     // mask in produced, a beige field with houses on it instead of a green one.
     // `close` is the fourteen-metre octave, which is about the size of the
     // thing being decided: this yard is gravel, that one is somebody's garden.
-    let kept = smoothstep(0.22, 0.64, close);
+    //
+    // Narrower than it was, and it is the same argument `spread` makes at the
+    // top of this file: a wide smoothstep over a near-normal field puts *most*
+    // of the back land at some middling amount of grit, which is one colour
+    // with a texture on it. A narrow one decides — this one is a yard, that one
+    // is a garden — and the edges between them are what the eye reads as a
+    // town's back land rather than as a field of ash. It mattered more from the
+    // day `world::buildings` stopped stamping a thirteen-metre paved rectangle
+    // behind every building: those quads were carrying the variation, badly,
+    // with two thousand six hundred razor edges.
+    let kept = smoothstep(0.38, 0.56, close);
     // Held well under one on top of that, so weeds still come through a yard
     // and the ground under the town never becomes a second carriageway.
     let worn = clamp(
-        (smoothstep(0.10, 0.85, backland) * 0.72 + smoothstep(0.55, 1.0, inside) * 0.14)
-            * mix(0.28, 1.0, kept),
+        (smoothstep(0.10, 0.85, backland) * 0.74 + smoothstep(0.55, 1.0, inside) * 0.14)
+            * mix(0.06, 1.0, kept),
         0.0,
-        0.82,
+        0.84,
     );
     color = mix(color, floor, worn);
 

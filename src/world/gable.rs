@@ -60,7 +60,13 @@ pub const RANGE: f32 = 900.0;
 /// all it contributes is a lighter edge on a skyline that already has one, so
 /// on a city where four buildings in five are gabled it is the obvious half to
 /// drop first.
-const COPING_RANGE: f32 = 230.0;
+///
+/// Two hundred and thirty was tuned against a shell that turned into a plain
+/// box at two hundred and fifty, so the coping outlived the wall it sat on by
+/// twenty metres and no further. The wall now keeps its courses to four
+/// hundred and sixty, and a gabled skyline without its copings is a row of
+/// plain triangles.
+const COPING_RANGE: f32 = 380.0;
 
 /// Steps up one side of a screen. Four is a gable, seven is a wedding cake.
 const STEPS: (u32, u32) = (3, 6);

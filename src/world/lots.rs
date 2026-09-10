@@ -29,7 +29,8 @@ pub const BAY_DEPTH: f32 = 5.0;
 /// Clearance between two facing rows of bays, enough to drive down.
 const AISLE: f32 = 6.0;
 /// Paint floats this far over the kerb slab's walking surface.
-const PAINT_LIFT: f32 = SIDEWALK_HEIGHT + 0.006;
+/// Parking-bay paint, over the pavement it is laid on — see `world::layer`.
+const PAINT_LIFT: f32 = super::layer::FOOTWAY + super::layer::STEP * 6.0;
 
 /// Canopy over a filling station's pumps.
 const CANOPY_HEIGHT: f32 = 4.5;

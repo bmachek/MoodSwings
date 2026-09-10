@@ -656,6 +656,9 @@ pub fn spawn_parked_vehicles(
     mut commands: Commands,
     config: Res<GameConfig>,
     city: Res<City>,
+    // Where every street's kerb will be. A parked car has to know: it is placed
+    // now and the kerbs arrive with their chunks — see `under_another_kerb`.
+    corridors: Option<Res<crate::world::streetside::Corridors>>,
     assets: Res<VehicleAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -673,8 +676,10 @@ pub fn spawn_parked_vehicles(
     let mut taken: HashMap<(i32, i32), Vec<(Vec2, f32)>> = HashMap::default();
     let mut clashes = 0usize;
 
-    for edge in city.graph.edges() {
+    let mut under_a_kerb = 0usize;
+    for (index, edge) in city.graph.edges().enumerate() {
         use crate::ai::steering::Parking;
+        let edge_id = crate::world::roadgraph::EdgeId(index as u32);
 
         // Where this street parks, and on which kerb. A street narrow enough
         // that a parked row would reach past its own centreline is a street
@@ -774,6 +779,17 @@ pub fn spawn_parked_vehicles(
             let along =
                 head + bay as f32 * BAY_LENGTH + nose + rng.random_range(0.0..slack.max(1e-3));
             let position = a + *direction * along + normal * offset * side;
+            // Not under somebody else's kerb. A car parks against its own
+            // street by design; what it must not do is stand where a *second*
+            // street's pavement will arrive, which is what a town read off a
+            // map is full of — two ways a few metres apart, a lane meeting a
+            // square at an angle, a service road behind a terrace.
+            if corridors.as_ref().is_some_and(|corridors| {
+                corridors.under_another_kerb(position, spec.half_extents.x, edge_id)
+            }) {
+                under_a_kerb += 1;
+                continue;
+            }
             // Is anything already standing here? Circles rather than boxes: two
             // cars nose to tail are a row and two cars a body's width apart are
             // a collision, and the difference between them is a distance.
@@ -868,7 +884,10 @@ pub fn spawn_parked_vehicles(
         }
     }
 
-    info!("{spawned} vehicles parked around the city, {clashes} spots given up as taken");
+    info!(
+        "{spawned} vehicles parked around the city, {clashes} spots given up as \
+         taken and {under_a_kerb} as somebody else's pavement"
+    );
 }
 
 #[cfg(test)]

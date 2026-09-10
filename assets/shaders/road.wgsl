@@ -52,6 +52,11 @@ struct RoadSettings {
     // How coarse this surface's relief is, which decides how much of it
     // survives being looked at edge-on.
     relief: f32,
+    // How far the road has settled over what is buried under it, in metres.
+    // See `dish`.
+    sag: f32,
+    // How pitted it is, 0 to 1. Asphalt pots; granite does not.
+    pits: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> road: RoadSettings;
@@ -87,13 +92,113 @@ fn fbm(p: vec2<f32>) -> f32 {
     return sum;
 }
 
+// Metres across one repeat of the long settlement -- the dip a road takes over
+// the trench somebody dug across it, the hollow where the ground gave.
+const SAG_TILE: f32 = 11.5;
+// And of the pits: the scale of one hole, and the slow field that decides where
+// holes happen at all. They come in patches, because what makes them is one bay
+// of surfacing going at once rather than the whole street ageing evenly.
+const PIT_TILE: f32 = 0.62;
+const PIT_AREA: f32 = 21.0;
+// How much of the pit field is actually a hole.
+const PIT_EDGE: f32 = 0.66;
+// How deep a hole goes, in metres.
+const PIT_DEPTH: f32 = 0.055;
+
+// How far below true the road surface is here, in metres, and which way it is
+// tilting.
+//
+// Two bands, because two different things are happening. The long one is
+// *settlement*: a road is not a plane, it is a lid over trenches and made-good
+// bays, and it dips a centimetre or two over each of them at about the length
+// of a car. The short one is *pits*: a hole with a rim, gated by a slow area
+// field so they come in clusters where one bay is going rather than evenly
+// down a street that is otherwise sound.
+//
+// Returned as a height and a gradient rather than applied here, because the
+// two consumers want different halves of it: the normal wants the gradient,
+// and the puddles want the height -- water in the hollows the surface actually
+// has, rather than in hollows of its own invented somewhere else.
+fn dish(here: vec2<f32>) -> vec3<f32> {
+    if road.sag <= 0.0001 && road.pits <= 0.0001 {
+        return vec3(0.0);
+    }
+    // Central differences at a tenth of the smaller feature, which is a good
+    // deal cheaper than deriving fbm analytically and is exact enough for a
+    // normal.
+    let step = PIT_TILE * 0.12;
+    var height = 0.0;
+    var slope = vec2(0.0);
+    for (var axis = 0; axis < 3; axis += 1) {
+        var at = here;
+        if axis == 1 { at.x += step; }
+        if axis == 2 { at.y += step; }
+
+        // Settlement: signed, so a road rises over what was packed and falls
+        // over what was not.
+        let sag = (fbm(at / SAG_TILE) - 0.5) * 2.0 * road.sag;
+
+        // Pits. `bay` is where the surfacing is going; `hole` is one hole.
+        // Multiplied rather than added, so a sound stretch has none at all.
+        // (`patch` would read better and is a reserved word in WGSL.)
+        let bay = smoothstep(0.52, 0.78, fbm(at / PIT_AREA));
+        let hole = smoothstep(PIT_EDGE, PIT_EDGE + 0.16, fbm(at / PIT_TILE));
+        let pit = hole * bay * road.pits * PIT_DEPTH;
+
+        let total = sag - pit;
+        if axis == 0 {
+            height = total;
+        } else if axis == 1 {
+            slope.x = (total - height) / step;
+        } else {
+            slope.y = (total - height) / step;
+        }
+    }
+    return vec3(height, slope.x, slope.y);
+}
+
+// Tilts the surface into its own hollows, and darkens what is in them.
+//
+// After `settle` and not before it, and the order is the whole point: `settle`
+// exists to lay a *millimetre* of chipping flat as the view goes flat along the
+// road, because relief at that scale seen edge-on occludes rather than tilts. A
+// decimetre-wide hollow is not that. It is the one thing on this surface that
+// should still be there at a grazing angle -- a road you are looking down is
+// exactly where its dips and its potholes are most obvious.
+fn pitted(input: PbrInput) -> PbrInput {
+    var pbr_input = input;
+    if road.sag <= 0.0001 && road.pits <= 0.0001 {
+        return pbr_input;
+    }
+    let shape = dish(pbr_input.world_position.xz);
+    // The surface normal of z = h(x, y) is (-dh/dx, 1, -dh/dy).
+    let tilt = normalize(vec3(-shape.y, 1.0, -shape.z));
+    pbr_input.N = normalize(pbr_input.N + vec3(tilt.x, 0.0, tilt.z));
+
+    // And a hole is darker and rougher than the road round it: it is broken
+    // aggregate with the binder gone, and it holds grit.
+    let sunk = clamp(-shape.x / PIT_DEPTH, 0.0, 1.0);
+    pbr_input.material.base_color = vec4(
+        pbr_input.material.base_color.rgb * mix(1.0, 0.62, sunk),
+        pbr_input.material.base_color.a,
+    );
+    pbr_input.material.perceptual_roughness =
+        mix(pbr_input.material.perceptual_roughness, 0.97, sunk * 0.8);
+    return pbr_input;
+}
+
 // How deep the water is here, 0 to 1.
 //
 // Thresholded rather than used raw: water finds a level, so a puddle has an
 // edge. A smooth gradient of wetness across the road is what varnish looks
 // like, and the whole reason for this function is not to produce one.
 fn depth(world_position: vec2<f32>, wetness: f32) -> f32 {
-    let low = fbm(world_position / road.tile);
+    // Biased by where the road actually sags, so a puddle stands in a hollow
+    // and fills a pothole instead of lying wherever a second, unrelated field
+    // happened to be low. `dish` is negative where the road is low, and a
+    // centimetre of dip is worth a good deal more than a centimetre of noise.
+    let hollow = clamp(-dish(world_position).x * 9.0, 0.0, 0.45);
+    let low = fbm(world_position / road.tile) + hollow;
     // Rising wetness floods progressively more of the road: at a drizzle only
     // the lowest patches hold water, and by the time it is pouring most of the
     // surface is under it.
@@ -288,6 +393,7 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) 
     // knows that.
     pbr_input = age(pbr_input);
     pbr_input = settle(pbr_input);
+    pbr_input = pitted(pbr_input);
     pbr_input = wet(pbr_input);
 
 #ifdef PREPASS_PIPELINE

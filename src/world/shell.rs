@@ -897,9 +897,25 @@ pub fn build_assets(meshes: &mut Assets<Mesh>) -> ShellKit {
 // ------------------------------------------------------------------ lod ----
 
 /// Where the full shell gives way to the courses alone, before `lod_scale`.
-pub const NEAR: f32 = 80.0;
+///
+/// Eighty metres was where this started, and eighty metres is inside the
+/// street you are standing in. A Landshut canyon runs two hundred metres and
+/// the view across the Isar six hundred, so past the first few houses the town
+/// *was* the coarse shell — which is four wall quads, two caps and a couple of
+/// course rings: sixty triangles for a house, a hundred and thirty for a
+/// three-storey block. Everything in this file — the reveals, the sills, the
+/// frames, the cornice — was being spent on the two buildings nearest the
+/// camera and thrown away on the four hundred behind them. That is the whole
+/// of "everything looks like boxes", and it was a constant rather than a mesh.
+///
+/// A full House shell is 1012 triangles and a Lowrise 3204, and Landshut is
+/// House and Lowrise only (`height_cap` 23 m). Four hundred of them resident
+/// at full detail is under a million triangles, which is what a hundred and
+/// forty pedestrians used to cost between them before their capsules were cut
+/// down. It is affordable; it was simply never asked for.
+pub const NEAR: f32 = 170.0;
 /// Where the courses give way to the plain box.
-pub const FAR: f32 = 250.0;
+pub const FAR: f32 = 460.0;
 
 /// The distance past which no amount of quality setting draws a reveal.
 ///

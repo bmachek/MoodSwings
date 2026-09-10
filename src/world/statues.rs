@@ -92,6 +92,16 @@ pub struct StatueKit {
 
 /// The granite sphere's radius. Life size, as it happens.
 const SPHERE_RADIUS: f32 = 0.85;
+/// How finely the unknown flummi is carved.
+///
+/// An icosphere costs `20 * (subdivisions + 1)^2` triangles, so Bevy's default
+/// of five is 720 for a 1.7 m ball that is only ever seen from across a park.
+/// Three is 320 and its facets are about 11 cm across — a hand's breadth on a
+/// granite sphere, which is what a chisel leaves anyway. Two (180) was tried
+/// and rejected: at 17 cm the facets catch the sun individually and the
+/// monument reads as a d20 rather than as a ball, which is precisely the
+/// low-poly tell this pass exists to remove.
+const SPHERE_SUBDIVISIONS: u32 = 3;
 /// The memorial bollard: the street one is 0.11 by 0.95, this is three of it.
 const BOLLARD_RADIUS: f32 = 0.33;
 const BOLLARD_HEIGHT: f32 = 2.85;
@@ -116,9 +126,21 @@ pub fn build_assets(
             meshes.add(Cuboid::new(PLINTH.x, PLINTH.y, PLINTH.z)),
             weathered,
         ),
-        sphere: (meshes.add(Sphere::new(SPHERE_RADIUS)), granite.clone()),
+        sphere: (
+            meshes.add(
+                Sphere::new(SPHERE_RADIUS)
+                    .mesh()
+                    .ico(SPHERE_SUBDIVISIONS)
+                    .expect("an icosphere at three subdivisions"),
+            ),
+            granite.clone(),
+        ),
+        // A 33 cm column: `props::cylinder` gives it twelve sides rather than
+        // the default thirty-two, which is 44 triangles instead of 124 for a
+        // silhouette nobody can tell apart at the ten metres a park puts
+        // between you and it.
         bollard: (
-            meshes.add(Cylinder::new(BOLLARD_RADIUS, BOLLARD_HEIGHT)),
+            meshes.add(super::props::cylinder(BOLLARD_RADIUS, BOLLARD_HEIGHT)),
             granite,
         ),
         plaque: meshes.add(Rectangle::new(PLAQUE.x, PLAQUE.y)),

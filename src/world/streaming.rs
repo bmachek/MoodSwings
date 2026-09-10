@@ -48,6 +48,12 @@ pub struct ChunkIndex {
     /// not, and because what goes up at a junction — signals — is placed once
     /// per junction rather than once per arm.
     junctions: HashMap<IVec2, Vec<NodeId>>,
+    /// Parks, woods, pitches and allotments, filed by *every* chunk their
+    /// outline reaches rather than by the one their middle is in. A park is a
+    /// hundred and fifty metres across and a chunk is two hundred and fifty, so
+    /// filing one by its middle leaves two thirds of it bare; the planting
+    /// clips itself to the chunk instead.
+    grounds: HashMap<IVec2, Vec<usize>>,
 }
 
 impl ChunkIndex {
@@ -75,8 +81,19 @@ impl ChunkIndex {
             junctions.entry(chunk_of(node.pos)).or_default().push(id);
         }
 
+        let mut grounds: HashMap<IVec2, Vec<usize>> = HashMap::default();
+        for (i, ground) in city.grounds.iter().enumerate() {
+            let (low, high) = (chunk_of(ground.bounds.min), chunk_of(ground.bounds.max));
+            for x in low.x..=high.x {
+                for y in low.y..=high.y {
+                    grounds.entry(IVec2::new(x, y)).or_default().push(i);
+                }
+            }
+        }
+
         Self {
             blocks,
+            grounds,
             streets,
             junctions,
         }
@@ -88,6 +105,10 @@ impl ChunkIndex {
 
     pub fn blocks_in(&self, chunk: IVec2) -> Option<&[usize]> {
         self.blocks.get(&chunk).map(|v| v.as_slice())
+    }
+
+    pub fn grounds_in(&self, chunk: IVec2) -> Option<&[usize]> {
+        self.grounds.get(&chunk).map(|v| v.as_slice())
     }
 
     pub fn streets_in(&self, chunk: IVec2) -> Option<&[EdgeId]> {
@@ -182,6 +203,8 @@ pub struct StreetKits<'w> {
     ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
     plates: Res<'w, crate::world::streetname::StreetNameKit>,
     signs: Res<'w, crate::world::atlas::Signposts>,
+    /// Where the tarmac is, so nothing upright is stood on it.
+    corridors: Res<'w, crate::world::streetside::Corridors>,
 }
 
 pub fn update_streaming(
@@ -282,6 +305,23 @@ pub fn update_streaming(
                 );
             }
         }
+        if let Some(grounds) = index.grounds_in(chunk) {
+            let mut sowing = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::COMMONS,
+                (chunk.x, chunk.y),
+            );
+            for &i in grounds {
+                super::vegetation::spawn_ground(
+                    &mut commands,
+                    &street.foliage,
+                    &mut sowing,
+                    &city.grounds[i],
+                    chunk,
+                    foliage_range,
+                );
+            }
+        }
         if let Some(streets) = index.streets_in(chunk) {
             let mut rng = crate::core::rng::stream_for_chunk(
                 config.world_seed,
@@ -306,10 +346,24 @@ pub fn update_streaming(
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
-                spawn_edge(&mut commands, &street.paint, edge, from, to, chunk);
+                spawn_edge(
+                    &mut commands,
+                    &street.paint,
+                    id,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    (
+                        city.graph.node(edge.a).edges.len() >= 3,
+                        city.graph.node(edge.b).edges.len() >= 3,
+                    ),
+                    street.ribbons.as_ref().and_then(|it| it.crossing(id)),
+                );
                 super::props::spawn_edge(
                     &mut commands,
                     &street.props,
+                    &street.corridors,
                     &mut rng,
                     edge,
                     from,
@@ -319,6 +373,7 @@ pub fn update_streaming(
                 super::vegetation::spawn_edge(
                     &mut commands,
                     &street.foliage,
+                    &street.corridors,
                     &mut planting,
                     edge,
                     // Which named street this is, so a whole street is an
@@ -419,13 +474,27 @@ pub fn update_streaming(
                         if city.graph.node(node).edges.len() < 3 {
                             continue;
                         }
+                        // The widest arm at this junction, not this one. A
+                        // 7.5 m lane meeting a 13 m market street set its post
+                        // back 5.75 m from the node while the crossing tarmac
+                        // reached 6.55, and stood it in the road: a fifth of
+                        // the town's plates were doing that.
+                        let widest = city
+                            .graph
+                            .node(node)
+                            .edges
+                            .iter()
+                            .map(|arm| city.graph.edge(*arm).width)
+                            .fold(edge.width, f32::max);
                         super::streetname::spawn(
                             &mut commands,
                             &street.plates,
+                            &street.corridors,
                             name,
                             city.graph.node(node).pos,
                             city.graph.node(other).pos,
                             edge.width,
+                            widest,
                             chunk,
                             name_range,
                         );
@@ -462,7 +531,6 @@ pub fn update_streaming(
                 if let Some(ribbons) = street.ribbons.as_deref()
                     && streetside
                 {
-                    let widest = arms.iter().map(|(_, w)| *w).fold(0.0f32, f32::max);
                     // Read off the graph rather than off `arms`, which several
                     // other spawners share and none of them wants widened.
                     let paved = node
@@ -477,7 +545,6 @@ pub fn update_streaming(
                         ribbons,
                         id,
                         node.pos,
-                        widest,
                         paved,
                         chunk,
                     );

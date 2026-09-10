@@ -27,6 +27,33 @@ const POOL_SIZE: usize = 64;
 const LAMP_HEIGHT: f32 = 7.5;
 /// How far the lamp head reaches out over the road from its column.
 const ARM_REACH: f32 = 1.5;
+/// The lamp's glass globe, in metres.
+const LAMP_GLOBE_RADIUS: f32 = 0.30;
+/// The column and the arm, in metres. Both under 8 cm, which is what decides
+/// how many sides they are drawn with — see [`super::props::cylinder_sides`].
+const COLUMN_RADIUS: f32 = 0.075;
+const ARM_RADIUS: f32 = 0.055;
+/// The old town's lamp, off the photographs.
+///
+/// Landshut's Altstadt is not lit by the straight cantilever arm with a globe
+/// on the end that every post-war street in the game wears. It carries a
+/// wrought-iron column whose top curves over in a *Schwanenhals* — a double
+/// scroll reaching out over the carriageway — with a small tapered lantern
+/// hanging point-down from the end of it and a conical cap on top.
+///
+/// Drawn as a chain of short segments rather than a curve, because the whole
+/// city is boxes and cylinders and a swept tube here would be the only
+/// exception. Seven segments is enough that the joints do not read as corners
+/// at the distance a lamp is looked at.
+const SCROLL_SEGMENTS: usize = 7;
+/// The scroll's radius, and how much of a half turn it sweeps through.
+const SCROLL_RADIUS: f32 = 0.92;
+const SCROLL_SWEEP: f32 = 1.75;
+/// The lantern: how tall, how wide at the shoulder, and its cap.
+const LANTERN_HEIGHT: f32 = 0.52;
+const LANTERN_WIDTH: f32 = 0.26;
+const LANTERN_CAP: f32 = 0.16;
+
 /// How far back from the kerb line the column stands, on the pavement.
 ///
 /// A lamp post is street furniture, and street furniture stands on the
@@ -37,9 +64,35 @@ const ARM_REACH: f32 = 1.5;
 /// not whether the post was anywhere sane.
 const KERB_SET_BACK: f32 = 0.7;
 /// Distance between lamp posts along a street.
-const LAMP_SPACING: f32 = 32.0;
+const LAMP_SPACING: f32 = 28.0;
+
+/// How close two lamp posts may stand, in metres.
+///
+/// Not a spacing -- [`LAMP_SPACING`] is the spacing. This is the distance below
+/// which two posts are the same post seen twice, which happens wherever one
+/// street is mapped as several parallel ways and each of them lights its own
+/// two kerbs.
+const LAMP_APART: f32 = 13.0;
+
+/// How much room a post needs to not be standing in a road, in metres.
+///
+/// The column is a hand's width; this is a little more, so a post is rejected
+/// while it is still obviously in the carriageway rather than when its centre
+/// has crossed the kerb line.
+const LAMP_GIRTH: f32 = 0.45;
 /// Sodium-vapour warmth.
 const LAMP_COLOR: Color = Color::srgb(1.0, 0.82, 0.55);
+/// How finely the lamp's glass globe is drawn.
+///
+/// An icosphere is `20 * (subdivisions + 1)^2` triangles, so Bevy's default of
+/// five is 720 of them on a 30 cm ball hanging seven and a half metres up, in a
+/// pool of sixty-four of them: 46 000 triangles of street lighting, most of it
+/// on a shape that is a blown-out white blob in every frame it appears in — the
+/// emissive is thirteen times the white point and it blooms (see
+/// `LAMP_ENVELOPE`), so the silhouette is the *bloom*, not the mesh. Two
+/// subdivisions is 180, and the globe is still round enough that its unlit
+/// daytime form reads as a lantern rather than as a die.
+const LAMP_GLOBE_SUBDIVISIONS: u32 = 2;
 /// The half-angle of the lamp's beam, in radians, and where it starts to fall
 /// off.
 ///
@@ -97,6 +150,14 @@ pub struct ShopGlow;
 #[derive(Component)]
 pub struct LampBeam;
 
+/// The modern lamp's ironwork, and the old town's. Every pooled lamp carries
+/// both and shows one, because a post is assigned to a pooled entity at
+/// runtime and the two towns are mixed street by street.
+#[derive(Component)]
+struct ModernLamp;
+#[derive(Component)]
+struct WroughtLamp;
+
 #[derive(Component)]
 pub struct StreetLight;
 
@@ -107,6 +168,11 @@ pub struct StreetLight;
 /// Where a lamp stands, and which way it leans out over the road.
 #[derive(Clone, Copy)]
 pub struct LampPost {
+    /// Whether this stretch of street is the old town, and therefore carries
+    /// the wrought-iron lamp rather than the modern one. Decided by what the
+    /// street is paved with, which is the same thing: the Altstadt and the
+    /// Neustadt are the setts and the slabs.
+    pub old_town: bool,
     /// The column's foot, just inside the kerb.
     pub foot: Vec2,
     /// Unit vector from the kerb towards the middle of the road.
@@ -117,9 +183,25 @@ pub struct LampPost {
 pub struct LampPosts(pub Vec<LampPost>);
 
 impl LampPosts {
-    pub fn build(city: &City) -> Self {
+    pub fn build(city: &City, corridors: &super::streetside::Corridors) -> Self {
         let graph = &city.graph;
-        let mut posts = Vec::new();
+        let mut posts: Vec<LampPost> = Vec::new();
+        // Where a post has already been put, by cell, so the next one can ask.
+        //
+        // A town read off a map has its main streets mapped as several parallel
+        // ways -- Landshut's Altstadt is twenty-two of them -- and each is lit
+        // on both kerbs by a spawner that can only see one edge at a time. What
+        // that plants is a thicket: half a dozen columns across a market square
+        // that wants two rows. This is the one thing an edge cannot know by
+        // itself, so it is asked of everything placed so far.
+        let mut placed: bevy::platform::collections::HashMap<(i32, i32), Vec<Vec2>> =
+            bevy::platform::collections::HashMap::default();
+        let cell_of = |at: Vec2| {
+            (
+                (at.x / LAMP_APART).floor() as i32,
+                (at.y / LAMP_APART).floor() as i32,
+            )
+        };
 
         for edge in graph.edges() {
             let a = graph.node(edge.a).pos;
@@ -131,12 +213,56 @@ impl LampPosts {
             // so half of it is the kerb and anything less is the road.
             let offset = edge.width * 0.5 + KERB_SET_BACK;
 
-            let count = (edge.length / LAMP_SPACING).floor() as i32;
-            for i in 1..count {
-                let along = a + *dir * (i as f32 * LAMP_SPACING);
-                let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+            // Walked along the segment rather than counted in whole slots of
+            // it, which is the fix `vegetation` already carries and this file
+            // never got. `length / SPACING` floored and iterated from one gives
+            // nothing at all on any edge under twice the spacing, and Landshut's
+            // median segment is 13.7 m against a 32 m spacing: only 98 of its
+            // 2634 segments are long enough to be given a single lamp, so the
+            // whole town was lit by 153 posts over 53 km of street. One lamp
+            // every three hundred and fifty metres, and the Altstadt dark.
+            let mut along = (edge.length.min(LAMP_SPACING) * 0.5).max(1.5);
+            let mut slot = 0usize;
+            while along < edge.length - 1.0 {
+                // Alternating kerbs, which is how a street is really lit: the
+                // pools overlap down the middle rather than in two rows.
+                let first = if slot.is_multiple_of(2) { 1.0 } else { -1.0 };
+                let at = a + *dir * along;
+                slot += 1;
+                along += LAMP_SPACING;
+                // A lamp post is a thing standing up, and a thing standing up
+                // in a carriageway is the complaint this was written for. Try
+                // the other kerb before giving the slot away — at a junction it
+                // is usually only one side that is another street's tarmac.
+                let crowded = |foot: Vec2| {
+                    let cell = cell_of(foot);
+                    (-1..=1).any(|dx| {
+                        (-1..=1).any(|dz| {
+                            placed
+                                .get(&(cell.0 + dx, cell.1 + dz))
+                                .is_some_and(|near| {
+                                    near.iter().any(|other| other.distance(foot) < LAMP_APART)
+                                })
+                        })
+                    })
+                };
+                let Some((foot, side)) = [first, -first]
+                    .into_iter()
+                    .map(|side| (at + normal * offset * side, side))
+                    .find(|(foot, _)| !corridors.in_the_road(*foot, LAMP_GIRTH) && !crowded(*foot))
+                else {
+                    continue;
+                };
+                placed.entry(cell_of(foot)).or_default().push(foot);
                 posts.push(LampPost {
-                    foot: along + normal * offset * side,
+                    // Setts and sawn slabs are the old town; asphalt is not.
+                    // The same fact the paving already carries, read a second
+                    // way — see `atlas::Surface`.
+                    old_town: matches!(
+                        edge.surface,
+                        super::atlas::Surface::Sett | super::atlas::Surface::Slabs
+                    ),
+                    foot,
                     // Whichever kerb it stands on, the arm reaches the other
                     // way — out over the carriageway.
                     inward: -normal * side,
@@ -181,7 +307,12 @@ fn spawn_pool(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // A visible glowing head, so the light has an apparent source.
-    let head = meshes.add(Sphere::new(0.30));
+    let head = meshes.add(
+        Sphere::new(LAMP_GLOBE_RADIUS)
+            .mesh()
+            .ico(LAMP_GLOBE_SUBDIVISIONS)
+            .expect("an icosphere at two subdivisions"),
+    );
     let glass = materials.add(StandardMaterial {
         base_color: LAMP_COLOR,
         emissive: LinearRgba::BLACK,
@@ -193,8 +324,30 @@ fn spawn_pool(
     // spheres floating at seven and a half metres, which reads as a bug at
     // dusk and as nothing at all in daylight — the pool of light on the road
     // had no visible cause.
-    let column = meshes.add(Cylinder::new(0.075, LAMP_HEIGHT));
-    let arm = meshes.add(Cylinder::new(0.055, ARM_REACH));
+    //
+    // Both of these are thinner than a wrist, so they go through
+    // `props::cylinder` and come out with six sides — 20 triangles each rather
+    // than the default resolution's 124. Sixty-four lamps were spending 15 800
+    // triangles on two poles whose facets are 7 cm wide at their widest and
+    // sit above head height; the same budget buys a great deal more of the
+    // roundness the buildings were missing.
+    let column = meshes.add(super::props::cylinder(COLUMN_RADIUS, LAMP_HEIGHT));
+    let arm = meshes.add(super::props::cylinder(ARM_RADIUS, ARM_REACH));
+    // The old town's ironwork: one scroll segment, one lantern body, one cap.
+    let link = meshes.add(super::props::cylinder(
+        ARM_RADIUS * 0.85,
+        SCROLL_RADIUS * SCROLL_SWEEP / SCROLL_SEGMENTS as f32 * 1.25,
+    ));
+    let lantern = meshes.add(Mesh::from(
+        Cone {
+            radius: LANTERN_WIDTH * 0.5,
+            height: LANTERN_HEIGHT,
+        },
+    ));
+    let cap = meshes.add(Mesh::from(Cone {
+        radius: LANTERN_WIDTH * 0.62,
+        height: LANTERN_CAP,
+    }));
     let steel = materials.add(StandardMaterial {
         base_color: Color::srgb(0.20, 0.21, 0.22),
         perceptual_roughness: 0.62,
@@ -203,7 +356,7 @@ fn spawn_pool(
     });
 
     for i in 0..POOL_SIZE {
-        commands.spawn((
+        let lamp = commands.spawn((
             Name::new(format!("Street Light {i}")),
             StreetLight,
             // Parked far below the world until assigned a lamp post.
@@ -230,6 +383,7 @@ fn spawn_pool(
                 (
                     Mesh3d(head.clone()),
                     MeshMaterial3d(glass.clone()),
+                    ModernLamp,
                     Transform::default(),
                 ),
                 // The column stands under the light, not under the entity: the
@@ -238,18 +392,89 @@ fn spawn_pool(
                 (
                     Mesh3d(column.clone()),
                     MeshMaterial3d(steel.clone()),
+                    ModernLamp,
                     Transform::from_xyz(ARM_REACH, -LAMP_HEIGHT * 0.5, 0.0),
                 ),
                 (
                     Mesh3d(arm.clone()),
                     MeshMaterial3d(steel.clone()),
+                    ModernLamp,
                     // Cylinders run along Y; lay it across to the column.
                     Transform::from_xyz(ARM_REACH * 0.5, 0.0, 0.0)
                         .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
                 ),
             ],
-        ));
+        )).id();
+        commands.entity(lamp).with_children(|lamp| {
+            wrought_iron(lamp, &column, &link, &lantern, &cap, &steel, &glass);
+        });
     }
+}
+
+/// The old town's lamp: a column, a scroll over the road, a hanging lantern.
+///
+/// Built in the pooled entity's own frame, where the origin is the *light* —
+/// out over the carriageway — and `+X` runs back to the kerb, which is where
+/// the column stands. So the scroll is walked backwards, from the light to the
+/// column top, and the column hangs off the far end of it.
+fn wrought_iron(
+    lamp: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    column: &Handle<Mesh>,
+    link: &Handle<Mesh>,
+    lantern: &Handle<Mesh>,
+    cap: &Handle<Mesh>,
+    steel: &Handle<StandardMaterial>,
+    glass: &Handle<StandardMaterial>,
+) {
+    // The scroll, as a chord walk. Each segment is a short cylinder laid along
+    // the tangent of a circular arc that starts vertical at the column and
+    // finishes horizontal over the road, which is the shape a Schwanenhals is.
+    let step = SCROLL_SWEEP / SCROLL_SEGMENTS as f32;
+    let mut at = Vec3::ZERO;
+    for i in 0..SCROLL_SEGMENTS {
+        // Swept from the light back towards the column: at the light the
+        // tangent is horizontal, at the column it is vertical.
+        let angle = step * (i as f32 + 0.5);
+        let tangent = Vec3::new(angle.cos(), angle.sin(), 0.0);
+        let along = SCROLL_RADIUS * step;
+        let middle = at + tangent * along * 0.5;
+        lamp.spawn((
+            Mesh3d(link.clone()),
+            MeshMaterial3d(steel.clone()),
+            WroughtLamp,
+            Visibility::Hidden,
+            // A cylinder runs along Y, so turn Y onto the tangent.
+            Transform::from_translation(middle).with_rotation(Quat::from_rotation_z(
+                -(tangent.x).atan2(tangent.y),
+            )),
+        ));
+        at += tangent * along;
+    }
+    // The column, hanging off the end of the scroll and reaching the ground.
+    lamp.spawn((
+        Mesh3d(column.clone()),
+        MeshMaterial3d(steel.clone()),
+        WroughtLamp,
+        Visibility::Hidden,
+        Transform::from_xyz(at.x, at.y - LAMP_HEIGHT * 0.5, 0.0),
+    ));
+    // The lantern, point down under the light, with its cap over it. A cone is
+    // built tip-up, so the body is turned over and the cap is not.
+    lamp.spawn((
+        Mesh3d(lantern.clone()),
+        MeshMaterial3d(glass.clone()),
+        WroughtLamp,
+        Visibility::Hidden,
+        Transform::from_xyz(0.0, -LANTERN_HEIGHT * 0.25, 0.0)
+            .with_rotation(Quat::from_rotation_x(std::f32::consts::PI)),
+    ));
+    lamp.spawn((
+        Mesh3d(cap.clone()),
+        MeshMaterial3d(steel.clone()),
+        WroughtLamp,
+        Visibility::Hidden,
+        Transform::from_xyz(0.0, LANTERN_HEIGHT * 0.25 + LANTERN_CAP * 0.5, 0.0),
+    ));
 }
 
 /// Snaps the pool onto the nearest intersections to the camera.
@@ -344,18 +569,23 @@ fn reposition_lamps(
     time: Res<Time>,
     mut timer: ResMut<LampTimer>,
     city: Option<Res<City>>,
+    corridors: Option<Res<super::streetside::Corridors>>,
     mut posts: ResMut<LampPosts>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
-    mut lamps: Query<&mut Transform, With<StreetLight>>,
+    mut lamps: Query<(&mut Transform, &Children), With<StreetLight>>,
+    mut shapes: Query<
+        (&mut Visibility, Option<&ModernLamp>, Option<&WroughtLamp>),
+        Without<StreetLight>,
+    >,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
         return;
     }
-    let (Some(city), Ok(camera)) = (city, cameras.single()) else {
+    let (Some(city), Some(corridors), Ok(camera)) = (city, corridors, cameras.single()) else {
         return;
     };
     if posts.0.is_empty() {
-        *posts = LampPosts::build(&city);
+        *posts = LampPosts::build(&city, &corridors);
         info!("{} lamp posts along the street network", posts.0.len());
     }
 
@@ -369,7 +599,29 @@ fn reposition_lamps(
     let take = POOL_SIZE.min(nearest.len());
     nearest.select_nth_unstable_by(take.saturating_sub(1), |a, b| a.0.total_cmp(&b.0));
 
-    for (mut transform, (_, post)) in lamps.iter_mut().zip(nearest.iter().take(take)) {
+    for ((mut transform, parts), (_, post)) in lamps.iter_mut().zip(nearest.iter().take(take)) {
+        // Which town this lamp is standing in. Both shapes hang off every
+        // pooled lamp and one is shown, because a post is assigned to a pooled
+        // entity at runtime and the old town and the new are mixed street by
+        // street.
+        for &part in parts {
+            let Ok((mut visible, modern, wrought)) = shapes.get_mut(part) else {
+                continue;
+            };
+            // The beam carries neither marker and is left alone. Deciding by
+            // "is it modern?" alone would have switched the light off with the
+            // ironwork on every asphalt street.
+            let wanted = match (modern.is_some(), wrought.is_some()) {
+                (true, _) => !post.old_town,
+                (_, true) => post.old_town,
+                _ => continue,
+            };
+            *visible = if wanted {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
         // The entity *is* the lamp head, out over the road; the column and arm
         // hang off it back towards the kerb. Yaw is set so the lamp's local +X
         // points that way, which is where those two children sit.
@@ -471,6 +723,7 @@ mod tests {
         // middle of the road or inside the building behind it.
         for inward in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
             let post = LampPost {
+                old_town: false,
                 foot: Vec2::new(12.0, -5.0),
                 inward,
             };
@@ -513,6 +766,7 @@ mod tests {
         for side in [1.0f32, -1.0] {
             let normal = Vec2::new(0.0, 1.0);
             let post = LampPost {
+                old_town: false,
                 foot: normal * 6.0 * side,
                 inward: -normal * side,
             };

@@ -74,17 +74,45 @@ pub(crate) const DAY_EV100: f32 = 15.0;
 /// night is not moody, it is simply black.
 pub(crate) const NIGHT_EV100: f32 = 9.7;
 
-/// The city is two kilometres across, not thirty-two. Pulling the aerial
-/// perspective range in spends the same thirty-two depth slices over the
-/// distances that actually exist, so haze resolves across a street rather than
-/// across a mountain range.
+/// How much of Earth's own atmosphere this one has in it.
 ///
-/// Pulled in again, from three kilometres, for the same reason it was pulled in
-/// the first time. The slices are distributed linearly to this distance, and a
-/// third of them were being spent past the far edge of anything the streamer
-/// ever spawns — so the band the town actually lives in, two hundred to five
-/// hundred metres, was resolved by about five of them.
-const AERIAL_RANGE: f32 = 2_000.0;
+/// The default medium is sea-level Earth, and against it a town a kilometre
+/// away came back as a blue smear and a hillside two kilometres out was one
+/// flat navy plate. That is not what a kilometre looks like: with the twenty
+/// or thirty kilometres of visibility a fair day actually has, a kilometre
+/// costs a few per cent of contrast, not most of it.
+///
+/// The reason it read that way is the aerosol term. Bevy's `earth` medium is
+/// the standard atmospheric model, whose Mie density is tuned to reproduce the
+/// *sky* — and a model that gets the sky right at ten kilometres of path
+/// length is free to be far too thick over the first two, which is the only
+/// part of it this game is ever looking through.
+///
+/// Six tenths, which is where the town two kilometres off reads as a town and
+/// the sky is still blue. It is the one number in this file that changes what
+/// the game looks like at every distance at once, so it is written down here
+/// rather than tuned per shot.
+const HAZE: f32 = 0.6;
+
+/// How far the aerial-perspective LUT is computed to, and how many depth
+/// slices it spends getting there.
+///
+/// This used to be two kilometres in thirty-two slices — sixty-two and a half
+/// metres each — pulled in twice from three, on the grounds that the town is
+/// two kilometres across and slices spent past the streamer are slices wasted.
+/// Both halves of that were right and the conclusion stopped being right the
+/// moment `world::terrain` put hills at three and a half kilometres: past the
+/// LUT's last slice the shader clamps, so *everything* beyond the range came
+/// back at the maximum haze the range could produce. The landscape rendered as
+/// one flat blue plate with a jagged top edge.
+///
+/// So the range follows the camera's sight instead, and the slice count grows
+/// with it. Sixty-two and a half metres a slice, exactly as before — the near
+/// field resolves precisely as well as it did, and the hills stop being one
+/// colour. The cost is a 32 × 32 × 96 compute dispatch once a frame instead of
+/// 32 × 32 × 32.
+const AERIAL_RANGE: f32 = 6_000.0;
+const AERIAL_SLICES: u32 = 96;
 
 /// Where bloom starts, in post-exposure linear units.
 ///
@@ -252,7 +280,9 @@ fn spawn_atmosphere(mut commands: Commands, mut mediums: ResMut<Assets<Scatterin
             // other words. This is the value that keeps the horizon a city and
             // still puts something other than blue under a wall.
             ground_albedo: Vec3::new(0.16, 0.155, 0.15),
-            ..Atmosphere::earth(mediums.add(ScatteringMedium::default()))
+            ..Atmosphere::earth(
+                mediums.add(ScatteringMedium::default().with_density_multiplier(HAZE)),
+            )
         },
     ));
 }
@@ -347,6 +377,7 @@ fn attach_camera_stack(
             },
             AtmosphereSettings {
                 aerial_view_lut_max_distance: AERIAL_RANGE,
+                aerial_view_lut_size: UVec3::new(32, 32, AERIAL_SLICES),
                 ..default()
             },
             AtmosphereEnvironmentMapLight {

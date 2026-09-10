@@ -785,7 +785,10 @@ pub fn cobbles() -> Image {
 /// And its relief, which is the half that matters: setts are read almost
 /// entirely by the shadow in the joints.
 pub fn cobbles_normal() -> Image {
-    normal_map(SETT_SIZE, 0.075, sett_height)
+    // A fraction of the tile, not of the stone: at the 1.20 m the setts are
+    // laid at, 0.075 would be a nine-centimetre kerb between every block.
+    // 0.020 is a two-and-a-half-centimetre joint, which is what one is.
+    normal_map(SETT_SIZE, 0.020, sett_height)
 }
 
 // --------------------------------------------------------------- foliage ----

@@ -196,7 +196,10 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
             field: [96, 40, 30, 255],
             letter: 0.48,
         }],
-        Apartments | Offices => &[],
+        // A tower and a gate say nothing, and that is right: they were here
+        // six hundred years before anybody thought a building should have a
+        // name on it. Their plate is the street-name plate on the corner.
+        Apartments | Offices | Tower | Gate => &[],
     }
 }
 

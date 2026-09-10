@@ -113,6 +113,512 @@ SURFACE = {
 }
 
 
+# ---------------------------------------------------------------- extras ----
+#
+# Everything that stands beside a street: the buildings, the water, and the
+# ground that is not built on. All three are areas rather than lines, and all
+# three arrive as closed ways or as multipolygon relations.
+
+# How a building's OSM tags become one of the game's building kinds. Only the
+# ones the game draws differently are worth distinguishing; everything else is
+# an apartment block, which is what four fifths of a European town is.
+KIND = {
+    "church": "Church",
+    "cathedral": "Cathedral",
+    "chapel": "Church",
+    "school": "School",
+    "university": "School",
+    "kindergarten": "School",
+    "hotel": "Hotel",
+    "supermarket": "Supermarket",
+    "retail": "Supermarket",
+    "commercial": "Offices",
+    "office": "Offices",
+    "industrial": "Offices",
+    "warehouse": "Offices",
+    "fire_station": "FireStation",
+    "civic": "TownHall",
+    "public": "TownHall",
+    "townhall": "TownHall",
+    "government": "TownHall",
+    "museum": "Museum",
+    "hospital": "Offices",
+    "parking": "ParkingGarage",
+    "garage": "ParkingGarage",
+    "garages": "ParkingGarage",
+}
+
+# Metres per storey. German `building:levels` counts full storeys above ground;
+# a Bavarian townhouse floor is a little over three metres and the roof adds
+# most of another.
+STOREY = 3.15
+
+# What makes a building a landmark: something a person would walk across town to
+# look at, and would call by name.
+#
+# Deliberately narrower than `heritage`, which in an Altstadt is on every second
+# townhouse. Two things hang off this and both want the narrow reading. A
+# landmark is exempt from the size limits below, because those exist to stop a
+# retail shed being drawn as a box the length of a street and they were throwing
+# away exactly the buildings the town is known for -- St. Martin is ninety-one
+# metres long against a seventy-eight metre limit. And a landmark's height is
+# believed as it stands rather than clamped into the city style's band, because
+# an OSM `height` on an ordinary house is as often the ridge as the eaves and as
+# often a typo as either. St. Martin really is a hundred and thirty metres; the
+# listed house next to it is not, and a hundred-metre terrace mapped as one
+# polygon is neither.
+def is_named(tags):
+    if not tags.get("name"):
+        return False
+    if tags.get("man_made") in ("tower", "water_tower", "observatory"):
+        return True
+    if tags.get("historic") in ("church", "castle", "city_gate", "tower", "monastery", "chapel"):
+        return True
+    if tags.get("building") in ("church", "cathedral", "chapel", "castle", "temple"):
+        return True
+    if tags.get("tourism") in ("attraction", "museum"):
+        return True
+    return bool(tags.get("wikidata"))
+
+
+# The one thing a landmark needs that neither the map nor a photograph can be
+# read for: how tall it is.
+#
+# Only numbers that have a source. The rest are left to `kind_of` and the city
+# style, because a guessed skyline is worse than an honest one -- and the game
+# has always been able to make a plausible church out of a footprint.
+#
+# St. Martin is the tallest brick tower in the world and the reason Landshut has
+# a skyline at all: 130.6 m, and the footprint the map gives it (91 m long)
+# matches the 92 m interior the literature quotes, so the two agree.
+LANDMARK_HEIGHT = {
+    "Basilika Sankt Martin": 130.6,
+}
+
+# And what a landmark is, where the plain building tag does not say. A gate is
+# not a house with a hole in it and a tower is not a thin house.
+LANDMARK_KIND = {
+    "castle": "TownHall",
+    "city_gate": "Gate",
+    "tower": "Tower",
+    "chapel": "Church",
+    "church": "Church",
+    "monastery": "Church",
+}
+
+# What the game will build. Anything smaller is a bin store, a garden shed or a
+# mapping artefact, and stamping it costs a draw call to show a doorstep.
+SMALLEST = 24.0
+# And anything bigger than this is a shopping centre mapped as one polygon, or a
+# multipolygon whose outer ring went round the whole block. The game has no mesh
+# for either.
+BIGGEST = 9000.0
+
+# Nor either dimension past this. The area limit alone lets through a 136 m by
+# 49 m slab -- a retail shed, mapped honestly -- and the game draws a building
+# as one extruded box with a pitched roof, so what that becomes is a grey wall
+# the length of a street. Dropped rather than clamped: a clamped box is a lie
+# about where the walls are, and an invented terrace in its place is at least
+# the right *kind* of wrong.
+LONGEST = 78.0
+DEEPEST = 46.0
+
+# A landmark is allowed past those, but not past these. The exemption exists for
+# St. Martin at 91 m long and the Stadtresidenz at 59 deep; what it must not let
+# through is the two buildings that qualify as landmarks only because somebody
+# gave them a Wikidata item -- a shopping centre at 114 by 98 and an ice rink at
+# 92 by 90. Those are exactly the shed the limits were written for.
+NAMED_LONGEST = 120.0
+NAMED_DEEPEST = 66.0
+
+# How much of a rectangle a footprint has to be before the rectangle is a fair
+# stand-in for it. An L-shaped block fills about two thirds of its own bounding
+# box; below this the box is mostly courtyard.
+SQUARENESS = 0.52
+
+
+def area_of(points):
+    """Twice the signed area of a polygon, halved. Shoelace."""
+    total = 0.0
+    for i in range(len(points)):
+        x1, y1 = points[i]
+        x2, y2 = points[(i + 1) % len(points)]
+        total += x1 * y2 - x2 * y1
+    return abs(total) * 0.5
+
+
+def hull(points):
+    """Andrew's monotone chain. Returns the convex hull, anticlockwise."""
+    points = sorted(set(points))
+    if len(points) < 3:
+        return points
+
+    def half(source):
+        out = []
+        for p in source:
+            while len(out) >= 2:
+                (ax, ay), (bx, by) = out[-2], out[-1]
+                if (bx - ax) * (p[1] - ay) - (by - ay) * (p[0] - ax) > 0:
+                    break
+                out.pop()
+            out.append(p)
+        return out
+
+    return half(points)[:-1] + half(reversed(points))[:-1]
+
+
+def smallest_box(points):
+    """The smallest-area rotated rectangle containing `points`.
+
+    Rotating calipers, in its simplest form: the minimum-area enclosing
+    rectangle always has a side flush with a hull edge, so try each hull edge as
+    the frontage direction and keep the cheapest. A hull here is a few dozen
+    points and there are a few thousand buildings, which is nothing.
+
+    Returns (centre, yaw, frontage, depth) with the frontage along the *longer*
+    side, because that is what a plot is: wider on the street than it is deep is
+    the exception, but the generator's own `Building` reads its footprint as
+    frontage-by-depth in the street's frame and something has to be chosen.
+    """
+    ring = hull(points)
+    if len(ring) < 3:
+        return None
+    best = None
+    for i in range(len(ring)):
+        ax, ay = ring[i]
+        bx, by = ring[(i + 1) % len(ring)]
+        edge = math.hypot(bx - ax, by - ay)
+        if edge < 1e-6:
+            continue
+        ux, uy = (bx - ax) / edge, (by - ay) / edge
+        # The perpendicular, so the hull can be measured in this edge's frame.
+        vx, vy = -uy, ux
+        us = [(px - ax) * ux + (py - ay) * uy for px, py in ring]
+        vs = [(px - ax) * vx + (py - ay) * vy for px, py in ring]
+        wide, deep = max(us) - min(us), max(vs) - min(vs)
+        if best is None or wide * deep < best[0]:
+            mid_u, mid_v = (max(us) + min(us)) * 0.5, (max(vs) + min(vs)) * 0.5
+            centre = (ax + ux * mid_u + vx * mid_v, ay + uy * mid_u + vy * mid_v)
+            best = (wide * deep, centre, (ux, uy), wide, deep)
+    if best is None:
+        return None
+    _, centre, (ux, uy), wide, deep = best
+    if deep > wide:
+        # Turn a quarter so the frontage is the long side.
+        ux, uy, wide, deep = -uy, ux, deep, wide
+    # The game's yaw sends local +Z outward across the pavement and local +X
+    # along the frontage. `Building::facing` is read by `buildings::site_in` as
+    # `Vec2::new(yaw.cos(), -yaw.sin())` being the frontage direction, so:
+    yaw = math.atan2(-uy, ux)
+    return centre, yaw, wide, deep
+
+
+def storeys(tags):
+    """How tall, in metres, or None to let the city style decide."""
+    raw = tags.get("height")
+    if raw:
+        try:
+            metres = float(str(raw).split()[0].replace(",", "."))
+            if 2.0 <= metres <= 140.0:
+                return round(metres, 1)
+        except ValueError:
+            pass
+    raw = tags.get("building:levels")
+    if raw:
+        try:
+            levels = float(str(raw).split(";")[0].replace(",", "."))
+            if 0.5 <= levels <= 45.0:
+                # Plus the ground floor's extra height and a roof.
+                return round(levels * STOREY + 1.6, 1)
+        except ValueError:
+            pass
+    return None
+
+
+def kind_of(tags):
+    if tags.get("man_made") in ("tower", "water_tower", "observatory"):
+        return "Tower"
+    for key in ("historic", "castle_type"):
+        value = tags.get(key)
+        if value and value in LANDMARK_KIND:
+            return LANDMARK_KIND[value]
+    for key in ("building", "amenity", "shop", "man_made"):
+        value = tags.get(key)
+        if value and value in KIND:
+            return KIND[value]
+    if tags.get("shop"):
+        return "Supermarket"
+    if tags.get("amenity") in ("restaurant", "cafe", "bar", "pub", "fast_food"):
+        return "Restaurant"
+    if tags.get("tourism") == "hotel":
+        return "Hotel"
+    return None
+
+
+def outer_rings(element):
+    """The outer ring(s) of a way or a multipolygon relation, as coordinates."""
+    if element.get("type") == "way":
+        geometry = element.get("geometry") or []
+        return [[(n["lat"], n["lon"]) for n in geometry]] if len(geometry) >= 4 else []
+    rings = []
+    for member in element.get("members", []) or []:
+        if member.get("role") not in ("outer", ""):
+            continue
+        geometry = member.get("geometry") or []
+        if len(geometry) >= 4:
+            rings.append([(n["lat"], n["lon"]) for n in geometry])
+    return rings
+
+
+
+# What open ground the game knows how to dress. Everything else in `landuse` is
+# a label on a district rather than a surface -- `residential`, `commercial`,
+# `retail` say what the buildings are for, not what the ground between them
+# looks like, and the game already decides that from its own districts.
+OPEN_GROUND = {
+    "grass": "Grass",
+    "meadow": "Grass",
+    "village_green": "Grass",
+    "recreation_ground": "Grass",
+    "park": "Park",
+    "garden": "Park",
+    "cemetery": "Cemetery",
+    "orchard": "Trees",
+    "forest": "Trees",
+    "wood": "Trees",
+    "allotments": "Allotments",
+    "farmland": "Field",
+    "pitch": "Pitch",
+    "playground": "Playground",
+    "parking": "Parking",
+}
+
+# How wide the game draws a waterway, per class, when the mappers did not say.
+WATER_WIDTH = {"river": 42.0, "canal": 14.0, "stream": 5.0}
+# And what it will believe if they did. The Isar's two arms both carry
+# `width=60`, which is the whole braided channel including the islands: drawn at
+# sixty each they overlap Wittstraße by four metres.
+WATER_RANGE = {"river": (18.0, 52.0), "canal": (5.0, 24.0), "stream": (2.0, 10.0)}
+
+# How far apart the points of a bank may be, in metres.
+#
+# The opposite of what the streets get. A street is *thinned* to four metres
+# because the game draws a straight ribbon between consecutive points and a
+# kerb traced at sub-metre precision is geometry nobody sees. A river is the
+# other way round: Landshut's six river ways are forty-three segments over five
+# kilometres, so a bank drawn straight between them is a polygon, and the one
+# thing a river must not look like is a canal.
+WATER_STEP = 12.0
+
+
+def river_width(tags, kind):
+    low, high = WATER_RANGE[kind]
+    raw = tags.get("width")
+    if raw:
+        try:
+            measured = float(str(raw).split(";")[0].replace("m", "").strip())
+            return round(min(max(measured, low), high), 1)
+        except ValueError:
+            pass
+    return WATER_WIDTH[kind]
+
+
+def densify(points):
+    """Splits any run longer than `WATER_STEP` until none is."""
+    out = [points[0]]
+    for ahead in points[1:]:
+        behind = out[-1]
+        run = math.dist(behind, ahead)
+        # Rounded up, not truncated: at `int` a 23 m run is one step and stays
+        # a 23 m straight, which is the one thing a river must not be.
+        steps = max(1, math.ceil(run / WATER_STEP))
+        for step in range(1, steps + 1):
+            t = step / steps
+            out.append((behind[0] + (ahead[0] - behind[0]) * t,
+                        behind[1] + (ahead[1] - behind[1]) * t))
+    return out
+
+
+def smooth(points, passes=2):
+    """Chaikin's corner cutting, keeping the two ends put.
+
+    Two passes turn a polyline's corners into something a bank can be drawn
+    along. Any more and the river shrinks away from its own islands.
+    """
+    for _ in range(passes):
+        if len(points) < 3:
+            break
+        cut = [points[0]]
+        for behind, ahead in zip(points, points[1:]):
+            cut.append((behind[0] * 0.75 + ahead[0] * 0.25,
+                        behind[1] * 0.75 + ahead[1] * 0.25))
+            cut.append((behind[0] * 0.25 + ahead[0] * 0.75,
+                        behind[1] * 0.25 + ahead[1] * 0.75))
+        cut.append(points[-1])
+        points = cut
+    return points
+
+
+def thin_ring(points):
+    """Drops points a park's outline will not miss."""
+    out = [points[0]]
+    for point in points[1:-1]:
+        if math.dist(point, out[-1]) >= 6.0:
+            out.append(point)
+    out.append(points[-1])
+    return out
+
+
+# One street is often several ways, and the game cannot afford to believe that.
+#
+# "Altstadt" is twenty-two ways in this extract: 1908 m of centreline for a
+# street the literature gives as seven hundred metres long and thirty wide,
+# because the carriageway, the parking lanes and the pedestrian halves are each
+# mapped separately. The runtime draws every one of them as a full street with
+# a carriageway and two pavements, and what that produces is not a market
+# square -- it is nine parallel stripes of alternating paving, a thicket of
+# lamp posts, and kerbs marooned in the middle of it with nothing behind them.
+#
+# So ways of one name that run alongside each other become one way as wide as
+# the band they cover. Two things keep it honest: they must actually be
+# parallel (a street that turns a corner and keeps its name is not two lanes of
+# itself), and the survivor is moved to the middle of the band rather than left
+# on whichever lane happened to be longest.
+PARALLEL_GAP = 34.0
+PARALLEL_ANGLE = 0.44  # about 25 degrees
+# How much of a way has to run alongside the other before it is the same street.
+PARALLEL_SHARE = 0.6
+
+
+def bearing_of(a, b):
+    return math.atan2(b[1] - a[1], b[0] - a[0])
+
+
+def nearest_on(points, at):
+    """Distance from `at` to a polyline, and the bearing of the segment it is
+    nearest to."""
+    best = (float("inf"), 0.0, 0.0)
+    for behind, ahead in zip(points, points[1:]):
+        dx, dy = ahead[0] - behind[0], ahead[1] - behind[1]
+        span = dx * dx + dy * dy
+        if span < 1e-9:
+            continue
+        t = max(0.0, min(1.0, ((at[0] - behind[0]) * dx + (at[1] - behind[1]) * dy) / span))
+        foot = (behind[0] + dx * t, behind[1] + dy * t)
+        gap = math.dist(at, foot)
+        if gap < best[0]:
+            # Signed: which side of the line this point is on, so a band's
+            # extent can be measured rather than just its width.
+            side = ((at[0] - behind[0]) * dy - (at[1] - behind[1]) * dx) / math.sqrt(span)
+            best = (gap, bearing_of(behind, ahead), side)
+    return best
+
+
+def alongside(leader, other):
+    """Does `other` run beside `leader`? Returns the signed offsets if so."""
+    offsets = []
+    beside = 0
+    for at in other["points"]:
+        gap, bearing, side = nearest_on(leader["points"], at)
+        if gap > PARALLEL_GAP:
+            continue
+        # Modulo a half turn: a way mapped in the opposite direction is still
+        # the same street.
+        turn = abs((bearing_of(*other["points"][:2]) - bearing + math.pi / 2) % math.pi - math.pi / 2)
+        if turn > PARALLEL_ANGLE:
+            continue
+        beside += 1
+        offsets.append(side)
+    if beside < max(2, len(other["points"]) * PARALLEL_SHARE):
+        return None
+    return offsets
+
+
+# Over how many metres the shift eases away from a junction.
+WELD_EASE = 22.0
+
+
+def distance_to_weld(street):
+    """How far each point is, along the way, from the nearest shared one."""
+    points, welds = street["points"], street.get("welds") or []
+    count = len(points)
+    far = [float("inf")] * count
+    # The two ends are joins too, whether or not the extract marked them: a way
+    # that stops is a way another one may start at.
+    for index in range(count):
+        if index == 0 or index == count - 1 or (index < len(welds) and welds[index]):
+            far[index] = 0.0
+    for index in range(1, count):
+        step = math.dist(points[index - 1], points[index])
+        far[index] = min(far[index], far[index - 1] + step)
+    for index in range(count - 2, -1, -1):
+        step = math.dist(points[index], points[index + 1])
+        far[index] = min(far[index], far[index + 1] + step)
+    return far
+
+
+def merge_parallel(streets):
+    """Folds ways of one name that run alongside each other into one."""
+    by_name = {}
+    for street in streets:
+        by_name.setdefault(street["name"], []).append(street)
+
+    out, folded = [], 0
+    for name, group in by_name.items():
+        if not name or len(group) < 2:
+            out.extend(group)
+            continue
+        # Longest first, so the survivor is the one that describes the street.
+        group.sort(key=lambda s: -s["length"])
+        taken = [False] * len(group)
+        for i, leader in enumerate(group):
+            if taken[i]:
+                continue
+            taken[i] = True
+            low = -leader["width"] * 0.5
+            high = leader["width"] * 0.5
+            for j in range(i + 1, len(group)):
+                if taken[j]:
+                    continue
+                offsets = alongside(leader, group[j])
+                if offsets is None:
+                    continue
+                taken[j] = True
+                folded += 1
+                half = group[j]["width"] * 0.5
+                low = min(low, min(offsets) - half)
+                high = max(high, max(offsets) + half)
+            width = min(high - low, PARALLEL_GAP)
+            if width > leader["width"]:
+                # Move the survivor to the middle of the band it now covers,
+                # rather than leaving it on whichever lane happened to be
+                # longest -- but never move a weld.
+                #
+                # A shared coordinate is the only thing that joins two streets
+                # into one graph when the runtime loads this, so a shifted
+                # junction is a junction that stops existing. Moving them all
+                # cost the town its connectivity: the patrol went from walking
+                # fifteen junctions a minute to one.
+                #
+                # So the shift eases in from every weld over `WELD_EASE` metres
+                # and is full only where the street is on its own.
+                shift = (high + low) * 0.5
+                free = distance_to_weld(leader)
+                moved = []
+                for index, at in enumerate(leader["points"]):
+                    behind = leader["points"][max(index - 1, 0)]
+                    ahead = leader["points"][min(index + 1, len(leader["points"]) - 1)]
+                    bearing = bearing_of(behind, ahead)
+                    ease = min(free[index] / WELD_EASE, 1.0)
+                    # The normal, on the same hand `nearest_on` measures from.
+                    moved.append((at[0] + math.sin(bearing) * shift * ease,
+                                  at[1] - math.cos(bearing) * shift * ease))
+                leader["points"] = moved
+                leader["width"] = round(width, 1)
+            out.append(leader)
+    return out, folded
+
+
 def carriageway(tags, kind):
     """How wide to draw this way, in metres.
 
@@ -157,6 +663,11 @@ def main():
     ap.add_argument("--centre", nargs=2, type=float, required=True,
                     metavar=("LAT", "LON"))
     ap.add_argument("--name", required=True)
+    ap.add_argument("--extras", action="append", default=[],
+                    help="further Overpass dumps: buildings, water, landuse. "
+                    "Repeatable, because asked in one request Overpass times "
+                    "out. Optional -- an atlas without any is the street plan "
+                    "the game built before any of this existed.")
     # Anything whose whole polyline falls outside this half-extent is dropped,
     # so the baked city matches the square the game builds.
     ap.add_argument("--half-extent", type=float, default=1000.0)
@@ -224,13 +735,126 @@ def main():
         if len(thinned) < 2:
             continue
 
+        points = [(x, z) for x, z, _ in thinned]
         streets.append({
             "name": tags.get("name", ""),
             "width": width,
             "arterial": kind in ARTERIAL,
             "surface": surface,
-            "points": [(x, z) for x, z, _ in thinned],
+            "points": points,
+            # Which of those points another way also uses. The merge below must
+            # not move one: a shared coordinate is the *only* thing that welds
+            # two streets into one graph at load time, so shifting one silently
+            # disconnects every side street that met there.
+            "welds": [bool(j) for _, _, j in thinned],
+            "length": sum(math.dist(a, b) for a, b in zip(points, points[1:])),
         })
+
+    # ---------------------------------------------------------- extras ----
+    buildings, waters, grounds = [], [], []
+    if args.extras:
+        elements = []
+        for path in args.extras:
+            elements += json.load(open(path, encoding="utf-8")).get("elements", [])
+        extras = {"elements": elements}
+        half = args.half_extent
+        kept = dropped_small = dropped_big = dropped_ragged = landmarks = 0
+        for element in extras.get("elements", []):
+            tags = element.get("tags", {}) or {}
+
+            if "building" in tags:
+                named = is_named(tags)
+                for ring in outer_rings(element):
+                    metres = [project(lat, lon, lat0, lon0) for lat, lon in ring]
+                    if not any(abs(x) <= half and abs(z) <= half for x, z in metres):
+                        continue
+                    footprint = area_of(metres)
+                    if footprint < SMALLEST and not named:
+                        dropped_small += 1
+                        continue
+                    if footprint > BIGGEST * (4.0 if named else 1.0):
+                        dropped_big += 1
+                        continue
+                    box = smallest_box(metres)
+                    if box is None:
+                        continue
+                    (cx, cz), yaw, wide, deep = box
+                    longest, deepest = (NAMED_LONGEST, NAMED_DEEPEST) if named else (LONGEST, DEEPEST)
+                    if wide > longest or deep > deepest:
+                        dropped_big += 1
+                        continue
+                    # How much of its own box the building actually fills. A
+                    # courtyard block is a ring, and a rectangle stamped over one
+                    # is a solid lump where a courtyard should be. A landmark is
+                    # exempt: a church *is* a ring of buttresses round a nave,
+                    # and it is not drawn as a box anyway.
+                    if not named and footprint < wide * deep * SQUARENESS:
+                        dropped_ragged += 1
+                        continue
+                    name = tags.get("name", "") if named else ""
+                    height = LANDMARK_HEIGHT.get(name) or storeys(tags)
+                    kind = kind_of(tags)
+                    buildings.append({
+                        "name": name,
+                        "centre": (cx, cz),
+                        "yaw": yaw,
+                        "frontage": wide,
+                        "depth": deep,
+                        "height": height,
+                        "kind": kind,
+                    })
+                    kept += 1
+                    if named:
+                        landmarks += 1
+                continue
+
+            waterway = tags.get("waterway")
+            if waterway in ("river", "stream", "canal"):
+                geometry = element.get("geometry") or []
+                metres = [project(n["lat"], n["lon"], lat0, lon0) for n in geometry]
+                if len(metres) < 2:
+                    continue
+                if not any(abs(x) <= half and abs(z) <= half for x, z in metres):
+                    continue
+                waters.append({
+                    "name": tags.get("name", ""),
+                    "width": river_width(tags, waterway),
+                    "points": smooth(densify(metres)),
+                })
+                continue
+
+            ground = tags.get("landuse") or tags.get("leisure")
+            if ground in OPEN_GROUND:
+                for ring in outer_rings(element):
+                    metres = [project(lat, lon, lat0, lon0) for lat, lon in ring]
+                    if len(metres) < 4:
+                        continue
+                    if not any(abs(x) <= half and abs(z) <= half for x, z in metres):
+                        continue
+                    if area_of(metres) < 400.0:
+                        continue
+                    grounds.append({
+                        "kind": OPEN_GROUND[ground],
+                        "points": thin_ring(metres),
+                    })
+                continue
+
+        print(
+            f"  {kept} buildings ({landmarks} of them landmarks; "
+            f"{dropped_small} too small, {dropped_big} too "
+            f"big, {dropped_ragged} too ragged for a rectangle), "
+            f"{len(waters)} waterways, {len(grounds)} open areas",
+            file=sys.stderr,
+        )
+
+    # One street, not the four ways the mappers drew it as. See `merge_parallel`.
+    before = len(streets)
+    streets, folded = merge_parallel(streets)
+    print(
+        f"{folded} parallel ways folded into the street they belong to "
+        f"({before} -> {len(streets)})",
+        file=sys.stderr,
+    )
 
     def ron_points(points):
         return "[" + ",".join(f"({x:.1f},{z:.1f})" for x, z in points) + "]"
@@ -250,6 +874,35 @@ def main():
                 f'arterial: {str(street["arterial"]).lower()}, '
                 f'surface: {street["surface"]}, '
                 f'points: {ron_points(street["points"])}),\n'
+            )
+        out.write("    ],\n")
+
+        out.write("    buildings: [\n")
+        for b in buildings:
+            height = f"Some({b['height']})" if b["height"] is not None else "None"
+            kind = f"Some({b['kind']})" if b["kind"] else "None"
+            name = b["name"].replace('"', "'")
+            out.write(
+                f'        (name: "{name}", '
+                f"centre: ({b['centre'][0]:.1f},{b['centre'][1]:.1f}), "
+                f"yaw: {b['yaw']:.4f}, frontage: {b['frontage']:.1f}, "
+                f"depth: {b['depth']:.1f}, height: {height}, kind: {kind}),\n"
+            )
+        out.write("    ],\n")
+
+        out.write("    waters: [\n")
+        for w in waters:
+            name = w["name"].replace('"', "'")
+            out.write(
+                f'        (name: "{name}", width: {w["width"]:.1f}, '
+                f"points: {ron_points(w['points'])}),\n"
+            )
+        out.write("    ],\n")
+
+        out.write("    grounds: [\n")
+        for g in grounds:
+            out.write(
+                f"        (kind: {g['kind']}, points: {ron_points(g['points'])}),\n"
             )
         out.write("    ],\n")
         out.write(")\n")

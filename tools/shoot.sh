@@ -27,6 +27,14 @@
 #   tools/shoot.sh --all-presets         # every preset, into shots/<preset>/
 #   tools/shoot.sh --out shots/before    # somewhere else, for a before/after
 #   tools/shoot.sh --only street,night   # just these framings
+#   tools/shoot.sh --town landshut       # the Landshut battery instead
+#
+# `--town` is a whole different battery rather than a `--city` spliced into the
+# framings above, and it has to be. Those framings carry hard coordinates of the
+# *generated* city on the default seed — a gas station, a basketball court, a
+# parade forming point — and none of them is anywhere in particular in a town
+# read off a map. So Landshut gets its own list, each entry naming its own city,
+# and `--only <name>` keeps meaning exactly one thing.
 #
 # Frame times are logged for every shot and collected at the end. A screenshot
 # says a change looks right; it says nothing about whether it can be afforded.
@@ -104,10 +112,47 @@ FRAMINGS=(
     "delight|--at -4,3,62 --look -4,1.2,10 --hour 12 --frames 240 --mood 1"
 )
 
+# The Landshut battery. Same discipline, different town: every framing pins
+# `--city Landshuepf` and an `--hour`, and the coordinates are metres about the
+# centre of the OSM extract (48.5375, 12.1508), north on -Z.
+#
+# The style name is `Landshuepf`, not `landshut` — `--city` matches the label or
+# the debug name and panics on anything else, and `--city landshut` has already
+# killed one run of this script.
+#
+# Note the heights are in `--at`, not in `--eye`: `--eye` is only read when the
+# camera is placed by `--at-node`, and a framing that carries both is quietly
+# ignoring one of them.
+LANDSHUT=(
+    # The Altstadt looking south down the market street: the postcard, and the
+    # one framing that shows the setts, the gabled terrace and the width of the
+    # street in the same frame.
+    "altstadt|--city Landshuepf --at 49.6,1.7,215 --look 49.6,1.4,150 --hour 12 --frames 200"
+    "altstadt-night|--city Landshuepf --at 49.6,1.7,215 --look 49.6,1.4,150 --hour 21.5 --frames 200"
+    # Down onto the paving from a first-floor window. The only framing that
+    # shows the size of a sett, which is the thing a plan view cannot lie about.
+    "setts|--city Landshuepf --at 49.6,7.0,215 --look 55,0,185 --hour 12 --frames 120"
+    # A junction from above: pavements, mitres, the junction plate and whether
+    # anything is standing in the road.
+    "junction|--city Landshuepf --at 49.6,45,150 --look 49.6,0,149 --hour 12 --frames 120"
+    # Where the Isar runs, and does not yet.
+    "isar|--city Landshuepf --at 40,4.5,-224 --look -25,1,-329 --hour 12 --frames 120"
+    "isar-air|--city Landshuepf --at 30,170,-70 --look -20,0,-310 --stream-radius 1500 --hour 12 --frames 200"
+    # The bare ground inside the town, which is the complaint this battery was
+    # written to be able to see.
+    "empty|--city Landshuepf --at -300,2.0,-475 --look -180,12,-395 --hour 12 --frames 120"
+    "empty-air|--city Landshuepf --at 0,240,0 --look 0,0,-1 --stream-radius 1500 --hour 12 --frames 200"
+    # The whole town, for the roofline and for whether it still stops dead at
+    # the edge of the built area.
+    "air|--city Landshuepf --at 0,620,900 --look 0,20,-200 --stream-radius 1800 --hour 10 --frames 200"
+    "cast|--city Landshuepf --lineup --hour 12"
+)
+
 presets=()
 out=""
 only=""
 profile="--release"
+town=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -115,10 +160,17 @@ while [[ $# -gt 0 ]]; do
         --all-presets) presets=(low medium high ultra photo); shift ;;
         --out)         out="$2"; shift 2 ;;
         --only)        only="$2"; shift 2 ;;
+        --town)        town="$2"; shift 2 ;;
         --debug)       profile=""; shift ;;
         *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac
 done
+
+case "$town" in
+    "")        ;;
+    landshut)  FRAMINGS=("${LANDSHUT[@]}") ;;
+    *) echo "unknown town: $town (try landshut)" >&2; exit 2 ;;
+esac
 [[ ${#presets[@]} -eq 0 ]] && presets=(high)
 
 # The capture harness renders to an offscreen texture but still opens a window,

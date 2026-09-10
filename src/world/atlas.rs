@@ -38,8 +38,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::Deserialize;
 
-use super::citygen::CityLayout;
+use super::citygen::{Block, Building, BuildingKind, CityLayout, Rect};
 use super::roadgraph::RoadGraph;
+use crate::core::config::CityStyle;
 
 /// One town, as baked by `tools/bake-city.py`.
 #[derive(Debug, Clone, Deserialize)]
@@ -50,6 +51,85 @@ pub struct Atlas {
     /// says where it is of.
     pub centre: (f64, f64),
     pub streets: Vec<Street>,
+    /// The town's real buildings, where they really stand.
+    ///
+    /// Defaulted like [`Street::surface`], so an atlas baked before any of this
+    /// existed still loads as the street plan it was.
+    #[serde(default)]
+    pub buildings: Vec<Footprint>,
+    /// Its rivers and streams.
+    #[serde(default)]
+    pub waters: Vec<Water>,
+    /// And the ground that is not built on.
+    #[serde(default)]
+    pub grounds: Vec<Ground>,
+}
+
+/// One building, as the smallest rotated rectangle that contains it.
+///
+/// A rectangle rather than the polygon it came from, and that is not a
+/// concession — it is the shape [`crate::world::citygen::Building`] already is.
+/// A footprint there is read as `frontage x depth` in the building's own frame
+/// with a `facing` yaw, precisely because a town read off a map has no blocks
+/// and no four sides to choose between. So the bake reduces each OSM way to its
+/// minimum-area enclosing rectangle and the whole of it drops into the existing
+/// mesh path: no new geometry, no polygon extrusion, and every shell, gable,
+/// sign, doorway and chimney follows the same yaw it always did.
+///
+/// What that gives up is the courtyard in a ring-shaped block. The bake throws
+/// away any footprint that fills less than about half its own box for that
+/// reason: a rectangle stamped over a courtyard block is a solid lump where a
+/// courtyard should be, and an invented terrace is better than a wrong solid.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Footprint {
+    /// What the town calls it, where the town calls it anything.
+    ///
+    /// Only landmarks carry one — the two thousand houses that make up the
+    /// street wall are anonymous, and a town where every building announces
+    /// itself is an airport. Empty for those.
+    #[serde(default)]
+    pub name: String,
+    pub centre: (f32, f32),
+    /// Which way the frontage runs, in the same convention `Building::facing`
+    /// uses: `+Z` out across the pavement.
+    pub yaw: f32,
+    pub frontage: f32,
+    pub depth: f32,
+    /// What the mappers measured or counted, in metres. `None` where they did
+    /// neither, and then the city style decides as it always has — four fifths
+    /// of this town is `None`.
+    pub height: Option<f32>,
+    /// What the tags say it is for, where they say anything the game draws
+    /// differently.
+    pub kind: Option<crate::world::citygen::BuildingKind>,
+}
+
+/// A river, a stream or a mill race.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Water {
+    pub name: String,
+    pub width: f32,
+    pub points: Vec<(f32, f32)>,
+}
+
+/// A piece of ground that is not built on and is not a street.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum GroundKind {
+    Grass,
+    Park,
+    Cemetery,
+    Trees,
+    Allotments,
+    Field,
+    Pitch,
+    Playground,
+    Parking,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Ground {
+    pub kind: GroundKind,
+    pub points: Vec<(f32, f32)>,
 }
 
 /// What a street is paved with.
@@ -163,6 +243,227 @@ pub struct Signposts {
 ///
 /// The blocks come out empty and that is not an oversight — see
 /// `frontage_lots`, which is what fills a real city instead.
+/// The ground the map says is not built on.
+///
+/// Kept whole rather than clipped: a park is a ring and half a ring is not a
+/// smaller park, it is an open curve that a point-in-polygon test reads as
+/// nonsense. Anything whose whole outline is outside the square is dropped and
+/// the rest is left as it is — the planting inside it is clipped to the chunk
+/// instead, which is where the clipping belongs.
+fn open_ground(atlas: &Atlas, half_extent: f32) -> Vec<super::citygen::OpenGround> {
+    let mut out = Vec::new();
+    for ground in &atlas.grounds {
+        let points: Vec<Vec2> = ground
+            .points
+            .iter()
+            .map(|&(x, z)| Vec2::new(x, z))
+            .collect();
+        if points.len() < 4 {
+            continue;
+        }
+        if !points
+            .iter()
+            .any(|at| at.x.abs() <= half_extent && at.y.abs() <= half_extent)
+        {
+            continue;
+        }
+        let (mut low, mut high) = (points[0], points[0]);
+        for at in &points {
+            low = low.min(*at);
+            high = high.max(*at);
+        }
+        out.push(super::citygen::OpenGround {
+            kind: ground.kind,
+            points,
+            bounds: Rect::new(low, high),
+        });
+    }
+    out
+}
+
+/// Turns a footprint to face the street it stands on.
+///
+/// Returns the yaw and the frontage and depth that go with it: fronting the
+/// short side of a box means the two swap, because `Building::footprint` is
+/// read as `frontage x depth` in the building's own frame.
+///
+/// The convention `buildings::site_in` reads is that a yaw of theta sends the
+/// building's local `+Z` outward, across the pavement — so the front is the
+/// side whose outward normal has the largest dot with the direction of the
+/// nearest road.
+fn facing_the_street(graph: &RoadGraph, centre: Vec2, plot: &Footprint) -> (f32, f32, f32) {
+    let Some(towards) = nearest_street(graph, centre) else {
+        return (plot.yaw, plot.frontage, plot.depth);
+    };
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let mut best = (plot.yaw, plot.frontage, plot.depth);
+    let mut score = f32::MIN;
+    for turn in 0..4 {
+        let yaw = plot.yaw + quarter * turn as f32;
+        let outward = Vec2::new(yaw.sin(), yaw.cos());
+        let facing = outward.dot(towards);
+        if facing > score {
+            score = facing;
+            // A quarter or three quarters of a turn swaps which side is the
+            // frontage.
+            best = if turn % 2 == 0 {
+                (yaw, plot.frontage, plot.depth)
+            } else {
+                (yaw, plot.depth, plot.frontage)
+            };
+        }
+    }
+    best
+}
+
+/// The direction from `at` to the nearest carriageway, if there is one near.
+fn nearest_street(graph: &RoadGraph, at: Vec2) -> Option<Vec2> {
+    // How far to look. Past this a building is not on a street in any sense
+    // that would decide which way its front door is.
+    const REACH: f32 = 60.0;
+    let mut best = (REACH * REACH, Vec2::ZERO);
+    for edge in graph.edges() {
+        let (a, b) = (graph.node(edge.a).pos, graph.node(edge.b).pos);
+        let span = b - a;
+        let length = span.length_squared();
+        if length < 1e-6 {
+            continue;
+        }
+        let t = ((at - a).dot(span) / length).clamp(0.0, 1.0);
+        let foot = a + span * t;
+        let away = (foot - at).length_squared();
+        if away < best.0 {
+            best = (away, foot - at);
+        }
+    }
+    (best.0 < REACH * REACH).then(|| best.1.normalize_or_zero())
+}
+
+/// The town's water, clipped to the square the game builds.
+///
+/// Clipped the way a street is — an arm that leaves and comes back is two
+/// runs, not one bridged across the outside — because the alternative is a
+/// river drawn straight through a kilometre of town it never touches.
+fn waters(atlas: &Atlas, half_extent: f32) -> Vec<super::citygen::Waterway> {
+    let mut out = Vec::new();
+    for water in &atlas.waters {
+        let mut run: Vec<Vec2> = Vec::new();
+        for &(x, z) in &water.points {
+            if x.abs() > half_extent || z.abs() > half_extent {
+                if run.len() >= 2 {
+                    out.push(super::citygen::Waterway {
+                        name: water.name.clone(),
+                        width: water.width,
+                        points: std::mem::take(&mut run),
+                    });
+                } else {
+                    run.clear();
+                }
+                continue;
+            }
+            run.push(Vec2::new(x, z));
+        }
+        if run.len() >= 2 {
+            out.push(super::citygen::Waterway {
+                name: water.name.clone(),
+                width: water.width,
+                points: run,
+            });
+        }
+    }
+    out
+}
+
+/// The town's real buildings, turned into the layout's own blocks.
+///
+/// One block per building, which is what `streetside` already produces for an
+/// atlas city: a real block is not a rectangle and nothing downstream wants one
+/// to be. Anything whose middle is outside the square the game builds is
+/// dropped, the same rule the streets take.
+pub fn footprints(
+    atlas: &Atlas,
+    graph: &RoadGraph,
+    seed: u64,
+    half_extent: f32,
+    style: CityStyle,
+) -> Vec<Block> {
+    use crate::core::rng::{stream, stream_for};
+    use rand::RngExt;
+
+    // Its own stream, drawn after nothing and before nothing: a palette or a
+    // storey height taken here must not move a single invented terrace, and the
+    // terraces draw from `stream::BUILDINGS`.
+    let mut rng = stream_for(seed, stream::ATLAS);
+    let mut blocks = Vec::new();
+    for plot in &atlas.buildings {
+        let centre = Vec2::new(plot.centre.0, plot.centre.1);
+        if centre.x.abs() > half_extent || centre.y.abs() > half_extent {
+            continue;
+        }
+        // Which way it faces, which the bake cannot know and this can.
+        //
+        // A minimum-area box has two axes and the baker picks the longer one,
+        // because a plot is usually wider on the street than it is deep. Usually
+        // is not always, and the sign is arbitrary either way — so a quarter of
+        // the town wore its front on its flank and another quarter on its back.
+        // What that draws is a Giebelhaus with its stepped screen standing off
+        // to one side of its own roof, which is what a wrong Dachfront is.
+        //
+        // The street knows. Take the four sides the box can present, and front
+        // the one whose outward normal best points at the nearest carriageway.
+        let (yaw, frontage, depth) = facing_the_street(graph, centre, plot);
+        let half = Vec2::new(frontage, depth) * 0.5;
+        let district = super::streetside::district_at(centre, half_extent, false);
+        // What the mappers counted, where they counted it. Where they did not —
+        // four buildings in five — the style decides, exactly as it does for an
+        // invented one, so a Landshut townhouse is a Landshut townhouse whether
+        // or not somebody typed its storeys into OSM.
+        let (low, high) = style.heights(district.height_range());
+        // A landmark's measured height is believed as it stands. Everything
+        // else is clamped into the style's band, because an OSM `height` on an
+        // ordinary house is as often the ridge as the eaves and as often a typo
+        // as either — but St. Martin really is a hundred and thirty metres, and
+        // clamping that to a Landshut townhouse is how a town loses its tower.
+        let landmark = !plot.name.is_empty();
+        let height = plot
+            .height
+            .map(|metres| {
+                if landmark {
+                    metres
+                } else {
+                    metres.clamp(low.min(high), high.max(low) * 1.6)
+                }
+            })
+            .unwrap_or_else(|| match plot.kind {
+                // A town-wall tower is not a thin house. The map gives its
+                // footprint and almost never its height, and a masonry tower
+                // runs about six times its own base: Landshut's are four to
+                // six metres square and twenty-five to thirty-five tall.
+                Some(BuildingKind::Tower) => plot.frontage.min(plot.depth) * 6.0,
+                // A gate carries a room over the arch and crenellations over
+                // that. The Ländtor is the one the map measured, at ten.
+                Some(BuildingKind::Gate) => 14.0,
+                _ => rng.random_range(low..high),
+            });
+        blocks.push(Block {
+            area: Rect::new(centre - Vec2::splat(half.length()), centre + Vec2::splat(half.length())),
+            paved: false,
+            district,
+            buildings: vec![Building {
+                footprint: Rect::new(centre - half, centre + half),
+                facing: Some(yaw),
+                height,
+                palette: rng.random_range(0..super::citygen::PALETTE_SIZE),
+                kind: plot.kind.unwrap_or(BuildingKind::Apartments),
+            }],
+            vacants: Vec::new(),
+            arterial: [false; 4],
+            quarter: None,
+        });
+    }
+    blocks
+}
+
 pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signposts) {
     let mut graph = RoadGraph::default();
     // Junction welding: two ways that share an OSM node project to the same
@@ -241,10 +542,15 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
             z_streets: Vec::new(),
             blocks: Vec::new(),
             graph,
-            // The Isar is a river and this is a canal dug through a grid. Landshut
-            // deserves better than the wrong water in the wrong place, so until
-            // there is a real one there is none.
+            // A canal here is one street of a grid surrendered to water:
+            // straight, axis-aligned, and found by walking two street lists a
+            // town read off a map does not have. The Isar is a braided river
+            // that goes where it goes, so it is not one of these and never
+            // could have been — it is a `waters` entry, below, and the reason
+            // this said `None` with an apology attached for as long as it did.
             canal: None,
+            grounds: open_ground(atlas, half_extent),
+            waters: waters(atlas, half_extent),
         },
         signs,
     )
@@ -259,6 +565,9 @@ mod tests {
             name: "Test".into(),
             centre: (0.0, 0.0),
             streets,
+            buildings: Vec::new(),
+            waters: Vec::new(),
+            grounds: Vec::new(),
         }
     }
 
@@ -284,7 +593,36 @@ mod tests {
             // back to the generator and says so.
             return;
         };
-        assert!(town.streets.len() > 400, "{} streets", town.streets.len());
+        assert!(town.streets.len() > 300, "{} streets", town.streets.len());
+
+        // One street, not the four ways the mappers drew it as. The Altstadt is
+        // twenty-two ways in the raw extract -- carriageway, parking lanes and
+        // pedestrian halves each mapped separately -- and the runtime draws
+        // every one of them as a full street with two pavements. The bake folds
+        // ways of one name that run alongside each other into one as wide as
+        // the band they cover, so what arrives here is a market square rather
+        // than nine parallel stripes of paving with kerbs marooned between
+        // them.
+        let altstadt: Vec<&Street> = town
+            .streets
+            .iter()
+            .filter(|street| street.name == "Altstadt")
+            .collect();
+        assert!(
+            altstadt.len() < 12,
+            "the Altstadt is still {} separate ways",
+            altstadt.len()
+        );
+        let broadest = altstadt
+            .iter()
+            .map(|street| street.width)
+            .fold(0.0f32, f32::max);
+        // The literature gives it as about thirty metres wide, which is what
+        // makes it a Platz rather than a road.
+        assert!(
+            (22.0..=34.0).contains(&broadest),
+            "the Altstadt's widest way is {broadest} m; the town says thirty"
+        );
 
         let widths: Vec<f32> = town.streets.iter().map(|street| street.width).collect();
         let narrowest = widths.iter().copied().fold(f32::MAX, f32::min);
@@ -308,6 +646,166 @@ mod tests {
                 .iter()
                 .any(|street| street.name == "Altstadt" && street.surface == Surface::Sett),
             "the Altstadt is not cobbled"
+        );
+    }
+
+    /// The extract now carries more than its streets, and every one of those
+    /// fields is a promise to a match arm somewhere. Nothing else in the suite
+    /// would notice a re-bake that quietly stopped emitting buildings, or one
+    /// that started emitting a retail shed the length of a street.
+    #[test]
+    fn the_committed_landshut_stands_its_own_buildings_on_its_own_ground() {
+        let Some(town) = load("landshut") else {
+            return;
+        };
+        assert!(
+            town.buildings.len() > 2000,
+            "only {} of Landshut's buildings came off the map",
+            town.buildings.len()
+        );
+
+        // A townhouse, not a shed and not a shopping centre. The median plot in
+        // this town is about 17 m by 11; the bake drops anything under 24 m² as
+        // a bin store and anything over 78 m by 46 as something the game has no
+        // mesh for.
+        //
+        // A *landmark* is exempt from that, and has to be: St. Martin is
+        // ninety-one metres long and the Stadtresidenz fifty-nine deep, so the
+        // limits that keep a retail shed from being drawn as a box the length
+        // of a street were throwing away exactly the buildings the town is
+        // known for.
+        for plot in &town.buildings {
+            let (longest, deepest) = if plot.name.is_empty() {
+                (78.0, 46.0)
+            } else {
+                (120.0, 66.0)
+            };
+            assert!(
+                plot.frontage >= 1.0 && plot.frontage <= longest,
+                "a {} m frontage at {:?} ({})",
+                plot.frontage,
+                plot.centre,
+                plot.name
+            );
+            assert!(plot.depth >= 1.0 && plot.depth <= deepest, "{} m deep", plot.depth);
+            assert!(plot.frontage >= plot.depth, "a plot deeper than it is wide");
+            if let Some(height) = plot.height {
+                assert!((2.0..=140.0).contains(&height), "{height} m tall");
+            }
+        }
+
+        // The town is a skyline before it is a street plan, and the skyline is
+        // one building: the tallest brick tower in the world, at the south end
+        // of the Altstadt. Losing it to a size limit is how Landshut stops
+        // being Landshut.
+        let martin = town
+            .buildings
+            .iter()
+            .find(|plot| plot.name == "Basilika Sankt Martin")
+            .expect("St. Martin is not in the atlas");
+        assert_eq!(martin.height, Some(130.6));
+        assert!(
+            martin.frontage > 85.0,
+            "St. Martin is only {} m long; the literature says 92",
+            martin.frontage
+        );
+        assert_eq!(martin.kind, Some(crate::world::citygen::BuildingKind::Church));
+
+        // And the rest of what a person walks across town to look at. Only a
+        // landmark is named — the five hundred listed townhouses that make up
+        // an Altstadt street wall are not, because a name here means the
+        // height is believed as it stands.
+        let named = town.buildings.iter().filter(|plot| !plot.name.is_empty());
+        let mut kinds = std::collections::HashMap::new();
+        for plot in named {
+            *kinds.entry(plot.kind).or_insert(0usize) += 1;
+        }
+        use crate::world::citygen::BuildingKind::{Church, Gate, Tower};
+        for (kind, least) in [(Church, 12), (Tower, 5), (Gate, 3)] {
+            let count = kinds.get(&Some(kind)).copied().unwrap_or(0);
+            assert!(count >= least, "only {count} of {kind:?} in Landshut");
+        }
+        let total: usize = kinds.values().sum();
+        assert!(
+            (40..400).contains(&total),
+            "{total} named landmarks, which is either a town with none or one \
+             where every listed house counts as one"
+        );
+
+        // Landshut is a town on a braided river and the atlas has to know it.
+        // Three arms, each better than three kilometres inside the square.
+        for arm in ["Isar", "Große Isar", "Kleine Isar"] {
+            let run: f32 = town
+                .waters
+                .iter()
+                .filter(|water| water.name == arm)
+                .flat_map(|water| {
+                    water
+                        .points
+                        .windows(2)
+                        .map(|p| Vec2::new(p[0].0, p[0].1).distance(Vec2::new(p[1].0, p[1].1)))
+                        .collect::<Vec<_>>()
+                })
+                .sum();
+            assert!(run > 2_000.0, "the {arm} is only {run} m long");
+        }
+        // And a river is drawn as a band, not as a canal: the bake densifies to
+        // twelve metres and smooths, so no run may be a long straight.
+        for water in &town.waters {
+            for pair in water.points.windows(2) {
+                let step = Vec2::new(pair[0].0, pair[0].1).distance(Vec2::new(pair[1].0, pair[1].1));
+                assert!(step < 20.0, "a {step} m straight in the {}", water.name);
+            }
+        }
+
+        assert!(
+            town.grounds.len() > 40,
+            "only {} pieces of open ground",
+            town.grounds.len()
+        );
+    }
+
+    /// A building faces the street, not whichever way its bounding box came
+    /// out.
+    ///
+    /// This is what a wrong Dachfront was. A minimum-area box has two axes and
+    /// the bake picks the longer one; the sign is arbitrary and the longer side
+    /// is not always the street side, so a quarter of the town wore its front
+    /// on its flank and another quarter on its back. On a Giebelhaus that draws
+    /// the stepped screen standing off to one side of its own roof, which is
+    /// what you see from the street and cannot see from above.
+    #[test]
+    fn every_building_turns_its_front_to_the_road() {
+        let Some(town) = load("landshut") else {
+            return;
+        };
+        let (layout, _) = layout(&town, 1, 1_000.0);
+        let blocks = footprints(&town, &layout.graph, 1, 1_000.0, CityStyle::Landshuepf);
+        assert!(blocks.len() > 2_000, "{} buildings", blocks.len());
+
+        let mut faced = 0usize;
+        let mut counted = 0usize;
+        for block in &blocks {
+            let building = &block.buildings[0];
+            let centre = building.footprint.center();
+            let Some(towards) = nearest_street(&layout.graph, centre) else {
+                continue;
+            };
+            counted += 1;
+            let yaw = building.facing.expect("an atlas building faces somewhere");
+            // The convention `buildings::site_in` reads: a yaw of theta sends
+            // the building's local +Z outward, across the pavement.
+            let outward = Vec2::new(yaw.sin(), yaw.cos());
+            if outward.dot(towards) > 0.55 {
+                faced += 1;
+            }
+        }
+        let share = faced as f32 / counted.max(1) as f32;
+        assert!(
+            share > 0.9,
+            "only {faced} of {counted} buildings ({:.0}%) face the street they \
+             stand on",
+            share * 100.0
         );
     }
 

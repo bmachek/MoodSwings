@@ -31,7 +31,11 @@ use super::texture::{byte, encode, fbm, painted_rect, text_band};
 
 /// How far a sign is drawn. Short: the plate is a hand's width tall, and a
 /// name nobody can read is a draw call with no picture in it.
-pub const RANGE: f32 = 75.0;
+///
+/// Short, but not seventy-five metres short: at that range a plate popped in
+/// while the player was already halfway down the street it names, which is the
+/// one moment it has nothing left to tell them.
+pub const RANGE: f32 = 120.0;
 
 /// The plate, in metres. A real one is about this.
 const PLATE: Vec2 = Vec2::new(1.55, 0.30);
@@ -130,10 +134,12 @@ pub fn build_assets(
 pub fn spawn(
     commands: &mut Commands,
     kit: &StreetNameKit,
+    corridors: &super::streetside::Corridors,
     name: usize,
     at: Vec2,
     towards: Vec2,
     width: f32,
+    widest: f32,
     chunk: IVec2,
     range: f32,
 ) {
@@ -146,10 +152,31 @@ pub fn spawn(
     let normal = Vec2::new(-direction.y, direction.x);
     // On the pavement, a little way down the street from the middle of the
     // junction, so the post is not standing in the crossing.
-    let foot =
-        at + *direction * (width * 0.5 + 2.0) + normal * (width * 0.5 + SIDEWALK_WIDTH * 0.5);
-    // Facing back at the junction: `+Z` towards where somebody is coming from.
-    let yaw = (-direction.x).atan2(-direction.y);
+    //
+    // The set-back is off the *widest* arm at the junction rather than off this
+    // one, which is what it should always have been: a narrow lane meeting a
+    // market street set its post back by half its own width and planted it in
+    // the middle of the street it was naming. And it is checked rather than
+    // trusted — the arms at a real junction leave at every angle, so no formula
+    // in one arm's frame can be right about all of them. Walk further out until
+    // the ground is not somebody's carriageway; give the plate up rather than
+    // stand it in the road.
+    let sideways = normal * (width * 0.5 + SIDEWALK_WIDTH * 0.5);
+    let Some(foot) = (0..4)
+        .map(|step| at + *direction * (widest * 0.5 + 2.0 + step as f32 * 2.5) + sideways)
+        .find(|foot| !corridors.in_the_road(*foot, 0.4))
+    else {
+        return;
+    };
+    // Across the street, not along it.
+    //
+    // This faced back down the street at the junction, on the reasoning that a
+    // sign should look at whoever is coming — and what that draws is a plate
+    // seen edge-on by everybody. A Straßenschild is a sheet of enamel bolted
+    // flat against the run of the street it names, so you read it walking along
+    // that street or standing on the corner of the one that crosses it. Its
+    // face is *parallel* to its own street; its normal is the street's normal.
+    let yaw = normal.x.atan2(normal.y);
     let visibility = VisibilityRange {
         start_margin: 0.0..0.0,
         end_margin: range..(range * 1.1),
@@ -164,14 +191,15 @@ pub fn spawn(
             .with_scale(Vec3::new(0.030, HEIGHT, 0.030)),
         visibility.clone(),
     ));
-    // Off to one side of its own post, the way a plate is bolted on.
+    // Off to one side of its own post, the way a plate is bolted on — along
+    // the street now that the plate lies along it, rather than across.
     //
     // Two quads back to back rather than one double-sided one, because the
     // back face of a quad shows its texture *mirrored*: a single plate marked
     // `double_sided` reads Karlsbader Straße from in front and ƎSSAЯTS from
     // behind. A real sign is a sheet of enamel with the name on both faces,
     // and this is that, at the cost of one more quad on a corner.
-    let plate = foot + normal * (PLATE.x * 0.42);
+    let plate = foot + *direction * (PLATE.x * 0.42);
     for turn in [0.0, std::f32::consts::PI] {
         commands.spawn((
             ChunkOf(chunk),

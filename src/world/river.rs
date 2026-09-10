@@ -158,6 +158,132 @@ pub fn spawn(
     }
 }
 
+// ------------------------------------------------------------ the Isar ----
+
+/// How far up the bank wall stands above the water.
+///
+/// A quay rather than a slope. There is no channel under this river — see
+/// [`super::layer::WATER`] for why there cannot be — so the thing that says
+/// "this is water and that is not" has to be a vertical face, and in a town
+/// that walls its river that is what is really there.
+const BANK_HEIGHT: f32 = 0.9;
+/// How thick the wall reads.
+const BANK_THICK: f32 = 0.8;
+/// How much of the bank is under the water's own edge, so no daylight shows
+/// between the wall and the surface at a grazing angle.
+const BANK_BITE: f32 = 0.35;
+
+/// Raises a town's real rivers.
+///
+/// Nothing here looks for a bridge and nothing needs to. The water is laid at
+/// [`super::layer::WATER`], one millimetre off the grass and thirteen under the
+/// lowest carriageway, so every street that crosses it is already drawn over
+/// it. A bridge is a road that was going to be there anyway.
+pub fn spawn_waters(
+    commands: &mut Commands,
+    layout: &CityLayout,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    if layout.waters.is_empty() {
+        return;
+    }
+    // Opaque, and that is deliberate. The renderer is deferred on every preset,
+    // a blended surface never enters the G-buffer, and screen-space reflections
+    // read the G-buffer — so a transparent river is a river that cannot reflect
+    // the town standing on it. `render::reflections` is tuned for standing
+    // water at roughness 0.08, which is exactly where this sits, so an opaque
+    // surface gets the reflection for nothing and the sky comes free from the
+    // atmosphere probe.
+    let water = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.10, 0.20, 0.24),
+        perceptual_roughness: 0.08,
+        metallic: 0.0,
+        ..default()
+    });
+    let bank = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.42, 0.41, 0.38),
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+    let quad = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
+    let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+
+    let mut surfaces = 0usize;
+    for (index, arm) in layout.waters.iter().enumerate() {
+        // A slot per arm, so where two arms of one river run into each other
+        // around an island the two surfaces are not laid at the same height.
+        let level = super::layer::WATER + super::layer::slot(index as u32, super::layer::WATER_SLOTS);
+        for pair in arm.points.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            let Ok(direction) = Dir2::new(to - from) else {
+                continue;
+            };
+            let middle = from.midpoint(to);
+            let yaw = direction.x.atan2(direction.y);
+            // Half its own width longer than the segment, so consecutive
+            // segments overlap at a bend and no green wedge shows on the
+            // outside of it — the same trick the road ribbons use.
+            let length = from.distance(to) + arm.width * 0.5;
+
+            commands.spawn((
+                Name::new("Water"),
+                Mesh3d(quad.clone()),
+                MeshMaterial3d(water.clone()),
+                Transform::from_xyz(middle.x, level, middle.y)
+                    .with_rotation(Quat::from_rotation_y(yaw))
+                    .with_scale(Vec3::new(arm.width, 1.0, length)),
+                NotShadowCaster,
+            ));
+            surfaces += 1;
+
+            // The two walls. Only for water wide enough to have banks rather
+            // than sides: a two-metre mill race in a culvert has none.
+            if arm.width < 8.0 {
+                continue;
+            }
+            for side in [-1.0f32, 1.0] {
+                let across = Vec2::new(-direction.y, direction.x)
+                    * (side * (arm.width * 0.5 + BANK_THICK * 0.5 - BANK_BITE));
+                let at = middle + across;
+                commands.spawn((
+                    Name::new("Bank"),
+                    Mesh3d(cube.clone()),
+                    MeshMaterial3d(bank.clone()),
+                    Transform::from_xyz(at.x, BANK_HEIGHT * 0.5, at.y)
+                        .with_rotation(Quat::from_rotation_y(yaw))
+                        .with_scale(Vec3::new(BANK_THICK, BANK_HEIGHT, length)),
+                ));
+            }
+        }
+
+        // And the trampoline, one body per arm rather than per segment: the
+        // river's whole role here is throwing things back out, and a chain of
+        // overlapping static boxes is what took a settled frame to three
+        // hundred milliseconds once already.
+        for pair in arm.points.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            let Ok(direction) = Dir2::new(to - from) else {
+                continue;
+            };
+            let middle = from.midpoint(to);
+            commands.spawn((
+                Name::new("Water body"),
+                RigidBody::Static,
+                Collider::cuboid(arm.width, 0.4, from.distance(to)),
+                Restitution::new(WATER_RESTITUTION).with_combine_rule(CoefficientCombine::Max),
+                Transform::from_xyz(middle.x, BOUNCE_LEVEL - 0.2, middle.y)
+                    .with_rotation(Quat::from_rotation_y(direction.x.atan2(direction.y))),
+            ));
+        }
+    }
+    info!(
+        "{} arms of the town's rivers, {surfaces} surfaces",
+        layout.waters.len()
+    );
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

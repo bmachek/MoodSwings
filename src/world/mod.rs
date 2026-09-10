@@ -4,6 +4,7 @@ pub mod atlas;
 pub mod buildings;
 pub mod bunting;
 pub mod church;
+pub mod gate;
 pub mod citygen;
 pub mod decals;
 pub mod facade;
@@ -12,6 +13,7 @@ pub mod gable;
 pub mod garage;
 pub mod ground;
 pub mod interior;
+pub mod layer;
 pub mod litter;
 pub mod lots;
 pub mod markings;
@@ -32,6 +34,7 @@ pub mod streaming;
 pub mod streetlights;
 pub mod streetname;
 pub mod streetside;
+pub mod terrain;
 pub mod texture;
 pub mod timeofday;
 pub mod vegetation;
@@ -120,24 +123,41 @@ fn generate_city(
     // from the seed. A named town that will not load falls back to the
     // generator with a warning rather than to an empty world — the same
     // discipline a missing sound gets.
-    let layout = config
-        .city
-        .atlas()
-        .and_then(atlas::load)
-        .map(|town| atlas::layout(&town, config.world_seed, config.world.half_extent))
+    // Kept rather than consumed, because the streets are no longer all it
+    // holds: its buildings, its water and its open ground are read further
+    // down, once the road network exists to place them against.
+    let town = config.city.atlas().and_then(atlas::load);
+    let (mut layout, signs) = town
+        .as_ref()
+        .map(|town| atlas::layout(town, config.world_seed, config.world.half_extent))
         .unwrap_or_else(|| {
             (
                 citygen::generate(config.world_seed, config.world.half_extent, config.city),
                 atlas::Signposts::default(),
             )
         });
-    let (mut layout, signs) = layout;
     // A town read off a map arrives as a road network and nothing else. What
     // fills it is not blocks — a real block is not a rectangle — but frontages
     // marched down each side of each street; see `world::streetside`.
     let mut frontage = streetside::Frontage::default();
     if layout.blocks.is_empty() {
-        let (blocks, holes) = streetside::lots(&layout, config.world_seed, config.city);
+        // What the map actually knows: the town's own buildings, where they
+        // really stand and at the angle they really stand at. The marcher then
+        // fills the rest — see `streetside::lots`.
+        let real = town
+            .as_ref()
+            .map(|atlas| {
+                atlas::footprints(
+                    atlas,
+                    &layout.graph,
+                    config.world_seed,
+                    config.world.half_extent,
+                    config.city,
+                )
+            })
+            .unwrap_or_default();
+        let (blocks, holes) =
+            streetside::lots(&layout, config.world_seed, config.city, real);
         layout.blocks = blocks;
         frontage = holes;
     }
@@ -165,9 +185,15 @@ fn generate_city(
     commands.insert_resource(signs);
 
     river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
+    river::spawn_waters(&mut commands, &layout, &mut meshes, &mut materials);
 
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
+    // One answer to "is this standing in a road", for every spawner that puts
+    // something upright beside a street. Built here rather than inside each of
+    // them because it is a fact about the whole layout and it costs a pass over
+    // the graph.
+    commands.insert_resource(streetside::Corridors::build(&city));
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
@@ -267,49 +293,181 @@ const GROUND_VIEW_EXTENT: f32 = 40_000.0;
 /// ground in the game is a hundred cells on a side.
 const CELL_REPEATS: f32 = 128.0;
 
-/// A ground plane whose texture coordinates restart every cell.
+/// How finely a ground cell is subdivided, by how far out it is.
 ///
-/// Covers at least `extent` metres square, centred on the origin, facing up. The
-/// cells are whole numbers of texture repeats, so the seam between two of them
-/// falls exactly where the texture wraps anyway and cannot be seen.
+/// `(square distance from the middle of the world, quads across one cell)`.
+/// Read in order; the first entry a cell's centre is inside wins.
 ///
-/// Returned with tangents, because everything that uses it is normal-mapped and
-/// a normal-mapped mesh without them fails to build its pipeline rather than
-/// falling back.
-fn tiled_ground(extent: f32, tile: f32) -> Mesh {
+/// The whole ground used to be one quad per cell — one vertex every four
+/// hundred and forty-eight metres, four and a half of them across the entire
+/// town. That is not a coarse surface, it is a *plane*, and no amount of work
+/// in `ground.wgsl` puts a hollow or a horizon into a plane. It also meant the
+/// ground could not be displaced at all: there was nowhere to put the shape.
+///
+/// The near ring is fourteen-metre quads, which samples the gentle field in
+/// `world::terrain` five times per wavelength and is finer than anything the
+/// player can walk to. Past the town the steps quadruple twice, because what
+/// is out there is a nine-hundred-metre landscape and a fifty-six-metre quad
+/// still carries sixteen samples across one hill.
+const GROUND_STEPS: [(f32, u32); 4] = [
+    (1_600.0, 32),
+    (4_500.0, 8),
+    (13_500.0, 2),
+    (f32::INFINITY, 1),
+];
+
+/// How far a cell's skirt hangs below its own edge, as a share of one quad.
+///
+/// Two cells of different fineness do not share vertices along the edge
+/// between them, so the finer one's displaced midpoints leave a crack against
+/// the coarser one's straight edge. A skirt is the standard answer and it is
+/// the right one here: a vertical curtain hanging *down* from each cell's
+/// border is behind the ground from every viewpoint above the ground, and the
+/// player cannot get under it.
+const GROUND_SKIRT: f32 = 1.4;
+
+/// A ground surface whose texture coordinates restart every cell.
+///
+/// Covers at least `extent` metres square, centred on the origin, facing up,
+/// and shaped by `terrain` — which returns exactly zero anywhere anything is
+/// built, so this is still a dead-flat plane wherever the town stands on it.
+///
+/// The cells are whole numbers of texture repeats, so the seam between two of
+/// them falls exactly where the texture wraps anyway and cannot be seen; a
+/// cell's own vertices are shared, so the finest ring costs one vertex per
+/// quad rather than four.
+///
+/// Tangents are written rather than generated. For a heightfield whose UVs run
+/// along world X and Z the tangent basis is arithmetic — `mikktspace` on two
+/// hundred thousand vertices is a startup hitch bought for an answer already
+/// known — and `the_written_tangents_are_the_ones_mikktspace_would_have_found`
+/// holds the two to each other.
+fn tiled_ground(extent: f32, tile: f32, terrain: &terrain::Terrain) -> Mesh {
     let cell = tile * CELL_REPEATS;
     let cells = (extent / cell).ceil().max(1.0) as u32;
     let half = cells as f32 * cell * 0.5;
 
-    let mut positions = Vec::with_capacity((cells * cells * 4) as usize);
-    let mut normals = Vec::with_capacity(positions.capacity());
-    let mut uvs = Vec::with_capacity(positions.capacity());
-    let mut indices = Vec::with_capacity((cells * cells * 6) as usize);
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut tangents: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
 
     for row in 0..cells {
         for column in 0..cells {
             let x0 = -half + column as f32 * cell;
             let z0 = -half + row as f32 * cell;
+            let out = (x0 + cell * 0.5).abs().max((z0 + cell * 0.5).abs());
+            let steps = GROUND_STEPS
+                .iter()
+                .find(|(reach, _)| out < *reach)
+                .map(|(_, steps)| *steps)
+                .unwrap_or(1);
+            let step = cell / steps as f32;
             let base = positions.len() as u32;
-            for (dx, dz) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-                positions.push([x0 + dx * cell, 0.0, z0 + dz * cell]);
-                normals.push([0.0, 1.0, 0.0]);
-                uvs.push([dx * CELL_REPEATS, dz * CELL_REPEATS]);
+
+            for iz in 0..=steps {
+                for ix in 0..=steps {
+                    let at = Vec2::new(x0 + ix as f32 * step, z0 + iz as f32 * step);
+                    let normal = terrain.normal(at, step * 0.5);
+                    positions.push([at.x, terrain.height(at), at.y]);
+                    normals.push(normal.to_array());
+                    uvs.push([
+                        ix as f32 / steps as f32 * CELL_REPEATS,
+                        iz as f32 / steps as f32 * CELL_REPEATS,
+                    ]);
+                    // U runs along +X, so the tangent is the surface direction
+                    // that has no Z in it, and the handedness is negative
+                    // because V runs along +Z while `cross(normal, tangent)`
+                    // on an upward face points at −Z.
+                    let tangent = Vec3::new(1.0, -normal.x / normal.y.max(1e-4), 0.0).normalize();
+                    tangents.push([tangent.x, tangent.y, tangent.z, -1.0]);
+                }
             }
-            indices.extend([base, base + 2, base + 1, base, base + 3, base + 2]);
+
+            let vertex = |ix: u32, iz: u32| base + iz * (steps + 1) + ix;
+            for iz in 0..steps {
+                for ix in 0..steps {
+                    let (a, b) = (vertex(ix, iz), vertex(ix + 1, iz));
+                    let (c, d) = (vertex(ix + 1, iz + 1), vertex(ix, iz + 1));
+                    indices.extend([a, c, b, a, d, c]);
+                }
+            }
+
+            // The skirt. One quad per border edge, hanging straight down.
+            let drop = step * GROUND_SKIRT;
+            let mut hem = |a: u32, b: u32| {
+                let start = positions.len() as u32;
+                for corner in [a, b] {
+                    let top = positions[corner as usize];
+                    positions.push(top);
+                    positions.push([top[0], top[1] - drop, top[2]]);
+                    let uv = uvs[corner as usize];
+                    uvs.push(uv);
+                    uvs.push(uv);
+                    for _ in 0..2 {
+                        normals.push(normals[corner as usize]);
+                        tangents.push(tangents[corner as usize]);
+                    }
+                }
+                // Both windings: a skirt is never meant to be seen at all, and
+                // which side of it faces out depends on which border it is on.
+                indices.extend([start, start + 1, start + 3, start, start + 3, start + 2]);
+                indices.extend([start, start + 3, start + 1, start, start + 2, start + 3]);
+            };
+            for i in 0..steps {
+                hem(vertex(i, 0), vertex(i + 1, 0));
+                hem(vertex(i, steps), vertex(i + 1, steps));
+                hem(vertex(0, i), vertex(0, i + 1));
+                hem(vertex(steps, i), vertex(steps, i + 1));
+            }
         }
     }
 
-    buildings::with_tangents(
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            bevy::asset::RenderAssetUsages::default(),
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_indices(Indices::U32(indices)),
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
     )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, tangents)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Points a side of the ground's collider.
+///
+/// Four metres between samples over the played extent, which is finer than
+/// anything the gentle field does — it moves by forty centimetres over seventy
+/// metres — and cheap: parry builds the shape implicitly from the lattice
+/// rather than from triangles, so this is five hundred and fifty rows of
+/// floats and no BVH.
+const GROUND_LATTICE: usize = 550;
+
+/// The ground, as something to stand on.
+///
+/// A heightfield rather than the flat box this used to be. It has to agree
+/// with [`tiled_ground`] to the millimetre or the player walks on air, and it
+/// does for the only reason that is maintainable: both of them ask
+/// `world::terrain` and neither of them has an opinion of its own.
+///
+/// Parry indexes its lattice `[z][x]` — rows are Z — which Avian's own doc
+/// comment has the other way round. It matters here because the ground is not
+/// symmetrical.
+fn ground_collider(terrain: &terrain::Terrain, played: f32) -> Collider {
+    let last = GROUND_LATTICE - 1;
+    let heights = (0..GROUND_LATTICE)
+        .map(|iz| {
+            let z = (iz as f32 / last as f32 - 0.5) * played;
+            (0..GROUND_LATTICE)
+                .map(|ix| {
+                    let x = (ix as f32 / last as f32 - 0.5) * played;
+                    terrain.height(Vec2::new(x, z))
+                })
+                .collect()
+        })
+        .collect();
+    Collider::heightfield(heights, Vec3::new(played, 1.0, played))
 }
 
 /// The road surface. Streets are not meshed individually: the ground *is* the
@@ -341,11 +499,18 @@ fn setup_ground(
     // world would be a tarmac plain with houses on it. Here the ground is
     // grass and the roads are laid on top of it, one ribbon per street.
     let streetside = city.blocks.first().is_some_and(|block| !block.paved);
-    // The visible plane runs far past the city, so that from a rooftop the
+    // The visible ground runs far past the city, so that from a rooftop the
     // world does not end in a rectangle hanging in mid-air; the atmosphere
-    // hazes the surplus into the horizon within a couple of kilometres. It
-    // costs one more quad. The collider only needs to cover the city.
+    // hazes the surplus into the horizon within a couple of kilometres. The
+    // collider only needs to cover the city.
     let played = config.world.half_extent * 2.0 + 200.0;
+    // And the shape of it. A generated grid city paves its own whole footprint
+    // with block slabs laid at a fixed height, so it takes the landscape past
+    // the town and a level floor under it; a real town has open back land in
+    // it and gets both — see `world::terrain`, which is where the rule that
+    // makes this safe at all is written down.
+    let reach = config.world.half_extent + ENVELOPE + BACKLAND + 60.0;
+    let terrain = terrain::Terrain::new(&city, reach, streetside, config.world_seed);
     if streetside {
         // The asphalt a ribbon is made of: the same material the one big quad
         // would have used, at a tiling of one, because a ribbon carries its own
@@ -393,8 +558,8 @@ fn setup_ground(
         // The mask covers the town and a margin round it, and the margin is
         // what makes the clamped edge safe: past it there are no streets, so
         // the border reads as open country and the sampler is free to extend
-        // that to the horizon.
-        let reach = config.world.half_extent + ENVELOPE + BACKLAND + 60.0;
+        // that to the horizon. The same reach the terrain's level field uses,
+        // and for the same reason.
         let started = std::time::Instant::now();
         let mask = images.add(urban_mask(&city, reach));
         // And what the town's floor is made of. The scanned grit if it was
@@ -413,7 +578,7 @@ fn setup_ground(
         );
         commands.spawn((
             Name::new("Ground"),
-            Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE))),
+            Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, GRASS_TILE, &terrain))),
             // Not a plain material. A grass scan is right at the size it was
             // photographed and identical at every size above that, and this one
             // quad is kilometres across — see `world::ground`.
@@ -426,14 +591,15 @@ fn setup_ground(
         commands.spawn((
             Name::new("Ground collider"),
             RigidBody::Static,
-            Collider::cuboid(played, 2.0, played),
-            Transform::from_xyz(0.0, -1.0, 0.0),
+            ground_collider(&terrain, played),
+            Transform::IDENTITY,
         ));
+        commands.insert_resource(terrain);
         return;
     }
     commands.spawn((
         Name::new("Road surface"),
-        Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, ASPHALT_TILE))),
+        Mesh3d(meshes.add(tiled_ground(GROUND_VIEW_EXTENT, ASPHALT_TILE, &terrain))),
         // Not registered with `WetSurfaces` any more. The road's wetness is a
         // uniform its own shader reads, so it varies across the surface instead
         // of being one value recomputed onto the material — see `world::road`.
@@ -442,12 +608,17 @@ fn setup_ground(
             extension: road::RoadSheen::default(),
         })),
     ));
+    // Still a box here, and it can be: a grid city's terrain is level
+    // everywhere inside the played extent by construction — the landscape
+    // starts past the collider — so a heightfield would be five hundred and
+    // fifty rows of zeroes.
     commands.spawn((
         Name::new("Ground collider"),
         RigidBody::Static,
         Collider::cuboid(played, 2.0, played),
         Transform::from_xyz(0.0, -1.0, 0.0),
     ));
+    commands.insert_resource(terrain);
 }
 
 /// Metres of ground one repeat of the grass covers.
@@ -474,7 +645,14 @@ const MASK_SIZE: u32 = 1024;
 /// metres is about as deep as the back land of a European town goes before it
 /// turns into whatever the middle of the block is; it is also, not by accident,
 /// a little more than the deepest plot `streetside` hands out.
-const BACKLAND: f32 = 34.0;
+///
+/// That last clause was wishful for a while. `streetside` stacks up to three
+/// outbuildings behind a house, each advancing the back line whether or not it
+/// was built on, and the third landed sixty-five metres out — past this, past
+/// the shaded ground, and past [`terrain::LEVEL_REACH`], which is where the
+/// ground stops being exactly zero and a hard-written y stops being true. It
+/// is a limit now rather than an observation, which is why it is `pub(crate)`.
+pub(crate) const BACKLAND: f32 = 34.0;
 
 /// And how far out is still town at all.
 ///
@@ -778,11 +956,24 @@ fn boundary_wall(
 
 /// Metres of street one repeat of each paving covers.
 ///
-/// A sett is about fifteen centimetres and there are seven across the texture,
-/// so a metre and a bit is the true size of it. Slabs and grit are looser: what
-/// they have to avoid is reading as a pattern, and the repeat is what does that.
-const SETT_TILE: f32 = 1.35;
-const SLAB_TILE: f32 = 1.6;
+/// Derived from the scan rather than guessed, because guessing is what put the
+/// Altstadt in 3 cm setts. Count the stones across one repeat, multiply by what
+/// that stone is in life, and that is the number:
+///
+/// * `SETT_TILE` — `PavingStones138` runs about 7.5 stones across and 14.8 down
+///   a 1024x2048 scan. At 16 cm Grosspflaster that is 1.20 m by 2.37 m. It is
+///   the one portrait scan in the library, so it is also the one tile that
+///   cannot be square: scaled isotropically its stones come out twice as long
+///   as they are wide.
+/// * `SLAB_TILE` — `PavingStones151` runs about 42 stones and 2.5 fan arcs
+///   across a square repeat. At 3.4 m a stone is 8 cm and a Segmentbogen chord
+///   is 1.36 m, which is a real laying pattern; at the old 1.6 m it was 3.8 cm
+///   and half an arc, which is not.
+///
+/// Grit is looser: what it has to avoid is reading as a pattern, and the repeat
+/// is what does that.
+const SETT_TILE: Vec2 = Vec2::new(1.20, 2.37);
+const SLAB_TILE: Vec2 = Vec2::splat(3.4);
 pub(crate) const GRIT_TILE: f32 = 2.1;
 
 /// The carriageway material for one kind of surface, and how much asphalt
@@ -804,7 +995,9 @@ fn carriageway(
     // is, and how deep its deepest joint really is in metres — see
     // `ScannedSet::deepen`. Zero there means no parallax at all, which is not
     // an omission: it is a fetch budget spent where there is something to find.
-    let (set, tile, tint, wear, relief, joint) = match surface {
+    // Set, tile, tint, asphalt ageing, relief coarseness, joint depth, how far
+    // it has settled and how much it pots.
+    let (set, tile, tint, wear, relief, joint, sag, pits) = match surface {
         // Tarmac is the one surface the ageing in `road.wgsl` describes: it is
         // poured, so it is patched and it cracks. It is also the finest, which
         // is why its relief is the one that has to lie down at a grazing angle
@@ -814,23 +1007,31 @@ fn carriageway(
         // everything else in this match put together.
         Surface::Asphalt => (
             material::set::ROAD,
-            ASPHALT_TILE,
+            Vec2::splat(ASPHALT_TILE),
             Color::srgb(0.50, 0.50, 0.52),
             1.0,
             0.0,
             0.0,
+            // Tarmac takes both: it is the surface that is laid over trenches,
+            // and the only one that pots.
+            0.020,
+            1.0,
         ),
-        // A sett is a rounded granite block with a three-centimetre sand joint
-        // around it, and it is the surface a player stands closest to in the
-        // whole Altstadt. This is the case parallax was worth loading the
-        // height maps for.
+        // A sett is a rounded granite block with a sand joint around it, and
+        // it is the surface a player stands closest to in the whole Altstadt.
+        // This is the case parallax was worth loading the height maps for, and
+        // at 16 cm the joint is deep enough to be worth marching a ray into.
         Surface::Sett => (
             material::set::SETT,
             SETT_TILE,
             Color::srgb(0.62, 0.61, 0.60),
             0.0,
             1.0,
-            0.030,
+            0.035,
+            // Setts settle more than tarmac — a sand bed under a market street
+            // is what a century of drays leaves ruts in — and pot not at all.
+            0.028,
+            0.0,
         ),
         Surface::Slabs => (
             material::set::PAVEMENT,
@@ -839,30 +1040,44 @@ fn carriageway(
             0.0,
             0.65,
             0.016,
+            0.018,
+            0.0,
         ),
         Surface::Gravel => (
             material::set::ROOF,
-            GRIT_TILE,
+            Vec2::splat(GRIT_TILE),
             Color::srgb(0.55, 0.51, 0.45),
             0.0,
             0.45,
             0.020,
+            // A gravel lane is nothing but hollows.
+            0.045,
+            0.55,
         ),
     };
 
     let mut base = StandardMaterial {
-        uv_transform: Affine2::from_scale(Vec2::splat(ASPHALT_TILE / tile)),
+        uv_transform: Affine2::from_scale(Vec2::new(ASPHALT_TILE / tile.x, ASPHALT_TILE / tile.y)),
         ..default()
     };
     match library.get(set) {
         Some(scanned) => {
             scanned.apply(&mut base);
             if joint > 0.0 {
-                scanned.deepen(&mut base, joint, tile);
+                // The narrow axis: parallax depth is a fraction of a repeat and
+                // an oblong tile has two of them, so take the one that makes
+                // the ray shorter rather than the one that flatters it.
+                scanned.deepen(&mut base, joint, tile.x.min(tile.y));
             }
             base.base_color = tint;
         }
         None => {
+            // Every painted fallback is square, so it takes a square tile —
+            // the oblong one belongs to the scan it was measured off. The
+            // narrow axis, because that is the one the stone size came from:
+            // `texture::SETTS` cobbles across 1.20 m is 17 cm, which is the
+            // same Grosspflaster the scanned path now lays.
+            base.uv_transform = Affine2::from_scale(Vec2::splat(ASPHALT_TILE / tile.x.min(tile.y)));
             let (color, relief) = match surface {
                 Surface::Sett => (texture::cobbles(), texture::cobbles_normal()),
                 Surface::Gravel => (texture::roof(), texture::roof_normal()),
@@ -884,6 +1099,8 @@ fn carriageway(
             settings: road::RoadSettings {
                 wear,
                 relief,
+                sag,
+                pits,
                 ..default()
             },
         },
