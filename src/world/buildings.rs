@@ -802,7 +802,13 @@ pub fn build_assets(
             library,
             images,
             super::material::set::BRICK_OLD,
-            Color::srgb(0.46, 0.24, 0.18),
+            // A tint here *multiplies* the scan's own albedo, so it is not a
+            // colour, it is a filter. The concrete beside it uses 0.5 grey and
+            // comes out grey; brick red at the same luminance is about this.
+            // At 0.46/0.24/0.18 -- a perfectly good brick red as a colour --
+            // the tower came out near black, which is not Landshut, it is
+            // Gotham.
+            Color::srgb(0.78, 0.46, 0.36),
             Vec2::splat(9.0),
         )),
         paving,

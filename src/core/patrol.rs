@@ -396,6 +396,13 @@ fn keep_watch(
     watch.worst_frame = watch.worst_frame.max(frame);
     if frame > 0.1 {
         watch.hitches += 1;
+        // Said out loud, with its size and the moment. A hitch is not only a
+        // frame-rate complaint: physics catches up on the next step, and
+        // anything resting a millimetre inside a static collider is ejected by
+        // however much it has to make up. Whether the parked cars leaving the
+        // ground are a hitch or a placement bug is a question about *when*, and
+        // the report could not answer it.
+        info!("patrol {:.0}s: a {:.0}ms frame", patrol.elapsed, frame * 1000.0);
     }
 
     watch.since += frame;

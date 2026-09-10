@@ -1663,6 +1663,39 @@ impl Corridors {
         Self(corridors(layout))
     }
 
+    /// Is something standing where *another* street's pavement will be?
+    ///
+    /// The corridor rather than the carriageway — tarmac and a pavement either
+    /// side — because this is asked by things that belong on a carriageway and
+    /// need to know they are not under somebody else's kerb. A parked car is
+    /// the case it exists for: cars are placed once at startup and the kerb
+    /// they are parked against arrives with its chunk a second later, so a car
+    /// overlapping one is not a car in a wall, it is a *static collider
+    /// appearing inside a dynamic body*. Avian resolves that the only way it
+    /// can, and the patrol has caught it twice: parked cars leaving the ground
+    /// at fourteen metres a second.
+    pub fn under_another_kerb(
+        &self,
+        at: Vec2,
+        radius: f32,
+        own: super::roadgraph::EdgeId,
+    ) -> bool {
+        let thing = Oblong {
+            centre: at,
+            axis: Vec2::X,
+            half: Vec2::splat(radius),
+        };
+        let cell = ((at.x / CELL).floor() as i32, (at.y / CELL).floor() as i32);
+        (-1..=1).any(|dx| {
+            (-1..=1).any(|dz| {
+                self.0.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
+                    near.iter()
+                        .any(|(id, road)| *id != own && thing.clashes_with(road, 0.0))
+                })
+            })
+        })
+    }
+
     /// Is something `radius` across, standing at `at`, on a carriageway?
     ///
     /// The carriageway, not the corridor: the corridor is the tarmac *and* a
