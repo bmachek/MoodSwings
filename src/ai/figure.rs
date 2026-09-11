@@ -715,11 +715,14 @@ pub fn build_assets(
         perceptual_roughness: 0.88,
         ..default()
     };
-    // A bounded complexion/expression palette is built alongside the cloth.
-    // Shared handles keep streaming from allocating another wardrobe each time.
+    // A bounded complexion/expression palette, built alongside the cloth and
+    // shared: streaming a citizen back in must never allocate another face.
+    let started = std::time::Instant::now();
+    let humans = crate::mood::face::build_humans(images, materials);
+    info!("complexions painted in {:.1?}", started.elapsed());
 
     FigureAssets {
-        humans: crate::mood::face::build_humans(images, materials),
+        humans,
         detail: meshes.add(rounded_box(Vec3::ONE)),
         torso: meshes.add(rounded_box(Vec3::new(0.36, body::TORSO_HEIGHT, 0.22))),
         // A UV sphere rather than the default icosphere: the face is painted
@@ -821,7 +824,7 @@ pub fn build_assets(
 /// Hangs a figure off an entity that already has its collider and behaviour.
 ///
 /// The face and the complexion arrive already chosen, because which ones they
-/// are depends on how the figure feels — see [`crate::mood::face::Worn`].
+/// are depends on how the figure feels — see [`crate::mood::face::level_of`].
 /// Human complexions are stable; mood still changes the expression.
 ///
 /// The archetype decides the extras — a crest, a pompadour, headphones, a
@@ -832,7 +835,7 @@ pub fn dress(
     entity: &mut EntityCommands,
     assets: &FigureAssets,
     coat: Handle<StandardMaterial>,
-    worn: &crate::mood::face::Worn,
+    level: usize,
     archetype: crate::ai::archetype::Archetype,
     rng: &mut ChaCha8Rng,
 ) {
@@ -843,7 +846,7 @@ pub fn dress(
         entity,
         assets,
         coat,
-        worn,
+        level,
         archetype,
         rng,
         crate::ai::appearance::Appearance::from_seed(seed),
@@ -854,7 +857,7 @@ pub fn dress_person(
     entity: &mut EntityCommands,
     assets: &FigureAssets,
     coat: Handle<StandardMaterial>,
-    worn: &crate::mood::face::Worn,
+    level: usize,
     archetype: crate::ai::archetype::Archetype,
     rng: &mut ChaCha8Rng,
     appearance: crate::ai::appearance::Appearance,
@@ -873,9 +876,7 @@ pub fn dress_person(
     let crest = assets.crest_colours[rng.random_range(0..assets.crest_colours.len())].clone();
 
     let skin = assets.humans.skin(appearance.skin);
-    let face = assets
-        .humans
-        .face(appearance.skin, appearance.face, worn.level);
+    let face = assets.humans.face(appearance.skin, appearance.face, level);
     entity.insert((WalkCycle::default(), appearance));
     // Nobody in a wheelchair is taking a step. Without this the stride runs
     // anyway — the walk cycle is paced by ground covered, and a chair covers

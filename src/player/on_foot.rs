@@ -75,7 +75,6 @@ fn spawn_player(
     city: Res<City>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     figures: Res<crate::ai::figure::FigureAssets>,
-    faces: Res<crate::mood::face::FaceAssets>,
     keybindings: Res<KeyBindings>,
 ) {
     // Start on an actual street rather than at the origin, which is usually
@@ -87,7 +86,7 @@ fn spawn_player(
         .unwrap_or(Vec2::ZERO);
 
     let temper = Temperament::ordinary();
-    let worn = faces.wear(temper.baseline);
+    let level = crate::mood::face::level_of(temper.baseline);
 
     let mut player = commands.spawn((
         Name::new("Player"),
@@ -108,7 +107,7 @@ fn spawn_player(
         // Being subject to the mood is what makes it a toy rather than a gauge.
         temper,
         Mood::new(temper.baseline),
-        FaceLevel(worn.level),
+        FaceLevel(level),
         // Dead centre of the crowd's range: the player's voice is the one the
         // others are heard against.
         Voicebox::new(1.0),
@@ -126,7 +125,7 @@ fn spawn_player(
         &mut player,
         &figures,
         coat,
-        &worn,
+        level,
         config.character,
         &mut rng,
     );
@@ -159,7 +158,6 @@ fn redress_player(
     mut commands: Commands,
     config: Res<GameConfig>,
     figures: Res<crate::ai::figure::FigureAssets>,
-    faces: Res<crate::mood::face::FaceAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     players: Query<(Entity, &Mood), With<Player>>,
 ) {
@@ -170,7 +168,7 @@ fn redress_player(
     let Ok((player, mood)) = players.single() else {
         return;
     };
-    let worn = faces.wear(mood.value);
+    let level = crate::mood::face::level_of(mood.value);
     commands.entity(player).despawn_related::<Children>();
     let coat = materials.add(player_coat(config.character));
     let mut rng = player_wardrobe_rng(&config);
@@ -179,7 +177,7 @@ fn redress_player(
         &mut player,
         &figures,
         coat,
-        &worn,
+        level,
         config.character,
         &mut rng,
     );

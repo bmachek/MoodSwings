@@ -751,7 +751,6 @@ fn line_up_cast(
     request: Res<CaptureRequest>,
     mut done: Local<bool>,
     figures: Option<Res<crate::ai::figure::FigureAssets>>,
-    faces: Option<Res<crate::mood::face::FaceAssets>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     players: Query<&Transform, With<Player>>,
     mut cameras: Query<(&mut Transform, &mut CameraRig), Without<Player>>,
@@ -761,7 +760,7 @@ fn line_up_cast(
     if *done || !request.lineup {
         return;
     }
-    let (Some(figures), Some(faces), Ok(anchor)) = (figures, faces, players.single()) else {
+    let (Some(figures), Ok(anchor)) = (figures, players.single()) else {
         return;
     };
 
@@ -804,7 +803,7 @@ fn line_up_cast(
         let at = stage
             + along * (6.0 + row as f32 * ROW_DEPTH)
             + right * ((column as f32 - middle_index) * spacing + stagger);
-        let worn = faces.wear(0.0);
+        let level = crate::mood::face::level_of(0.0);
         let coat = materials.add(StandardMaterial {
             // The fixed wardrobe where the archetype has one, and one neutral
             // street coat where it does not — the street palette is the
@@ -818,13 +817,13 @@ fn line_up_cast(
             Name::new("Lineup"),
             *archetype,
             crate::mood::feeling::Mood::new(0.0),
-            crate::mood::face::FaceLevel(worn.level),
+            crate::mood::face::FaceLevel(level),
             // Facing the camera, which stands where the player does.
             Transform::from_translation(at)
                 .with_rotation(Quat::from_rotation_y(std::f32::consts::PI) * anchor.rotation),
             Visibility::default(),
         ));
-        crate::ai::figure::dress(&mut person, &figures, coat, &worn, *archetype, &mut rng);
+        crate::ai::figure::dress(&mut person, &figures, coat, level, *archetype, &mut rng);
     }
 
     // Three-quarters rather than dead ahead, and above head height. Half

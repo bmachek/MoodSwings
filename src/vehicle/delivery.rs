@@ -182,7 +182,6 @@ fn scatter(
     vehicles: Res<super::spawn::VehicleAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     figures: Option<Res<crate::ai::figure::FigureAssets>>,
-    faces: Option<Res<crate::mood::face::FaceAssets>>,
     tempers: Option<Res<crate::mood::feeling::Tempers>>,
     // The row this van is going to stand in. `scatter` is ordered after
     // `spawn_parked_vehicles` and the sync point between them means the cars
@@ -308,14 +307,13 @@ fn scatter(
         // And whoever is unloading it, walking between the tail and the kerb.
         // `None` only if the wardrobe has not landed, which cannot happen at
         // PostStartup but is not worth a panic to say so.
-        if let (Some(figures), Some(faces), Some(tempers)) = (&figures, &faces, &tempers) {
+        if let (Some(figures), Some(tempers)) = (&figures, &tempers) {
             let back = at - facing * (half.z + 0.6);
             let door = at + normal * (2.6 * side);
             courier(
                 &mut commands,
                 &kit,
                 figures,
-                faces,
                 tempers,
                 &mut rng,
                 back,
@@ -338,7 +336,6 @@ fn courier(
     commands: &mut Commands,
     kit: &DeliveryKit,
     figures: &crate::ai::figure::FigureAssets,
-    faces: &crate::mood::face::FaceAssets,
     tempers: &crate::mood::feeling::Tempers,
     rng: &mut ChaCha8Rng,
     tail: Vec2,
@@ -352,7 +349,7 @@ fn courier(
 
     let temper = tempers.draw(rng);
     let mood = temper.baseline;
-    let worn = faces.wear(mood);
+    let level = crate::mood::face::level_of(mood);
 
     let mut person = commands.spawn((
         Name::new("Courier"),
@@ -369,7 +366,7 @@ fn courier(
         Bouncer::new(STAND_HEIGHT),
         temper,
         Mood::new(mood),
-        FaceLevel(worn.level),
+        FaceLevel(level),
         Voicebox::new(rng.random_range(0.85..1.20)),
         crate::mood::provoke::Provoker::default(),
         crate::ai::archetype::Archetype::Everyday,
@@ -379,7 +376,7 @@ fn courier(
         &mut person,
         figures,
         kit.overalls.clone(),
-        &worn,
+        level,
         crate::ai::archetype::Archetype::Everyday,
         rng,
     );

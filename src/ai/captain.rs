@@ -37,7 +37,6 @@ use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
-use crate::mood::face::FaceAssets;
 use crate::mood::feeling::{Mood, Temperament};
 use crate::mood::provoke::{Provocation, Provoker, Rudeness};
 use crate::mood::scuffle::Scuffle;
@@ -222,7 +221,6 @@ fn haunt(
     config: Res<GameConfig>,
     city: Res<City>,
     figures: Res<FigureAssets>,
-    faces: Res<FaceAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<AudioRng>,
     players: Query<&Transform, With<Player>>,
@@ -282,7 +280,7 @@ fn haunt(
         contagion: 0.0,
         grudge: 0.0,
     };
-    let worn = faces.wear(temper.baseline);
+    let level = crate::mood::face::level_of(temper.baseline);
     // A long anonymous coat, the colour of something best walked past.
     let coat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.23, 0.24, 0.18),
@@ -313,7 +311,7 @@ fn haunt(
         &mut captain,
         &figures,
         coat,
-        &worn,
+        level,
         super::archetype::Archetype::Missionary,
         &mut wardrobe,
     );

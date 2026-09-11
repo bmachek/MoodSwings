@@ -46,9 +46,6 @@ pub const FACE_U: f32 = 0.25;
 /// neutral.
 pub const LEVELS: usize = 13;
 
-/// The head texture wraps a whole sphere, and the face box takes about a third
-/// of it. Generous, therefore.
-const HEAD_SIZE: u32 = 256;
 /// The HUD portrait shows only the face, so it needs far less.
 const PORTRAIT_SIZE: u32 = 96;
 
@@ -366,20 +363,6 @@ pub fn head_mesh(radius: f32) -> Mesh {
         .rotated_by(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
 }
 
-/// The whole head, wrapped. `u` runs once round the equator and `v` from the
-/// crown to the chin, so the face is a window in the middle of it.
-fn wrapped(mood: f32) -> Image {
-    painted(HEAD_SIZE, TextureFormat::Rgba8UnormSrgb, |u, v| {
-        // Wrapped into ±0.5 of the face's meridian, then scaled so that a
-        // quarter turn is one face unit. `v` covers half a turn, hence the
-        // different factor: the face stays round on the sphere rather than
-        // being stretched twice as tall as it is wide.
-        let around = (u - FACE_U + 1.5).fract() - 0.5;
-        let colour = shade(Vec2::new(around * 4.0, (0.5 - v) * 2.0), mood);
-        [byte(colour[0]), byte(colour[1]), byte(colour[2]), 255]
-    })
-}
-
 /// The same face flat and cut out, for the HUD. Painted rather than cropped out
 /// of the head texture, which at this mapping would be a 38-pixel window
 /// blown up to twice its size.
@@ -397,49 +380,24 @@ fn portrait(mood: f32) -> Image {
     })
 }
 
+/// The HUD's mood portrait, one image per level.
+///
+/// This held the emoji head and the matching hands as well — thirteen wrapped
+/// 256² faces and thirteen flat complexions, the whole of the art direction
+/// in which a flummi's mood *was* its colour. Nothing samples them any more:
+/// every figure in the city is dressed through `figure::dress_person`, which
+/// takes its head and its skin from `HumanFaces`, and the two vectors went on
+/// being painted and uploaded at every startup for a year of nobody looking
+/// at them. What is left is the one thing still on screen, which is the
+/// symbol in the corner — and that one is *meant* to go yellow and glow red.
 #[derive(Resource)]
 pub struct FaceAssets {
-    materials: Vec<Handle<StandardMaterial>>,
-    /// The same complexion without a face painted on it, for the parts of a
-    /// flummi that are bare but are not its head — which is to say its hands.
-    /// Untextured, so this is thirteen colours rather than thirteen images.
-    bare: Vec<Handle<StandardMaterial>>,
     portraits: Vec<Handle<Image>>,
 }
 
-/// Everything a figure needs to be dressed in one mood.
-///
-/// Handed about as one value because the three come from the same number and
-/// must not be allowed to disagree: a head at one level and hands at another is
-/// a flummi whose face has gone red and whose hands have not.
-#[derive(Clone)]
-pub struct Worn {
-    pub level: usize,
-    pub face: Handle<StandardMaterial>,
-    pub bare: Handle<StandardMaterial>,
-}
-
 impl FaceAssets {
-    pub fn material(&self, level: usize) -> Handle<StandardMaterial> {
-        self.materials[level.min(LEVELS - 1)].clone()
-    }
-
-    pub fn bare(&self, level: usize) -> Handle<StandardMaterial> {
-        self.bare[level.min(LEVELS - 1)].clone()
-    }
-
     pub fn portrait(&self, level: usize) -> Handle<Image> {
         self.portraits[level.min(LEVELS - 1)].clone()
-    }
-
-    /// What a given mood wears, and the level it was quantised to.
-    pub fn wear(&self, mood: f32) -> Worn {
-        let level = level_of(mood);
-        Worn {
-            level,
-            face: self.material(level),
-            bare: self.bare(level),
-        }
     }
 }
 
@@ -448,67 +406,28 @@ impl FaceAssets {
 #[derive(Component, Debug)]
 pub struct FaceLevel(pub usize);
 
-pub fn build_assets(
-    images: &mut Assets<Image>,
-    materials: &mut Assets<StandardMaterial>,
-) -> FaceAssets {
-    let grain = images.add(crate::world::texture::rubber_normal());
-    let mut faces = FaceAssets {
-        materials: Vec::with_capacity(LEVELS),
-        bare: Vec::with_capacity(LEVELS),
-        portraits: Vec::with_capacity(LEVELS),
-    };
-    for level in 0..LEVELS {
-        let mood = mood_at(level);
-        let texture = images.add(wrapped(mood));
-        // Not a cloth roughness. At the 0.88 the coats are mixed at, a head
-        // takes no highlight at all and reads as a mannequin; a face is closer
-        // to a half-gloss, and the reflectance is a shade above the dielectric
-        // default because skin is wet — and rubber, here, is wetter.
-        let complexion = StandardMaterial {
-            perceptual_roughness: 0.52,
-            reflectance: 0.55,
-            // A flummi is a moulded rubber ball, and the two things that say so
-            // are the pitting the mould left and the sheen over the top of it.
-            // Without them a head is a mathematically perfect sphere, which is
-            // the one shape nothing in the real world is.
-            //
-            // The grain is authored at head scale rather than tiled, because
-            // `StandardMaterial` has a single `uv_transform` for all of its
-            // textures and the face is painted into these same UVs — a grain
-            // that tiled would tile the face with it.
-            normal_map_texture: Some(grain.clone()),
-            clearcoat: 0.55,
-            clearcoat_perceptual_roughness: 0.16,
-            // A furious flummi glows a little, which is the difference between
-            // a red head and a head that is *about to go off*. The texture
-            // carries where the glow is; this is only how much of it there is.
-            emissive: LinearRgba::rgb(0.22, 0.02, 0.0) * (-mood).max(0.0),
-            ..default()
-        };
-        faces.materials.push(materials.add(StandardMaterial {
-            base_color_texture: Some(texture),
-            ..complexion.clone()
-        }));
-        let plain = complexion_of(mood);
-        faces.bare.push(materials.add(StandardMaterial {
-            base_color: Color::srgb(plain[0], plain[1], plain[2]),
-            ..complexion
-        }));
-        faces.portraits.push(images.add(portrait(mood)));
+/// Paints the HUD's mood portraits.
+///
+/// `materials` is still taken because the human faces are built alongside
+/// these, from the same startup, and a caller that had to know which of the
+/// two needed an `Assets<StandardMaterial>` would be a caller that knows more
+/// about faces than it should.
+pub fn build_assets(images: &mut Assets<Image>) -> FaceAssets {
+    FaceAssets {
+        portraits: (0..LEVELS)
+            .map(|level| images.add(portrait(mood_at(level))))
+            .collect(),
     }
-    faces
 }
 
 /// Puts the right face on every head whose mood has moved a whole level.
 pub fn wear_the_mood(
-    faces: Res<FaceAssets>,
     human_assets: Res<crate::ai::figure::FigureAssets>,
     figures: Query<(
         &super::feeling::Mood,
         &mut FaceLevel,
         &Children,
-        Option<&crate::ai::appearance::Appearance>,
+        &crate::ai::appearance::Appearance,
     )>,
     mut parts: Query<(
         &mut MeshMaterial3d<StandardMaterial>,
@@ -523,15 +442,10 @@ pub fn wear_the_mood(
             continue;
         }
         level.0 = next;
-        let (face, bare) = appearance.map_or_else(
-            || (faces.material(next), faces.bare(next)),
-            |a| {
-                (
-                    human_assets.humans.face(a.skin, a.face, next),
-                    human_assets.humans.skin(a.skin),
-                )
-            },
-        );
+        let face = human_assets
+            .humans
+            .face(appearance.skin, appearance.face, next);
+        let bare = human_assets.humans.skin(appearance.skin);
 
         for &child in children {
             if let Ok((mut material, head, skin)) = parts.get_mut(child) {

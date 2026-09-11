@@ -1510,7 +1510,18 @@ than the mood ladder's thirteen. Thirteen steps exist because an *emoji*
 changes colour continuously and bands without them; a human face moves a brow
 and a mouth, and the difference is better spent on texels. The features are
 drawn nearer caricature than anatomy, because a citizen two metres away is
-about sixty pixels of face and life proportions come out as two dots.
+about sixty pixels of face and life proportions come out as two dots. Ninety
+sheets, about 320 ms of startup, and the log says so.
+
+The emoji head went with them, and it took a while to notice. Every figure in
+the city is dressed through one function, that function takes its head and its
+skin from the human palette, and `FaceAssets` went on painting thirteen
+wrapped 256² faces and thirteen matching complexions that nothing sampled. A
+face was handed round as a `Worn` — a level, a head material and a hand
+material, bundled so the three could not disagree — and two thirds of that
+bundle was dead, so it is a level now, and `FaceAssets` is the one thing still
+on screen: the portrait in the corner of the HUD, which is a symbol and is
+*meant* to go yellow and glow red.
 
 Validating a change to any of this: `cargo fmt --all -- --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,

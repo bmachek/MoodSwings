@@ -60,15 +60,11 @@ impl Plugin for MoodPlugin {
     }
 }
 
-fn build_faces(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+fn build_faces(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let started = std::time::Instant::now();
-    let faces = face::build_assets(&mut images, &mut materials);
+    let faces = face::build_assets(&mut images);
     info!(
-        "{} faces painted in {:.1?}",
+        "{} mood portraits painted in {:.1?}",
         face::LEVELS,
         started.elapsed()
     );

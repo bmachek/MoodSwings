@@ -27,7 +27,7 @@ use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::config::GameConfig;
 use crate::core::rng::{key_for, stream};
 use crate::core::schedule::GameSet;
-use crate::mood::face::{FaceAssets, FaceLevel};
+use crate::mood::face::FaceLevel;
 use crate::mood::feeling::{Mood, Temperament};
 use crate::mood::provoke::Provoker;
 use crate::mood::voice::Voicebox;
@@ -592,7 +592,6 @@ fn form_the_column(
     city: Res<City>,
     assets: Res<MarchAssets>,
     figures: Res<crate::ai::figure::FigureAssets>,
-    faces: Res<FaceAssets>,
     players: Query<&Transform, With<crate::player::on_foot::Player>>,
 ) {
     let Some(happening) = &mut active.0 else {
@@ -615,7 +614,7 @@ fn form_the_column(
     let direction = towards.normalize_or_zero();
     let right = Vec2::new(-direction.y, direction.x);
     let mood = happening.kind.baseline();
-    let worn = faces.wear(mood);
+    let level = crate::mood::face::level_of(mood);
 
     for index in 0..MARCHERS {
         // Two abreast, staggered back down the road.
@@ -648,7 +647,7 @@ fn form_the_column(
             Bouncer::new(0.845),
             temper,
             Mood::new(mood),
-            FaceLevel(worn.level),
+            FaceLevel(level),
             Voicebox::new(0.85 + (index as f32 * 0.61803) % 0.4),
             Provoker::default(),
             Archetype::Everyday,
@@ -658,7 +657,7 @@ fn form_the_column(
             &mut marcher,
             &figures,
             coat,
-            &worn,
+            level,
             Archetype::Everyday,
             &mut wardrobe,
         );

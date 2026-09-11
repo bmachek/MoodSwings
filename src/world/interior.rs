@@ -45,7 +45,7 @@ use super::citygen::BuildingKind;
 use super::shell;
 use super::texture::FacadeClass;
 use crate::bounce::controller::Bouncer;
-use crate::mood::face::{FaceAssets, FaceLevel};
+use crate::mood::face::FaceLevel;
 use crate::mood::feeling::{Mood, Tempers};
 use crate::mood::provoke::Provoker;
 use crate::mood::voice::Voicebox;
@@ -80,7 +80,6 @@ pub struct Staff;
 /// Bundled so `BlockContext` carries one optional thing rather than three.
 pub struct CastContext<'a> {
     pub figures: &'a crate::ai::figure::FigureAssets,
-    pub faces: &'a FaceAssets,
     pub tempers: &'a Tempers,
 }
 
@@ -405,7 +404,7 @@ pub fn spawn(
     let Some(cast) = cast else { return };
     let temper = cast.tempers.draw(&mut rng);
     let mood = temper.baseline;
-    let worn = cast.faces.wear(mood);
+    let level = crate::mood::face::level_of(mood);
     // Behind their own counter: the supermarket's till stands beside the
     // door, everybody else's counter guards the back wall.
     let post = match kind {
@@ -432,7 +431,7 @@ pub fn spawn(
         Bouncer::new(STAND_HEIGHT),
         temper,
         Mood::new(mood),
-        FaceLevel(worn.level),
+        FaceLevel(level),
         Voicebox::new(rng.random_range(0.85..1.22)),
         Provoker::default(),
         crate::ai::archetype::Archetype::Everyday,
@@ -442,7 +441,7 @@ pub fn spawn(
         &mut clerk,
         cast.figures,
         kit.coat_for(kind),
-        &worn,
+        level,
         crate::ai::archetype::Archetype::Everyday,
         &mut rng,
     );

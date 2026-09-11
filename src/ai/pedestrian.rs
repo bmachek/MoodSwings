@@ -541,7 +541,7 @@ fn maintain_population(
                 Bouncer::new(STAND_HEIGHT * size),
                 temper,
                 Mood::new(temper.baseline),
-                FaceLevel(wardrobe.faces.wear(temper.baseline).level),
+                FaceLevel(crate::mood::face::level_of(temper.baseline)),
                 Voicebox::new(pitch),
                 Provoker::default(),
                 Visibility::default(),
@@ -566,7 +566,7 @@ fn maintain_population(
                 .assets
                 .coat_for(profile.archetype)
                 .unwrap_or(material);
-            let worn = wardrobe.faces.wear(profile.mood);
+            let level = crate::mood::face::level_of(profile.mood);
             person.insert((
                 citizen,
                 profile.archetype,
@@ -574,7 +574,7 @@ fn maintain_population(
                 super::figure::Stature(profile.age.size()),
                 profile.temperament,
                 Mood::new(profile.mood),
-                FaceLevel(wardrobe.faces.wear(profile.mood).level),
+                FaceLevel(crate::mood::face::level_of(profile.mood)),
                 Voicebox::new(profile.pitch),
             ));
             if archetype.steadfast() {
@@ -590,7 +590,7 @@ fn maintain_population(
                 &mut person,
                 &wardrobe.figures,
                 material,
-                &worn,
+                level,
                 archetype,
                 &mut rng.0,
                 super::appearance::Appearance::from_seed(config.world_seed ^ u64::from(citizen.0)),
