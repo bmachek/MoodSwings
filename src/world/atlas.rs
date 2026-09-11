@@ -159,6 +159,18 @@ impl Relief {
     pub fn is_hill(&self, at: Vec2) -> bool {
         self.at(at) > HILL
     }
+
+    /// How far from the town's origin the coarse grid reaches along the
+    /// nearest axis: past this the map has nothing to say about the ground.
+    pub fn far_reach(&self) -> f32 {
+        let (ox, oz) = self.far.origin;
+        let width = self.far.step * self.far.cols.saturating_sub(1) as f32;
+        let height = self.far.step * self.far.rows.saturating_sub(1) as f32;
+        [-ox, ox + width, -oz, oz + height]
+            .into_iter()
+            .fold(f32::INFINITY, f32::min)
+            .max(0.0)
+    }
 }
 
 /// Metres above the datum at which ground stops being the town.
@@ -939,6 +951,38 @@ mod tests {
             path.display()
         );
         town
+    }
+
+    /// A band's centreline goes one way.
+    ///
+    /// The Altstadt is mapped as one closed way round the market, and after
+    /// the fold and the recentring both of its lanes lay on one centreline:
+    /// a polyline that ran north, turned round and ran south over itself. The
+    /// runtime drew every edge twice and laid a pavement across the
+    /// carriageway at each turn-round, which was the slab standing in the
+    /// road at the north end of the market. The bake cuts a looped band to
+    /// its spine now; this is what stops the next bake putting the loop back.
+    #[test]
+    fn no_band_in_the_committed_landshut_turns_round_on_itself() {
+        let Some(town) = committed() else { return };
+        for street in town.streets.iter().filter(|street| street.band) {
+            for (index, window) in street.points.windows(3).enumerate() {
+                let (a, b, c) = (
+                    Vec2::from(window[0]),
+                    Vec2::from(window[1]),
+                    Vec2::from(window[2]),
+                );
+                let trend = c - a;
+                assert!(
+                    (b - a).dot(trend) >= 0.0 && (c - b).dot(trend) >= 0.0,
+                    "{} ({} m) steps back on itself at point {} ({:?})",
+                    street.name,
+                    street.width,
+                    index + 1,
+                    window[1]
+                );
+            }
+        }
     }
 
     #[test]

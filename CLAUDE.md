@@ -233,10 +233,19 @@ Copernicus elevation model). The bake is `tools/bake-city.py`; it reads Overture
 Maps for the polygons and the DEM tile for the relief because Overpass cannot
 supply either, and a bake of its own output is its own output — `--from-ron`
 regenerates the buildings and the relief from a committed file, so do not add a
-step that measures something the previous bake already moved. The tests on the
-committed file fail when the file is there and does not load; they used to
-return early, which is how a bake that wrote `group: 0` where the runtime wanted
-`Some(0)` passed every test while the game quietly fell back to the generator.
+step that measures something the previous bake already moved (the band tidy in
+`tidy_bands` is the model: it cuts a looped band to its spine and re-attaches
+the side streets, and a second pass finds no loop and nothing loose). The tests
+on the committed file fail when the file is there and does not load; they used
+to return early, which is how a bake that wrote `group: 0` where the runtime
+wanted `Some(0)` passed every test while the game quietly fell back to the
+generator.
+
+An OSM way can be a *loop* — the Altstadt is one closed way round the market —
+and after `merge_parallel` and the recentring both of its lanes lie on one
+centreline, so the runtime would draw every edge twice and lay a pavement
+across the carriageway at each turn-round. Look at the band's polyline before
+trusting a ribbon artefact to the renderer: `runs_of` in the bake is the test.
 
 ### The traps
 

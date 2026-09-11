@@ -1687,6 +1687,310 @@ def cap_widths(streets, entries, half, quantile=0.0):
     return narrowed
 
 
+# A band folded out of a loop is the same street twice. The Altstadt is
+# mapped as one closed way round the market -- up one lane, round the top,
+# down the other, out along the Theaterstrasse spur and back -- and it is the
+# longest way of its name, so `merge_parallel` makes it the leader and the
+# recentring then pulls both of its lanes onto the one centreline. What that
+# leaves is a band that runs north, turns round and runs south over itself:
+# every edge drawn twice, and at each turn-round a pavement laid straight
+# across the carriageway, which is the slab that was standing in the road at
+# the north end of the market. So a band is cut into its monotone runs, the
+# longest run is the street, and the others are dropped where something else
+# already covers them.
+#
+# The welds go with the dropped runs, and every side street that ended on
+# one is put back: a point of another street inside the band's carriageway
+# is projected onto the spine and the spine takes the foot as a junction. A
+# street that stays inside for a stretch is trimmed to where it entered.
+REVERSAL_LOOK = 40.0
+REVERSAL_DOT = -0.5
+SPINE_SNAP = 2.0
+COVERED_SHARE = 0.7
+COVERED_GAP = 6.0
+
+
+def unit(a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = math.hypot(dx, dy)
+    return (dx / length, dy / length) if length > 1e-9 else (0.0, 0.0)
+
+
+def runs_of(points):
+    """Cuts a polyline where it turns round on itself.
+
+    Both directions are taken over `REVERSAL_LOOK` metres of the way rather
+    than from one segment: the turn-round at the top of a loop is a few short
+    segments in every direction, and a street that steps aside for one point
+    to meet a side street and comes back has not turned round. Metres *along*
+    the way, not as the crow flies -- a loop's far lane comes back inside any
+    radius, and measured that way the cut landed forty metres short of the
+    turn. A reversal is where the way behind a point and the way ahead of it
+    disagree by more than a hundred and twenty degrees.
+    """
+    runs, start = [], 0
+    for k in range(1, len(points) - 1):
+        back, walked = k, 0.0
+        while back > start and walked < REVERSAL_LOOK:
+            walked += math.dist(points[back - 1], points[back])
+            back -= 1
+        ahead, walked = k, 0.0
+        while ahead < len(points) - 1 and walked < REVERSAL_LOOK:
+            walked += math.dist(points[ahead], points[ahead + 1])
+            ahead += 1
+        behind_dir = unit(points[back], points[k])
+        ahead_dir = unit(points[k], points[ahead])
+        if behind_dir[0] * ahead_dir[0] + behind_dir[1] * ahead_dir[1] < REVERSAL_DOT:
+            runs.append(points[start:k + 1])
+            start = k
+    runs.append(points[start:])
+    return [run for run in runs if len(run) >= 2]
+
+
+def unjog(points):
+    """Drops any point a polyline steps back to reach. The ends stay."""
+    points = list(points)
+    changed = True
+    while changed and len(points) > 2:
+        changed = False
+        for k in range(1, len(points) - 1):
+            a, b, c = points[k - 1], points[k], points[k + 1]
+            trend = (c[0] - a[0], c[1] - a[1])
+            there = (b[0] - a[0], b[1] - a[1])
+            on = (c[0] - b[0], c[1] - b[1])
+            if there[0] * trend[0] + there[1] * trend[1] < 0 or on[0] * trend[0] + on[1] * trend[1] < 0:
+                del points[k]
+                changed = True
+                break
+    return points
+
+
+def polyline_length(points):
+    return sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+
+
+def covered(run, streets):
+    """Is this run mostly lying in streets that are still there?
+
+    The band itself counts, and is the usual answer: by the time a run is
+    tested the band is its spine, and the loop's other lane lies on it.
+    """
+    hits = 0
+    for at in run:
+        for street in streets:
+            gap, _, _ = nearest_on(street["points"], at)
+            if gap < street["width"] * 0.5 + COVERED_GAP:
+                hits += 1
+                break
+    return hits >= len(run) * COVERED_SHARE
+
+
+def spine_the_bands(streets):
+    """Cuts every looped band down to one run of itself."""
+    spined, dropped, kept = 0, 0, 0
+    for band in [s for s in streets if s.get("band")]:
+        runs = runs_of(band["points"])
+        spine = unjog(max(runs, key=polyline_length)) if runs else band["points"]
+        if len(runs) < 2 and len(spine) == len(band["points"]):
+            continue
+        spined += 1
+        band["points"] = spine
+        band["length"] = polyline_length(spine)
+        print(
+            f"  {band['name']} ({band['width']} m): {len(runs)} runs of "
+            f"{', '.join(f'{polyline_length(run):.0f}' for run in runs)} m; "
+            f"the spine keeps {len(spine)} of {sum(len(run) for run in runs)} points",
+            file=sys.stderr,
+        )
+        for run in runs:
+            if run is max(runs, key=polyline_length):
+                continue
+            if covered(run, streets):
+                dropped += 1
+                continue
+            # Nothing else runs here, so the loop was the only way this
+            # street was mapped; keep it as an ordinary street. Which width
+            # the lane had before the fold is gone, so it gets a plain one.
+            kept += 1
+            print(
+                f"    kept a {polyline_length(run):.0f} m run of {band['name']} from "
+                f"({run[0][0]:.1f},{run[0][1]:.1f}) to ({run[-1][0]:.1f},{run[-1][1]:.1f}) as a street",
+                file=sys.stderr,
+            )
+            streets.append({
+                "name": band["name"],
+                "width": min(band["width"], 8.0),
+                "arterial": band["arterial"],
+                "surface": band["surface"],
+                "points": unjog(run),
+                "length": polyline_length(run),
+                "band": False,
+                "recentred": band.get("recentred", False),
+                "covered": band.get("covered", False),
+            })
+    return spined, dropped, kept
+
+
+def attach(spine, at):
+    """The junction on `spine` for a point that ought to meet it there.
+
+    An existing spine point within `SPINE_SNAP` is that junction; otherwise
+    the foot of the perpendicular is, and the spine takes it as a new point
+    so the two streets share a coordinate -- which is the only thing that
+    welds them when the runtime loads this.
+    """
+    best = None
+    for index, (behind, ahead) in enumerate(zip(spine, spine[1:])):
+        dx, dy = ahead[0] - behind[0], ahead[1] - behind[1]
+        span = dx * dx + dy * dy
+        if span < 1e-9:
+            continue
+        t = max(0.0, min(1.0, ((at[0] - behind[0]) * dx + (at[1] - behind[1]) * dy) / span))
+        foot = (behind[0] + dx * t, behind[1] + dy * t)
+        gap = math.dist(at, foot)
+        if best is None or gap < best[0]:
+            best = (gap, index, foot)
+    _, index, foot = best
+    foot = (round(foot[0], 1), round(foot[1], 1))
+    near = min(spine, key=lambda p: math.dist(p, foot))
+    if math.dist(near, foot) <= SPINE_SNAP:
+        return near
+    spine.insert(index + 1, foot)
+    return foot
+
+
+def reattach_to_bands(streets):
+    """Puts every side street back on the band it met before the fold."""
+    attached, split, dropped = 0, 0, 0
+    for band in [s for s in streets if s.get("band")]:
+        spine = band["points"]
+        # A point of another street is in the band if it is on the
+        # carriageway or halfway across the pavement; an *end* of one is,
+        # out to a metre behind the pavement, because a street that stops
+        # there stopped at the band's kerb and was meant to meet it.
+        reach = band["width"] * 0.5 + PAVEMENT * 0.5
+        end_reach = band["width"] * 0.5 + PAVEMENT + 1.0
+        for street in list(streets):
+            if street is band:
+                continue
+            points = street["points"]
+            # Loose: inside the carriageway and not already a spine point.
+            loose = []
+            for index, at in enumerate(points):
+                gap, _, _ = nearest_on(spine, at)
+                on_spine = any(math.dist(at, p) < 0.05 for p in spine)
+                within = end_reach if index in (0, len(points) - 1) else reach
+                loose.append(gap < within and not on_spine)
+            if not any(loose):
+                continue
+            if all(loose):
+                streets.remove(street)
+                dropped += 1
+                continue
+            # Runs of loose points, as index ranges over `points`.
+            runs, start = [], None
+            for k, is_loose in enumerate(loose + [False]):
+                if is_loose and start is None:
+                    start = k
+                elif not is_loose and start is not None:
+                    runs.append((start, k - 1))
+                    start = None
+            pieces, prefix, cursor = [], [], 0
+            for a, b in runs:
+                if a == 0:
+                    # Came in from the band: the junction is where the street
+                    # leaves the carriageway, the rest of the run is in the road.
+                    prefix, cursor = [attach(spine, points[b])], b + 1
+                    attached += 1
+                elif b == len(points) - 1:
+                    # Ends in the band: the junction is where it entered.
+                    pieces.append(prefix + points[cursor:a] + [attach(spine, points[a])])
+                    attached += 1
+                    cursor = None
+                else:
+                    # Crosses the band: two streets, each meeting it.
+                    into = attach(spine, points[a])
+                    out = attach(spine, points[b])
+                    if math.dist(into, out) < SPINE_SNAP:
+                        out = into
+                    pieces.append(prefix + points[cursor:a] + [into])
+                    prefix, cursor = [out], b + 1
+                    split += 1
+            if cursor is not None:
+                pieces.append(prefix + points[cursor:])
+            pieces = [piece for piece in pieces if len(piece) >= 2]
+            if not pieces:
+                streets.remove(street)
+                dropped += 1
+                continue
+            street["points"] = pieces[0]
+            street["length"] = polyline_length(pieces[0])
+            for extra in pieces[1:]:
+                streets.append(dict(street, points=extra, length=polyline_length(extra)))
+        band["length"] = polyline_length(spine)
+    return attached, split, dropped
+
+
+def drop_band_duplicates(streets):
+    """Cuts out of every other street the segments that *are* a band's.
+
+    A side street mapped through two of the loop's junction points in a row
+    -- the Steckengasse steps along the Altstadt for six metres between the
+    two lanes' junctions, and the churchyard path has a three-point loop that
+    lies entirely on it -- keeps those points after the re-attachment, since
+    each is a spine point already, and the segment between them is the band's
+    own edge drawn a second time. A segment whose ends are both spine points
+    and whose middle is in the carriageway is that, and goes; the street is
+    split round it. Consecutive duplicate points, which an attach can leave
+    where the junction was the next point anyway, go with them.
+    """
+    cut, dropped = 0, 0
+    for band in [s for s in streets if s.get("band")]:
+        spine = band["points"]
+        half = band["width"] * 0.5
+        for street in list(streets):
+            if street is band:
+                continue
+            points = []
+            for at in street["points"]:
+                if not points or math.dist(points[-1], at) > 0.05:
+                    points.append(at)
+            on_spine = [any(math.dist(at, p) < 0.05 for p in spine) for at in points]
+            pieces, current = [], [points[0]] if points else []
+            for k in range(1, len(points)):
+                a, b = points[k - 1], points[k]
+                middle = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5)
+                if on_spine[k - 1] and on_spine[k] and nearest_on(spine, middle)[0] < half:
+                    cut += 1
+                    pieces.append(current)
+                    current = [b]
+                else:
+                    current.append(b)
+            pieces.append(current)
+            pieces = [piece for piece in pieces if len(piece) >= 2]
+            if len(pieces) == 1 and pieces[0] == street["points"]:
+                continue
+            if not pieces:
+                streets.remove(street)
+                dropped += 1
+                continue
+            street["points"] = pieces[0]
+            street["length"] = polyline_length(pieces[0])
+            for extra in pieces[1:]:
+                streets.append(dict(street, points=extra, length=polyline_length(extra)))
+    return cut, dropped
+
+
+def tidy_bands(streets):
+    """See `spine_the_bands`: a looped band becomes one street, every street
+    that met the loop meets the spine instead, and nothing else draws the
+    band's own edges."""
+    spined, dropped_runs, kept = spine_the_bands(streets)
+    attached, split, dropped = reattach_to_bands(streets)
+    cut, gone = drop_band_duplicates(streets)
+    return spined, dropped_runs, kept, attached, split, dropped + gone, cut
+
+
 def inside(point, half):
     return abs(point[0]) <= half and abs(point[1]) <= half
 
@@ -2233,6 +2537,28 @@ def main():
     # fixed point; a second bake of the file reproduces it.
     if not any(street.get("recentred") for street in streets):
         recentre_bands(streets, buildings, half)
+    # A band that was a loop is one street from here on. Before the cap: the
+    # cap measures each street against the walls along it, and a side street
+    # cut back to the spine is measured along a different run of wall than the
+    # one that reached into the loop -- so capping first and tidying second
+    # gave a second bake of the file two narrower Kirchgassen than the first.
+    # Tidied first, both bakes measure the same streets, and a second bake of
+    # the file finds no loop and nothing loose.
+    spined, dropped_runs, kept, attached, split, dropped, cut = tidy_bands(streets)
+    if spined:
+        print(
+            f"{spined} looped bands cut to their spine ({dropped_runs} duplicate runs dropped, "
+            f"{kept} kept as streets); {attached} side streets put back on a band, "
+            f"{split} crossings split, {dropped} streets inside a band dropped, "
+            f"{cut} segments along a band cut out",
+            file=sys.stderr,
+        )
+    elif attached or split or dropped or cut:
+        print(
+            f"{attached} side streets put back on a band, {split} crossings split, "
+            f"{dropped} streets inside a band dropped, {cut} segments along a band cut out",
+            file=sys.stderr,
+        )
     narrowed = cap_widths(streets, buildings, half, args.cap_quantile)
     if buildings:
         taken = sorted(was - now for _, was, now, _ in narrowed)
