@@ -202,6 +202,15 @@ impl RoadGraph {
         None
     }
 
+    /// Which way a vehicle arriving from `from` turns at `at` to leave by `to`.
+    ///
+    /// A positive 2D cross product is a turn to the driver's **right**, not
+    /// their left. These `Vec2`s are `(x, z)` in the world — every caller gets
+    /// them from `Transform::translation.xz()` — and the world's right-hand
+    /// side is `steering::right_of(d) = (-d.z, d.x)`, which is the side
+    /// `RIGHT_HAND_TRAFFIC` keeps its lane on and the side the patrol walks
+    /// its pavement on. Heading east along `(1, 0)` and leaving along `(0, 1)`
+    /// is `right_of((1, 0))` exactly, and it is a right turn.
     pub fn turn_kind(&self, from: NodeId, at: NodeId, to: NodeId) -> TurnKind {
         let incoming = (self.node(at).pos - self.node(from).pos).normalize_or_zero();
         let outgoing = (self.node(to).pos - self.node(at).pos).normalize_or_zero();
@@ -213,9 +222,9 @@ impl RoadGraph {
         if cross.abs() < 0.22 {
             TurnKind::Straight
         } else if cross > 0.0 {
-            TurnKind::Left
-        } else {
             TurnKind::Right
+        } else {
+            TurnKind::Left
         }
     }
 }
@@ -273,9 +282,12 @@ mod tests {
     #[test]
     fn classifies_left_right_and_straight_movements() {
         let graph = cross();
+        // Arriving from the west and leaving south. `(0, 10)` is +z, which is
+        // `right_of` due east, so this is a right turn — the same answer the
+        // lane offset and the pavement walk give for that side.
         assert_eq!(
             graph.turn_kind(NodeId(0), NodeId(1), NodeId(2)),
-            TurnKind::Left
+            TurnKind::Right
         );
         assert_eq!(
             graph.turn_kind(NodeId(0), NodeId(1), NodeId(3)),
@@ -283,6 +295,24 @@ mod tests {
         );
         assert_eq!(
             graph.turn_kind(NodeId(3), NodeId(1), NodeId(2)),
+            TurnKind::Left
+        );
+    }
+
+    #[test]
+    fn a_turn_is_named_for_the_side_the_lane_offset_uses() {
+        // The one check that ties the classification to the rest of the game.
+        // Whichever way `steering::right_of` points is what `Right` has to
+        // mean here, or every give-way rule built on it reads the junction
+        // mirrored — and the two live in different modules, so nothing else
+        // would ever notice them disagreeing.
+        let graph = cross();
+        let at = graph.node(NodeId(1)).pos;
+        let incoming = (at - graph.node(NodeId(0)).pos).normalize();
+        let exit = (graph.node(NodeId(2)).pos - at).normalize();
+        assert!(crate::ai::steering::right_of(incoming).dot(exit) > 0.9);
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(2)),
             TurnKind::Right
         );
     }
