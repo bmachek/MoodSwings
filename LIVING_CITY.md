@@ -42,6 +42,17 @@ the game's verbs. Everyday routines must work before interruptions become funny.
   that feeling when it returns; the remaining mutable facts are the next data
   model once places have stable ids.
 
+### Stable place foundation
+
+- Every streamed `Shopfront` now carries a deterministic `PlaceId` derived from
+  its world position. The id survives chunk despawn and is stored on an
+  `Errand` alongside the target position, so a future schedule can record
+  visits without retaining a render entity.
+- The first place catalogue is intentionally the existing shopfront set;
+  entrances, opening hours, capacities and home/work assignment remain part of
+  the next data-model step. The id is quantised to decimetres and ignores
+  height, keeping regeneration stable while distinguishing adjacent fronts.
+
 ## Next increments, in dependency order
 
 1. **Persistent residents and places.** Separate `CitizenId` and resident state
