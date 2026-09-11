@@ -27,6 +27,10 @@ pub struct GameConfig {
     /// before the roads had dials still parses.
     #[serde(default)]
     pub traffic: TrafficConfig,
+    /// Movement diagnostics, kept live so a slow shuffle can be distinguished
+    /// from a blocked route without recompiling the observer.
+    #[serde(default)]
+    pub agent_watch: AgentWatchConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
@@ -677,6 +681,24 @@ impl Default for CrowdConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentWatchConfig {
+    pub progress_metres: f32,
+    pub blocked_seconds: f32,
+    pub intent_speed: f32,
+}
+
+impl Default for AgentWatchConfig {
+    fn default() -> Self {
+        Self {
+            progress_metres: 0.6,
+            blocked_seconds: 8.0,
+            intent_speed: 0.2,
+        }
+    }
+}
+
 /// How busy the roads are.
 ///
 /// Its own block for the same reason the crowd has one: "how alive is this
@@ -785,6 +807,7 @@ impl Default for GameConfig {
                 npc_spring_max: 1.5,
             },
             traffic: TrafficConfig::default(),
+            agent_watch: AgentWatchConfig::default(),
             crowd: CrowdConfig {
                 // A hundred and sixty, against the forty-five this was.
                 //

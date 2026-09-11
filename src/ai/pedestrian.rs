@@ -192,11 +192,13 @@ pub struct PedestrianPlugin;
 impl Plugin for PedestrianPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PedestrianTimer>()
+            .init_resource::<super::resident::Residents>()
             .init_resource::<super::archetype::Cast>()
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
                 (
+                    reconcile_residents,
                     maintain_population,
                     // Routes copy before anybody steers along them.
                     flock,
@@ -353,6 +355,7 @@ fn maintain_population(
     cast: Res<super::archetype::Cast>,
     focus: Res<super::focus::SimFocus>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
+    mut residents: ResMut<super::resident::Residents>,
     // Every shopfront the streaming has put up. A share of every arrival comes
     // out of one instead of appearing in the middle of a pavement — which is
     // the other half of `ai::errands`, and the classic tell of a fake city
@@ -491,25 +494,23 @@ fn maintain_population(
                 Some(door) => door + Vec2::new(member as f32 * 0.35, member as f32 * 0.2),
                 None => pavement_point(a, b, edge.width, side, t),
             };
-            let material = wardrobe.assets.clothes
-                [rng.0.random_range(0..wardrobe.assets.clothes.len())]
-            .clone();
-            // The fixed wardrobe overrides the draw; it never replaces it.
-            // Every stream must consume the same draws whoever is spawned, or
-            // retuning the cast's shares would reshuffle everybody after them.
-            let material = wardrobe.assets.coat_for(archetype).unwrap_or(material);
+            let outfit = rng.0.random_range(0..wardrobe.assets.clothes.len());
+            // Consume the wardrobe draw before deciding whether an inactive
+            // resident comes back, so a returning face cannot reshuffle the
+            // rest of the spawn stream.
 
             // Drawn from its own stream: a citizen's disposition must not
             // depend on how many of them have been spawned already, and
             // retuning the mix must not move anybody's route.
             let drawn = mix.draw(&mut tempers.0);
             let temper = archetype.temper().unwrap_or(drawn);
-            let mood = temper.baseline;
-            let worn = wardrobe.faces.wear(mood);
             // Their own voice, for as long as they are resident. The same
             // stream as the temperament: how somebody sounds is part of who
             // they are, and both are drawn once and never again.
             let pitch = tempers.0.random_range(0.82..1.28) * age.pitch() * archetype.pitch();
+            let pace = rng
+                .0
+                .random_range(crowd.walk_speed - 0.4..crowd.walk_speed + 0.4);
 
             let mut person = commands.spawn((
                 Name::new("Pedestrian"),
@@ -517,9 +518,7 @@ fn maintain_population(
                     from,
                     to,
                     side,
-                    speed: rng
-                        .0
-                        .random_range(crowd.walk_speed - 0.4..crowd.walk_speed + 0.4),
+                    speed: pace,
                     panic: 0.0,
                     current_speed: 0.0,
                 },
@@ -541,11 +540,42 @@ fn maintain_population(
                 LockedAxes::ROTATION_LOCKED,
                 Bouncer::new(STAND_HEIGHT * size),
                 temper,
-                Mood::new(mood),
-                FaceLevel(worn.level),
+                Mood::new(temper.baseline),
+                FaceLevel(wardrobe.faces.wear(temper.baseline).level),
                 Voicebox::new(pitch),
                 Provoker::default(),
                 Visibility::default(),
+            ));
+            let candidate = super::resident::ResidentProfile {
+                archetype,
+                age,
+                temperament: temper,
+                pitch,
+                pace,
+                outfit,
+                mood: temper.baseline,
+            };
+            let (citizen, profile) = residents.activate(person.id(), candidate, dark);
+            // Reusing a person changes their visible facts only after every
+            // current spawn stream has taken the draw it always would. The
+            // profile is immutable for now; mood, errands and memories gain
+            // their own persistent state as those systems become offscreen.
+            let material =
+                wardrobe.assets.clothes[profile.outfit % wardrobe.assets.clothes.len()].clone();
+            let material = wardrobe
+                .assets
+                .coat_for(profile.archetype)
+                .unwrap_or(material);
+            let worn = wardrobe.faces.wear(profile.mood);
+            person.insert((
+                citizen,
+                profile.archetype,
+                profile.age,
+                super::figure::Stature(profile.age.size()),
+                profile.temperament,
+                Mood::new(profile.mood),
+                FaceLevel(wardrobe.faces.wear(profile.mood).level),
+                Voicebox::new(profile.pitch),
             ));
             if archetype.steadfast() {
                 person.insert(crate::bounce::launch::NeverTumbles);
@@ -567,6 +597,20 @@ fn maintain_population(
             alive += 1;
         }
     }
+}
+
+/// Returns bodies that disappeared through any system — a shop visit, an
+/// ordinary streaming despawn, or a future activity — to the persistent
+/// resident pool before the next refill considers an arrival.
+fn reconcile_residents(
+    mut residents: ResMut<super::resident::Residents>,
+    visible: Query<(Entity, &super::resident::CitizenId, Option<&Mood>), With<Pedestrian>>,
+) {
+    residents.reconcile(
+        visible
+            .iter()
+            .map(|(entity, id, mood)| (entity, *id, mood.map(|mood| mood.value))),
+    );
 }
 
 fn walk_pavements(

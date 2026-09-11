@@ -364,6 +364,7 @@ fn keep_watch(
     time: Res<Time>,
     patrol: Res<Patrol>,
     mut watch: ResMut<Watch>,
+    agents: Res<crate::ai::observe::AgentObservations>,
     entities: Query<()>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -413,6 +414,18 @@ fn keep_watch(
     }
     watch.since = 0.0;
     watch.ticks += 1;
+    if watch.ticks.is_multiple_of(10) {
+        let blocked = agents
+            .agents
+            .values()
+            .filter(|agent| agent.motion == crate::ai::observe::Motion::Blocked)
+            .count();
+        info!(
+            "patrol agents: {} observed, {blocked} blocked, {} blocked episodes",
+            agents.agents.len(),
+            agents.blocked_episodes
+        );
+    }
     let at = patrol.elapsed;
 
     // Collected rather than pushed straight into the watch: a closure that

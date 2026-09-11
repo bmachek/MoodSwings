@@ -66,6 +66,21 @@ pub struct TrafficDriver {
     /// Seconds spent going nowhere, and whether the horn has gone yet.
     pub stuck: f32,
     pub honked: bool,
+    /// A queue is a legitimate stop. Keep its duration separate from the
+    /// recovery timer, or adding a traffic light would delete its whole queue.
+    pub waiting: f32,
+    pub observation: DriverObservation,
+    pub desired_speed: f32,
+}
+
+/// What the driver actually used to choose its speed this frame. Exposed to
+/// the inspector rather than guessed again from nearby scenery there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DriverObservation {
+    #[default]
+    Clear,
+    Following(Entity),
+    Obstacle(Entity),
 }
 
 /// A driver who has been sitting still long enough to lean on the horn.
@@ -256,6 +271,9 @@ fn maintain_population(
                 cruise_speed: cruise,
                 stuck: 0.0,
                 honked: false,
+                waiting: 0.0,
+                observation: DriverObservation::Clear,
+                desired_speed: cruise,
             },
             AlwaysSimulated,
         ));
@@ -286,6 +304,14 @@ fn drive_traffic(
     )>,
 ) {
     let dt = time.delta_secs();
+    // Read everyone before writing anyone. Besides avoiding conflicting Bevy
+    // queries, this gives every driver the same view of this tick's queue.
+    let leaders: std::collections::HashMap<_, _> = cars
+        .iter()
+        .map(|(entity, _, transform, _, _)| {
+            (entity, (*transform.forward(), transform.up().dot(Vec3::Y)))
+        })
+        .collect();
     for (entity, mut driver, transform, state, mut input) in &mut cars {
         let position = transform.translation.xz();
         let start = city.graph.node(driver.from).pos;
@@ -355,10 +381,25 @@ fn drive_traffic(
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
         let ahead = Dir3::new(*transform.forward())
             .ok()
-            .and_then(|d| spatial.cast_ray(nose, d, look, true, &filter))
-            .map(|hit| hit.distance);
-        if let Some(gap) = ahead {
-            desired = desired.min(following_speed(gap));
+            .and_then(|d| spatial.cast_ray(nose, d, look, true, &filter));
+        driver.observation = DriverObservation::Clear;
+        if let Some(hit) = ahead {
+            desired = desired.min(following_speed(hit.distance));
+            // An overturned car or oncoming traffic is an obstruction, not
+            // a queue we should patiently preserve for ever. The same is true
+            // when this car itself has been knocked onto its side.
+            let queued = leaders.get(&hit.entity).is_some_and(|(heading, upright)| {
+                same_queue(
+                    transform.forward().dot(*heading),
+                    transform.up().dot(Vec3::Y),
+                    *upright,
+                )
+            });
+            driver.observation = if queued {
+                DriverObservation::Following(hit.entity)
+            } else {
+                DriverObservation::Obstacle(hit.entity)
+            };
         }
 
         // Never reverse into the street behind. `longitudinal_force` reads a
@@ -371,30 +412,22 @@ fn drive_traffic(
             input.throttle = 0.0;
         }
         input.handbrake = false;
+        driver.desired_speed = desired;
 
-        // Somebody who has been stopped a long time is stuck rather than
-        // waiting. A horn first, because that is what a real one does and it
-        // is free comedy; then, well past the point where it could be traffic,
-        // the car is given up on and recycled — otherwise a wedged or
-        // overturned traffic car lies in the road being scenery until the
-        // player walks two hundred metres away from it.
-        if state.forward_speed.abs() < 0.3 {
-            driver.stuck += dt;
-            if driver.stuck > HONK_AFTER && !driver.honked {
-                driver.honked = true;
-                horns.write(Impatient {
-                    at: transform.translation,
-                });
-            }
-            if driver.stuck > GIVE_UP {
-                // `try_despawn`: `maintain_population` recycles by distance in
-                // the same frame, and a car that is both stuck and out of
-                // range is despawned twice.
-                commands.entity(entity).try_despawn();
-            }
-        } else {
-            driver.stuck = 0.0;
-            driver.honked = false;
+        // Preserve a legitimate queue. Only an unexplained stop or a static
+        // obstruction advances recovery; every recovery is reported so it
+        // cannot disguise a navigation failure as healthy throughput.
+        if driver.note_stop(state.forward_speed, dt) {
+            horns.write(Impatient {
+                at: transform.translation,
+            });
+        }
+        if driver.stuck > GIVE_UP {
+            warn!(
+                "traffic recovery: {entity:?} at {position:?}, {:?}, blocked for {:.1}s",
+                driver.observation, driver.stuck
+            );
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -410,6 +443,33 @@ const HEADWAY: f32 = 1.6;
 const HONK_AFTER: f32 = 5.0;
 const GIVE_UP: f32 = 26.0;
 
+fn same_queue(alignment: f32, own_up: f32, leader_up: f32) -> bool {
+    alignment > 0.5 && own_up > 0.5 && leader_up > 0.5
+}
+
+impl TrafficDriver {
+    /// Returns true only on the first impatient honk of this stop.
+    fn note_stop(&mut self, speed: f32, dt: f32) -> bool {
+        if speed.abs() >= 0.3 {
+            self.waiting = 0.0;
+            self.stuck = 0.0;
+            self.honked = false;
+            return false;
+        }
+        self.waiting += dt;
+        if matches!(self.observation, DriverObservation::Following(_)) {
+            self.stuck = 0.0;
+        } else {
+            self.stuck += dt;
+        }
+        if self.waiting > HONK_AFTER && !self.honked {
+            self.honked = true;
+            return true;
+        }
+        false
+    }
+}
+
 /// The fastest a car may be going with `gap` metres of clear road in front.
 ///
 /// A braking law rather than a rule of thumb: `v = sqrt(2·a·s)` is the speed
@@ -421,4 +481,78 @@ fn following_speed(gap: f32) -> f32 {
     const BRAKING: f32 = 3.4;
     let room = (gap - BUFFER).max(0.0);
     (2.0 * BRAKING * room).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn driver() -> TrafficDriver {
+        TrafficDriver {
+            from: NodeId(0),
+            to: NodeId(1),
+            after: NodeId(2),
+            lane_width: 8.0,
+            cruise_speed: 10.0,
+            stuck: 0.0,
+            honked: false,
+            waiting: 0.0,
+            observation: DriverObservation::Clear,
+            desired_speed: 10.0,
+        }
+    }
+
+    #[test]
+    fn a_queue_can_wait_longer_than_the_recovery_timeout() {
+        let mut driver = driver();
+        driver.observation = DriverObservation::Following(Entity::PLACEHOLDER);
+        let mut horns = 0;
+        for _ in 0..120 {
+            horns += usize::from(driver.note_stop(0.0, 1.0));
+        }
+        assert_eq!(driver.waiting, 120.0);
+        assert_eq!(driver.stuck, 0.0);
+        assert_eq!(horns, 1);
+    }
+
+    #[test]
+    fn an_obstruction_still_reaches_recovery() {
+        let mut driver = driver();
+        driver.observation = DriverObservation::Obstacle(Entity::PLACEHOLDER);
+        driver.note_stop(0.0, GIVE_UP + 1.0);
+        assert!(driver.stuck > GIVE_UP);
+    }
+
+    #[test]
+    fn joining_a_queue_clears_recovery_but_not_impatience() {
+        let mut driver = driver();
+        driver.note_stop(0.0, 12.0);
+        driver.observation = DriverObservation::Following(Entity::PLACEHOLDER);
+        assert!(!driver.note_stop(0.0, 1.0));
+        assert_eq!(driver.stuck, 0.0);
+        assert_eq!(driver.waiting, 13.0);
+        driver.observation = DriverObservation::Clear;
+        driver.note_stop(0.0, 1.0);
+        assert_eq!(driver.stuck, 1.0);
+    }
+
+    #[test]
+    fn moving_again_starts_a_new_stop_and_honk_window() {
+        let mut driver = driver();
+        assert!(driver.note_stop(0.0, 10.0));
+        assert!(!driver.note_stop(2.0, 1.0));
+        assert_eq!(driver.waiting, 0.0);
+        assert_eq!(driver.stuck, 0.0);
+        assert!(!driver.honked);
+        assert!(driver.note_stop(0.0, 10.0));
+    }
+
+    #[test]
+    fn oncoming_and_overturned_cars_do_not_masquerade_as_a_queue() {
+        assert!(same_queue(1.0, 1.0, 1.0));
+        assert!(!same_queue(-1.0, 1.0, 1.0));
+        assert!(!same_queue(0.0, 1.0, 1.0));
+        assert!(!same_queue(1.0, -1.0, 1.0));
+        assert!(!same_queue(1.0, 1.0, -1.0));
+    }
 }
