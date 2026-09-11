@@ -54,7 +54,8 @@ pub mod set {
     /// was wrong rather than just which is which now. 151 is a *mosaic* — some
     /// forty stones across one repeat — and it was carrying the Altstadt
     /// carriageway at a 1.35 m tile, which put a sett at 3.2 cm. Real
-    /// Grosspflaster is 15 to 18. The Altstadt read as snakeskin, and the
+    /// Kleinpflaster is 8 to 11, Grosspflaster 15 to 18, and the Altstadt's
+    /// is the small kind. The Altstadt read as snakeskin, and the
     /// chunky scan that would have read as Kopfsteinpflaster was meanwhile on
     /// the pavement, stretched better than two to one because it is the one
     /// portrait scan in the library and every caller scaled it with a

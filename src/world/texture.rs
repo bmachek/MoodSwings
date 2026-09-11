@@ -686,73 +686,78 @@ pub fn bark_normal() -> Image {
 
 // ------------------------------------------------------------ cobblestone ----
 
-/// Stones across one repeat of the sett texture.
+/// Stones across one repeat of the sett texture, and courses down it.
 ///
-/// With the tile a metre and a bit, this puts a sett at about fifteen
-/// centimetres, which is what the granite blocks in a Bavarian market square
-/// actually measure.
-const SETTS: f32 = 7.0;
+/// With the tile at eighty centimetres this puts a sett at ten, which is
+/// Kleinpflaster — the size the Landshut Altstadt's carriageway is actually
+/// laid in. It was seven across a 1.20 m tile, seventeen-centimetre
+/// Grosspflaster, and the reference photographs say otherwise: the stones
+/// under the market are small enough that a foot covers two of them. Even, so
+/// the running bond below comes back on itself at the tile edge.
+const SETTS: f32 = 8.0;
 
 /// Resolution the setts are painted at.
 ///
 /// Four times the other ground textures. A cobbled street is read from a metre
-/// away by somebody standing on it, and at 256 a sett is thirty-six pixels
+/// away by somebody standing on it, and at 256 a sett is thirty-two pixels
 /// across — enough for the shape and not enough for the stone.
 const SETT_SIZE: u32 = 512;
+
+/// How far a joint between two setts in a course may wander from where the
+/// course would put it, as a fraction of a stone.
+///
+/// A paviour lays whatever stone comes to hand, so no two are the same width;
+/// but they are cut to a gauge, so none is a sliver. A fifth either way is
+/// what a laid course looks like. It was a jittered Voronoi before, and that
+/// is the shape of *crazy paving* — irregular polygons, no courses — which
+/// read at eye height as flagstones the size of dinner plates. Setts are laid
+/// in courses with a string line, and it is the courses the eye reads.
+const SETT_WANDER: f32 = 0.20;
 
 /// Where a point sits among the setts: how far into a stone it is, and which
 /// stone.
 ///
-/// A jittered-lattice Voronoi, which is the shape cobbles genuinely have — a
-/// paviour lays whatever stone comes to hand into whatever gap is left, so the
-/// joints are irregular polygons and no two stones are the same size. The two
-/// nearest cell centres are what matters: the *difference* between those
-/// distances is zero exactly on a joint and grows into the middle of a stone,
-/// which is a mortar groove and a domed top in one expression.
-///
-/// Returns the groove depth (0 in the joint, 1 in the middle of a stone) and a
-/// number per stone, so the colour can vary from one to the next — a sett
-/// pavement is grey the way a crowd is one colour.
+/// Reihenpflaster: straight courses, every other one offset by half a stone
+/// so the joints break bond, and the joints across a course jittered so the
+/// stones are not all one width. Returns the groove depth (0 in the joint, 1
+/// a little way into the stone — a dressed sett has a flat top and rounded
+/// arrises, not a dome) and a number per stone, so the colour can vary from
+/// one to the next — a sett pavement is grey the way a crowd is one colour.
 fn sett_at(u: f32, v: f32) -> (f32, f32) {
-    let point = Vec2::new(u * SETTS, v * SETTS);
-    let cell = point.floor();
+    let y = v * SETTS;
+    let row = y.floor();
+    let row_id = (row as i32).rem_euclid(SETTS as i32) as u32;
+    // Running bond: odd courses start half a stone along. The wrap works out
+    // because `SETTS` is even, so the course above the top one is the bottom
+    // one's kind and the offset repeats with the tile.
+    let bond = if row_id.is_multiple_of(2) { 0.0 } else { 0.5 };
+    let x = u * SETTS + bond;
+    let col = x.floor();
+    let col_id = (col as i32).rem_euclid(SETTS as i32) as u32;
 
-    let (mut nearest, mut second) = (f32::MAX, f32::MAX);
-    let mut winner = Vec2::ZERO;
-    for dy in -1..=1 {
-        for dx in -1..=1 {
-            // Wrapped, so the tile still tiles: a lattice that runs off the
-            // edge has to come back on the other side or there is a seam down
-            // every repeat.
-            let neighbour = cell + Vec2::new(dx as f32, dy as f32);
-            let wrapped = Vec2::new(neighbour.x.rem_euclid(SETTS), neighbour.y.rem_euclid(SETTS));
-            let jitter = Vec2::new(
-                hash01(wrapped.x as u32, wrapped.y as u32, 17),
-                hash01(wrapped.x as u32, wrapped.y as u32, 29),
-            );
-            // Not the full cell: a paviour lays courses, and centres that can
-            // reach the next cell's give slivers rather than stones.
-            let centre = neighbour + Vec2::splat(0.22) + jitter * 0.56;
-            let distance = centre.distance(point);
-            if distance < nearest {
-                second = nearest;
-                nearest = distance;
-                winner = wrapped;
-            } else if distance < second {
-                second = distance;
-            }
-        }
-    }
+    // A joint between two stones is shared by both, so it is shifted by a
+    // hash of the joint rather than of either stone, and the two agree.
+    let joint = |c: f32| {
+        let id = (c as i32).rem_euclid(SETTS as i32) as u32;
+        c + (hash01(id, row_id, 17) - 0.5) * 2.0 * SETT_WANDER
+    };
+    let (left, right) = (joint(col), joint(col + 1.0));
+    // The course lines are straight — that is what the string line is for —
+    // give or take the millimetre a stone is knocked out of true.
+    let wobble = (hash01(col_id, row_id, 29) - 0.5) * 0.06;
+    let (bottom, top) = (row + wobble, row + 1.0 + wobble);
 
-    let groove = ((second - nearest) * 3.4).clamp(0.0, 1.0);
-    (groove, hash01(winner.x as u32, winner.y as u32, 43))
+    let into = (x - left).min(right - x).min(y - bottom).min(top - y);
+    // A one-centimetre joint on a ten-centimetre stone, then the arris.
+    let groove = ((into - 0.05) * 6.0).clamp(0.0, 1.0);
+    (groove, hash01(col_id, row_id, 43))
 }
 
 /// The height field the setts' colour and their relief are both built from.
 fn sett_height(u: f32, v: f32) -> f32 {
     let (groove, stone) = sett_at(u, v);
-    // Domed rather than flat-topped: a sett is a rounded block, and centuries
-    // of cartwheels round it further. The square root is that dome.
+    // The square root rounds the arris off: a sett is a dressed block with a
+    // flat top and a rolled edge, and centuries of cartwheels roll it further.
     let top = groove.sqrt();
     // Each stone sits a little proud or a little sunk of its neighbours, which
     // is most of what makes an old pavement look laid rather than printed.
@@ -785,10 +790,11 @@ pub fn cobbles() -> Image {
 /// And its relief, which is the half that matters: setts are read almost
 /// entirely by the shadow in the joints.
 pub fn cobbles_normal() -> Image {
-    // A fraction of the tile, not of the stone: at the 1.20 m the setts are
-    // laid at, 0.075 would be a nine-centimetre kerb between every block.
-    // 0.020 is a two-and-a-half-centimetre joint, which is what one is.
-    normal_map(SETT_SIZE, 0.020, sett_height)
+    // A fraction of the tile, not of the stone: at the 0.80 m the setts are
+    // laid at, 0.075 would be a six-centimetre kerb between every block.
+    // 0.015 is a twelve-millimetre joint, which is what one is between
+    // Kleinpflaster.
+    normal_map(SETT_SIZE, 0.015, sett_height)
 }
 
 // --------------------------------------------------------------- foliage ----
@@ -1301,6 +1307,8 @@ struct Cell {
     fascia: f32,
     /// 0 at the bottom of the pane, 1 at the top. Meaningless off the glass.
     up_pane: f32,
+    /// 0 at the left of the pane, 1 at the right. Meaningless off the glass.
+    along_pane: f32,
     /// Distance below the pane above, in cell heights; `None` above it.
     below_pane: Option<f32>,
 }
@@ -1345,6 +1353,7 @@ fn cell_at(class: FacadeClass, u: f32, v: f32) -> Cell {
         ground,
         fascia,
         up_pane: ((fv - v0) / (v1 - v0)).clamp(0.0, 1.0),
+        along_pane: ((fu - u0) / (u1 - u0)).clamp(0.0, 1.0),
         // Grime runs down from the sill, so only the strip under a pane cares.
         below_pane: (fv < v0 && fu > u0 && fu < u1).then(|| (v0 - fv) / v0.max(1e-3)),
     }
@@ -1361,9 +1370,14 @@ pub fn facade(class: FacadeClass) -> FacadeMaps {
             // is reflecting sky rather than the street opposite.
             let tint = hash01(cell.column, cell.row, seed) * 0.10;
             let sky = cell.up_pane * 0.16;
-            // A shop window is lit from inside during the day too, and has
-            // something in it; it never goes as dark as an office pane.
-            let shop = if cell.ground { 0.20 } else { 0.0 };
+            // A shop window has something in it, so it never goes as dark as
+            // an office pane — but not much lighter either. It was 0.20, and
+            // with the daylight floor on the emissive mask added on top the
+            // whole ground storey of the Altstadt came out as a row of cream
+            // boards: brighter than the sunlit wall, and flat. What is behind
+            // shop glass in daylight is a room, which is darker than a wall
+            // in the sun; the display in it is the emissive map's job.
+            let shop = if cell.ground { 0.06 } else { 0.0 };
             let blind = if !cell.ground && hash01(cell.column, cell.row, seed + 3) > 0.82 {
                 // Some panes have a blind pulled down.
                 0.22
@@ -1429,7 +1443,24 @@ pub fn facade(class: FacadeClass) -> FacadeMaps {
             return [0, 0, 0, 255];
         }
 
-        let brightness = 0.55 + hash01(cell.column, cell.row, seed + 13) * 0.45;
+        let mut brightness = 0.55 + hash01(cell.column, cell.row, seed + 13) * 0.45;
+        if cell.ground {
+            // A shop window is not one lit rectangle. It is a display: a
+            // strip of lights along the ceiling, goods standing on a bed
+            // below them, and the dark of the shop behind. Painted into the
+            // mask rather than into the base colour because it is the *lit*
+            // half of the window that carries it, day and night — by day the
+            // mask is scaled down to `timeofday::DAYLIT_PANE` and this is
+            // what keeps a shopfront from being a flat cream board at noon.
+            let ceiling = smoothstep01((cell.up_pane - 0.72) / 0.14);
+            // Four or five things in the window, each its own height.
+            let slot = (cell.along_pane * 4.6).floor() as u32;
+            let tall = 0.22 + hash01(cell.column, slot, seed + 19) * 0.42;
+            let goods = if cell.up_pane < tall { 0.55 } else { 0.18 };
+            // And the mullions between them, a little darker.
+            let gap = ((cell.along_pane * 4.6).fract() - 0.5).abs() > 0.44;
+            brightness *= (goods + ceiling * 0.82).min(1.0) * if gap { 0.7 } else { 1.0 };
+        }
         // A minority of interiors are fluorescent rather than tungsten, which
         // is what stops a night skyline reading as a single orange wash.
         let cool = hash01(cell.column, cell.row, seed + 17) > 0.72;

@@ -4,13 +4,13 @@ pub mod atlas;
 pub mod buildings;
 pub mod bunting;
 pub mod church;
-pub mod gate;
 pub mod citygen;
 pub mod decals;
 pub mod facade;
 pub mod frontage;
 pub mod gable;
 pub mod garage;
+pub mod gate;
 pub mod ground;
 pub mod interior;
 pub mod layer;
@@ -157,8 +157,7 @@ fn generate_city(
                 )
             })
             .unwrap_or_default();
-        let (blocks, holes) =
-            streetside::lots(&layout, config.world_seed, config.city, real);
+        let (blocks, holes) = streetside::lots(&layout, config.world_seed, config.city, real);
         layout.blocks = blocks;
         frontage = holes;
     }
@@ -962,10 +961,13 @@ fn boundary_wall(
 /// that stone is in life, and that is the number:
 ///
 /// * `SETT_TILE` — `PavingStones138` runs about 7.5 stones across and 14.8 down
-///   a 1024x2048 scan. At 16 cm Grosspflaster that is 1.20 m by 2.37 m. It is
-///   the one portrait scan in the library, so it is also the one tile that
-///   cannot be square: scaled isotropically its stones come out twice as long
-///   as they are wide.
+///   a 1024x2048 scan. At 10.5 cm Kleinpflaster that is 0.80 m by 1.58 m. It
+///   was laid as 16 cm Grosspflaster (1.20 by 2.37) until the photographs of
+///   the real Altstadt were looked at: the carriageway under the market is
+///   small grey granite, a foot to two stones, and at 16 cm the street read
+///   as a yard of boulders. It is the one portrait scan in the library, so it
+///   is also the one tile that cannot be square: scaled isotropically its
+///   stones come out twice as long as they are wide.
 /// * `SLAB_TILE` — `PavingStones151` runs about 42 stones and 2.5 fan arcs
 ///   across a square repeat. At 3.4 m a stone is 8 cm and a Segmentbogen chord
 ///   is 1.36 m, which is a real laying pattern; at the old 1.6 m it was 3.8 cm
@@ -973,7 +975,7 @@ fn boundary_wall(
 ///
 /// Grit is looser: what it has to avoid is reading as a pattern, and the repeat
 /// is what does that.
-const SETT_TILE: Vec2 = Vec2::new(1.20, 2.37);
+const SETT_TILE: Vec2 = Vec2::new(0.80, 1.58);
 const SLAB_TILE: Vec2 = Vec2::splat(3.4);
 pub(crate) const GRIT_TILE: f32 = 2.1;
 
@@ -1018,17 +1020,18 @@ fn carriageway(
             0.020,
             1.0,
         ),
-        // A sett is a rounded granite block with a sand joint around it, and
+        // A sett is a dressed granite block with a sand joint around it, and
         // it is the surface a player stands closest to in the whole Altstadt.
-        // This is the case parallax was worth loading the height maps for, and
-        // at 16 cm the joint is deep enough to be worth marching a ray into.
+        // This is the case parallax was worth loading the height maps for; a
+        // Kleinpflaster joint is shallower than a Grosspflaster one, but two
+        // centimetres is still worth marching a ray into.
         Surface::Sett => (
             material::set::SETT,
             SETT_TILE,
             Color::srgb(0.62, 0.61, 0.60),
             0.0,
             1.0,
-            0.035,
+            0.022,
             // Setts settle more than tarmac — a sand bed under a market street
             // is what a century of drays leaves ruts in — and pot not at all.
             0.028,
@@ -1076,8 +1079,8 @@ fn carriageway(
             // Every painted fallback is square, so it takes a square tile —
             // the oblong one belongs to the scan it was measured off. The
             // narrow axis, because that is the one the stone size came from:
-            // `texture::SETTS` cobbles across 1.20 m is 17 cm, which is the
-            // same Grosspflaster the scanned path now lays.
+            // `texture::SETTS` setts across 0.80 m is 10 cm, which is the
+            // same Kleinpflaster the scanned path now lays.
             base.uv_transform = Affine2::from_scale(Vec2::splat(ASPHALT_TILE / tile.x.min(tile.y)));
             let (color, relief) = match surface {
                 Surface::Sett => (texture::cobbles(), texture::cobbles_normal()),
