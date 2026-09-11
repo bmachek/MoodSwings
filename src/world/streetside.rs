@@ -2479,6 +2479,20 @@ fn runs(layout: &CityLayout) -> Vec<Run> {
     out
 }
 
+/// The streets as the marcher walks them: each run's polyline and the edges
+/// under it, in order.
+///
+/// `pub(crate)` for `core::survey`, which measures the street wall along a
+/// street rather than along a twenty-metre segment of one — a hole in the
+/// frontage runs across segment ends, and cut at every one of them the
+/// longest hole in the town reads as twenty metres.
+pub(crate) fn street_runs(layout: &CityLayout) -> Vec<(Vec<Vec2>, Vec<super::roadgraph::EdgeId>)> {
+    runs(layout)
+        .into_iter()
+        .map(|run| (run.points, run.edges))
+        .collect()
+}
+
 /// Is this rectangle standing in a street?
 ///
 /// Not the one it faces — that one it is placed against on purpose — but any

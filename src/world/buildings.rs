@@ -1633,31 +1633,68 @@ fn spawn_building(
         );
     }
 
-    // A gable, if this postcard has them and this building drew one.
+    // What goes on top. The style decides — a screened gable in the old
+    // town, a plain pitch in the suburbs, a hip on the bigger blocks, a slab
+    // on the rest — from what the building is and where it stands, and the
+    // map overrides it where the map knows. Rolled from the building's own
+    // seed like everything else about its roof, so a chunk walked back into
+    // keeps the same skyline; and the screen roll is the expression it
+    // always was, so the screened houses are the ones that were screened.
     //
-    // Only on the low classes: a `Giebelhaus` is a house, and a stepped screen
-    // on the top of a nine-storey block is a hat on a filing cabinet. Drawn
-    // from the building's own seed like everything else about its roof, so a
-    // chunk walked back into keeps the same skyline.
-    let gabled = ctx.style.gables() > 0.0
-        && matches!(class, FacadeClass::House | FacadeClass::Lowrise)
-        && (seed >> 31) as f32 / u32::MAX as f32 % 1.0 < ctx.style.gables();
-    let ridge = gabled.then(|| {
-        super::gable::spawn(
+    // The core ring is the old town: on a real map `streetside::district_at`
+    // hands out `Downtown` and `Midtown` inside it and nothing else does.
+    let storey = height / class.grid().1;
+    let core = matches!(district, District::Downtown | District::Midtown);
+    let rolls = super::roof::Rolls::from_seed(seed);
+    let roof = super::roof::decide(
+        ctx.style.roofs(),
+        class,
+        building.kind,
+        core,
+        building.roof,
+        rolls,
+    );
+    let wall = assets.plain_for(district, site.quarter, building.palette);
+    let pitch = match roof {
+        super::roof::Roof::Flat => None,
+        super::roof::Roof::Screened => Some(super::gable::spawn(
             commands,
             ctx.gables,
-            &assets.plain_for(district, site.quarter, building.palette),
+            &wall,
             seed,
             center,
             frontage,
             throat,
             height,
+            storey,
             height + floor,
             yaw,
             chunk,
             ctx.lod_scale,
-        )
-    });
+        )),
+        super::roof::Roof::Gabled | super::roof::Roof::Hipped => {
+            let pitch = super::roof::Pitch::plain(
+                roof == super::roof::Roof::Hipped,
+                frontage,
+                throat,
+                height,
+            );
+            super::roof::spawn(
+                commands,
+                ctx.gables,
+                &wall,
+                seed,
+                rolls.age,
+                center,
+                yaw,
+                height + floor,
+                &pitch,
+                chunk,
+                ctx.lod_scale,
+            );
+            Some(pitch)
+        }
+    };
 
     // And whether anybody has a fire going. On the roof rather than in front
     // of the building, so it is `plume`'s business and not the frontage's, but
@@ -1679,7 +1716,7 @@ fn spawn_building(
         center,
         size,
         yaw,
-        ridge,
+        pitch.as_ref(),
         chunk,
         &super::plume::draw_range(ctx.lod_scale),
     );
@@ -1693,7 +1730,10 @@ fn spawn_building(
     // constant. That costs nothing — the slab was already an entity with its
     // own transform — and it is the only variation in the roofline that still
     // reads from a kilometre up, where the clutter below is sub-pixel.
-    if !gabled {
+    //
+    // Not under a pitch: the roof is the lid there, and a parapet slab inside
+    // a pitched roof is a slab sticking out of its eaves.
+    if pitch.is_none() {
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(assets.stone_cube.clone()),
@@ -1743,7 +1783,6 @@ fn spawn_building(
 
     // The sign, for any kind that hangs one, centred on the fascia band the
     // facade painter reserves over the ground storey.
-    let storey = height / class.grid().1;
     hang_sign(
         commands,
         ctx,
@@ -1831,10 +1870,10 @@ fn spawn_building(
     }
 
     // And what accumulated on the deck. Sits on top of the slab, so nothing is
-    // buried in it and nothing floats over it — and not at all on a gabled
-    // building, which has a pitch instead of a deck and would carry its air
-    // handling inside its own rafters.
-    if gabled {
+    // buried in it and nothing floats over it — and not at all under a pitch,
+    // which has no deck and would carry its air handling inside its own
+    // rafters.
+    if pitch.is_some() {
         return;
     }
     rooftop::spawn(

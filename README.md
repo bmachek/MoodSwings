@@ -218,6 +218,7 @@ afforded.
 | `--city S` | Build this `CityStyle` instead of the persisted one (`landshuepf`, `newdork`, …) |
 | `--film DIR` | Write a numbered frame into `DIR` instead of one still — see below |
 | `--film-every N` / `--film-frames N` | How often to write, and how many |
+| `--survey` | Build the layout without a window and print a scorecard instead of a frame — see below; takes `--city` and `--seed N` |
 
 ### Filming a run
 
@@ -238,6 +239,30 @@ Frames are written one at a time — encoding a 1600x900 PNG takes longer than a
 frame does, so a filmed run plays at about ten a second and the clock is the
 game's rather than the recorder's. The first take of this found three defects
 in ten minutes, two of which no still framing and no unit test could have seen.
+
+### The survey
+
+A screenshot cannot count. How much of the mapped footprint the bake kept, how
+much of a street has a wall along it, whether the ground under every corridor
+is still exactly zero — those are numbers, and rendering a frame to guess at
+one of them is a minute of GPU for a quarter of the town.
+
+```sh
+cargo run -- --survey --city landshuepf            # the committed Landshut
+cargo run -- --survey --city landshuepf --seed 7   # another seed's terraces
+cargo run -- --survey                              # the persisted city and seed
+```
+
+builds exactly what the game builds — atlas, layout, the town's own footprints,
+the marcher's terraces, the terrain — and prints one screen of figures in under
+half a second, without starting Bevy at all: streets by width and surface, real
+buildings against invented ones, the roof mix the map gave, coverage of the
+mapped footprint, street-wall closure overall and in the core with the ten
+longest unbuilt stretches named and placed, the relief's range and the worst
+height under any street. `core::survey`'s tests hold the committed Landshut to
+a bar on each of those, so a re-bake that lost a tenth of the Altstadt fails
+`cargo test` before anybody shoots it. The survey is the numeric half of
+`tools/shoot.sh --town landshut`; run it first, and shoot what moved.
 
 ## Licence
 
