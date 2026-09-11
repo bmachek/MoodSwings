@@ -414,6 +414,13 @@ impl Terrain {
                 // square would be a dyke nobody built.
                 let out = at.abs().max_element() - self.town;
                 let floor = -FALL * smoothstep(out / FALL_OVER);
+                // Where the field fades out behind a street at the foot of
+                // the Hofberg the model is fifty metres up within the fade,
+                // and the blend is a bank of sixty degrees behind somebody's
+                // yard. That is what the north face of the Hofberg is — a
+                // wooded scarp the Altstadt backs onto — so it is left as the
+                // model has it. A cap tried here made a step at the outer
+                // edge of the fade instead, which is worse than a bank.
                 open += relief.at(at).max(floor);
             }
             None => {

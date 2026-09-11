@@ -705,8 +705,10 @@ pub fn footprints(
     blocks
 }
 
-/// How close two hill landmarks stand before they share one ground.
+/// How close two hill landmarks stand before they share one ground, and how
+/// far apart in height they may be and still be one courtyard.
 const COURTYARD: f32 = 22.0;
+const COURTYARD_STEP: f32 = 7.0;
 
 /// Gives a cluster of landmarks up on the hill one ground between them.
 ///
@@ -739,9 +741,18 @@ fn level_the_courtyards(blocks: &mut [Block]) {
         let gap = (a.min - b.max).max(b.min - a.max).max(Vec2::ZERO);
         gap.length() < COURTYARD
     };
+    // Only across a step a courtyard could have been cut to. The wall towers
+    // run *down* the slope from the castle — the Falkenturm stands twenty
+    // metres below the Hofstallgebäude — and joined to the courtyard they
+    // were stood on a twenty-metre pedestal each.
+    let level = |a: &Block, b: &Block| {
+        (a.buildings[0].ground - b.buildings[0].ground).abs() < COURTYARD_STEP
+    };
     for i in 0..uphill.len() {
         for j in (i + 1)..uphill.len() {
-            if near(&blocks[uphill[i]].area, &blocks[uphill[j]].area) {
+            if near(&blocks[uphill[i]].area, &blocks[uphill[j]].area)
+                && level(&blocks[uphill[i]], &blocks[uphill[j]])
+            {
                 let (a, b) = (root(&mut parent, i), root(&mut parent, j));
                 if a != b {
                     parent[a] = b;
