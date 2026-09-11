@@ -70,6 +70,11 @@ pub struct Errand {
     pub place: PlaceId,
     /// True for the door, false for the window.
     pub inside: bool,
+    /// Which way the front faces, carried along with its position for the
+    /// same reason the position is carried rather than the entity: the queue
+    /// that forms at the door needs it, and by the time somebody arrives the
+    /// front they set out for may have streamed out from under them.
+    pub outward: Vec2,
     /// Given up on after this. A front on the far side of a building the
     /// citizen cannot walk round is otherwise an errand for ever.
     pub until: f32,
@@ -113,7 +118,7 @@ fn set_out(
     mut commands: Commands,
     time: Res<Time>,
     mut rng: ResMut<AudioRng>,
-    fronts: Query<(&Transform, &PlaceId), With<Shopfront>>,
+    fronts: Query<(&Transform, &PlaceId, &Shopfront)>,
     candidates: Query<
         (Entity, &Transform, &Pedestrian),
         (
@@ -121,6 +126,9 @@ fn set_out(
             Without<Browsing>,
             Without<Grudge>,
             Without<Launched>,
+            // Somebody standing in a line already has somewhere to be, and
+            // it is the door they are standing outside.
+            Without<super::queue::Queueing>,
             Without<super::busker::Listening>,
         ),
     >,
@@ -138,11 +146,11 @@ fn set_out(
         // The nearest front worth crossing a pavement for. A linear scan, and
         // it can be: the roll above has already thrown away all but a handful
         // of citizens this frame.
-        let Some((front, place)) = fronts
+        let Some((front, place, outward)) = fronts
             .iter()
-            .map(|(transform, place)| (transform.translation, *place))
-            .filter(|(at, _)| at.distance(here) < ERRAND_RANGE)
-            .min_by(|(a, _), (b, _)| a.distance(here).total_cmp(&b.distance(here)))
+            .map(|(transform, place, front)| (transform.translation, *place, front.outward))
+            .filter(|(at, ..)| at.distance(here) < ERRAND_RANGE)
+            .min_by(|(a, ..), (b, ..)| a.distance(here).total_cmp(&b.distance(here)))
         else {
             continue;
         };
@@ -150,6 +158,7 @@ fn set_out(
             at: front,
             place,
             inside: rng.random::<f32>() < GOES_IN,
+            outward,
             until: now + PATIENCE,
         });
     }
@@ -160,10 +169,19 @@ fn run_errands(
     mut commands: Commands,
     time: Res<Time>,
     mut rng: ResMut<AudioRng>,
-    mut walkers: Query<(Entity, &Transform, &mut Bouncer, &Pedestrian, &Errand)>,
+    mut queues: ResMut<super::queue::Queues>,
+    mut walkers: Query<(
+        Entity,
+        &Transform,
+        &mut Bouncer,
+        &Pedestrian,
+        &Errand,
+        &crate::mood::feeling::Mood,
+        &super::archetype::Archetype,
+    )>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, transform, mut bouncer, pedestrian, errand) in &mut walkers {
+    for (entity, transform, mut bouncer, pedestrian, errand, mood, archetype) in &mut walkers {
         // A panic, a grudge or a launch ends the errand — sociability is the
         // first thing anybody drops, and so is shopping.
         if pedestrian.panic > 0.0 || now > errand.until {
@@ -185,18 +203,26 @@ fn run_errands(
 
         commands.entity(entity).remove::<Errand>();
         if errand.inside {
-            // In. Not parked inside the room: the rooms are streamed, and a
-            // citizen left standing in one that despawns is a citizen standing
-            // in a field. The population budget refills the street, and a
-            // share of what it refills comes back out of a door.
+            // They do not walk straight in any more: they take their place
+            // in whatever line is outside the door, and `ai::queue` lets
+            // them in when it is their turn. A door with nobody at it hands
+            // out a place immediately, so the old behaviour is still in
+            // there — it just takes as long as being served takes.
             //
-            // `try_despawn`, because `pedestrian::maintain_population` also
-            // despawns citizens — for walking off the despawn ring — and the
-            // two run in the same frame. A citizen who reaches a doorway on
-            // the same tick they leave the ring is despawned twice, and a
-            // second despawn of a live entity id is an error the moment
-            // something else has reused it.
-            commands.entity(entity).try_despawn();
+            // The refusal is a full line. Six people outside a bakery is a
+            // reason to keep walking, and that is all this does: the errand
+            // is already off, so from the next frame they carry on down the
+            // pavement with nothing to undo.
+            //
+            // The going-in itself is still a despawn, over in
+            // `ai::queue::serve_the_head`: a body parked inside a streamed
+            // room is a body standing in a field.
+            //
+            // Whether they walk to the back of it or straight to the front
+            // is decided here, once, on arrival: `ai::queue::barges` wants
+            // an archetype with the cheek and a mood bad enough to use it.
+            let barge = super::queue::barges(*archetype, mood.value, rng.random::<f32>());
+            super::queue::arrive(&mut commands, &mut queues, entity, errand, now, barge);
         } else {
             commands.entity(entity).insert(Browsing {
                 at: errand.at,

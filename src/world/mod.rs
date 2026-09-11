@@ -228,6 +228,7 @@ fn generate_city(
         &mut meshes,
         &mut materials,
         &mut images,
+        config.world_seed,
     ));
     commands.insert_resource(interior::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(frontage::build_assets(

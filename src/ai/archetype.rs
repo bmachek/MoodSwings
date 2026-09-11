@@ -241,6 +241,99 @@ impl Archetype {
         }
     }
 
+    /// How readily this archetype joins a queue it knows nothing about.
+    ///
+    /// The purest piece of characterisation in the cast, because a queue is
+    /// information: somebody up ahead has decided this is worth waiting for,
+    /// and every archetype has its own relationship to that. The Wutbürger
+    /// does not want what is being sold, he wants to know what he is being
+    /// kept out of. The vendor sees a captive market and the beggar sees a
+    /// captive audience, which is the same instinct wearing a different hat.
+    /// The headphone-wearer never notices there is a queue at all, and that
+    /// is what headphones are *for* — the same joke the taunt immunity tells.
+    ///
+    /// Scales `ai::queue::LURE_CHANCE`, so zero really does mean never.
+    pub fn nosiness(self) -> f32 {
+        match self {
+            // Nothing draws them and nothing reaches them.
+            Archetype::Headphones => 0.0,
+            Archetype::Shy => 0.15,
+            // Mid-set, mid-shoot, mid-trick: all three are already busy.
+            Archetype::Busker => 0.3,
+            Archetype::Photographer => 0.5,
+            Archetype::Skater => 0.4,
+            Archetype::Punk => 0.5,
+            Archetype::Rocker => 0.6,
+            // A queue is somewhere to be, and gangs go everywhere together.
+            Archetype::Hooligan => 1.3,
+            Archetype::Missionary => 1.4,
+            Archetype::CaneUser => 1.5,
+            // A queue is a clientele standing still.
+            Archetype::Beggar => 1.8,
+            Archetype::Vendor => 2.0,
+            // He does not want it. He wants to know what it is.
+            Archetype::Wutbuerger => 2.2,
+            _ => 1.0,
+        }
+    }
+
+    /// How ready this archetype is to walk to the *front* of a queue rather
+    /// than the back of it.
+    ///
+    /// The other half of [`nosiness`](Self::nosiness), and the half that makes
+    /// a queue a story rather than a shape: somebody pushing in is the whole
+    /// of British and German public life, it needs no player anywhere near it,
+    /// and everybody it happens to reacts on their own. Gated on the mood as
+    /// well as on this, so it is something people do when they are already
+    /// cross rather than a personality trait — the same flummi waits its turn
+    /// on a good day, which is what makes it worth watching.
+    ///
+    /// Nought for most of the cast, and that is the point. A city where
+    /// anybody might push in is a city with no queues in it.
+    pub fn cheek(self) -> f32 {
+        match self {
+            // The ones who came out looking for something to be in front of.
+            Archetype::Hooligan => 1.0,
+            Archetype::Wutbuerger => 0.8,
+            Archetype::Punk => 0.7,
+            Archetype::Rocker => 0.6,
+            Archetype::Skater => 0.5,
+            // Not rudeness. He simply does not believe the queue is about him.
+            Archetype::Elvis => 0.4,
+            // Everybody has it in them on a bad enough day.
+            Archetype::Everyday => 0.06,
+            _ => 0.0,
+        }
+    }
+
+    /// Multiplier on how long this archetype will stand in a line before it
+    /// gives up on whatever is at the front of it.
+    ///
+    /// Paired with the temperament's fuse rather than replacing it, so a
+    /// serene Wutbürger is still impossible and a touchy pensioner still
+    /// outlasts a calm skater — the archetype says what somebody came to do,
+    /// the temperament says how they take it going wrong.
+    pub fn patience(self) -> f32 {
+        match self {
+            // He did not come to buy anything, so there is nothing to stay
+            // for once he has established what the queue is about.
+            Archetype::Wutbuerger => 0.45,
+            Archetype::Hooligan => 0.5,
+            Archetype::Skater => 0.6,
+            Archetype::Punk => 0.7,
+            Archetype::Shy => 0.8,
+            // Professionals. The queue *is* the pitch, and it is not going
+            // anywhere, so neither are they.
+            Archetype::Vendor => 2.2,
+            Archetype::Beggar => 2.0,
+            Archetype::Missionary => 1.8,
+            // All the time in the world, and the standing is the easy part.
+            Archetype::CaneUser => 1.6,
+            Archetype::Wheelchair => 1.6,
+            _ => 1.0,
+        }
+    }
+
     /// An excuse this archetype has to stand still: (chance per second,
     /// how long, whether they face the buildings while they do it).
     ///

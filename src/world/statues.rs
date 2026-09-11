@@ -45,10 +45,25 @@ enum Monument {
     Bollard,
     /// Nothing. The statue has been in progress since 1874.
     Vacant,
+    /// A pair of granite shoes and nothing above them. The city does not
+    /// say what happened to the rest and the plaque is confident it is
+    /// coming back, which in a town where everything bounces is not even
+    /// unreasonable.
+    Shoes,
+    /// Four granite spheres in a row, not quite straight: the monument to
+    /// the queue. The one piece of civic art in the city that its citizens
+    /// re-enact daily outside every bakery in town — see `ai::queue`.
+    Line,
 }
 
 impl Monument {
-    const ALL: [Monument; 3] = [Monument::Flummi, Monument::Bollard, Monument::Vacant];
+    const ALL: [Monument; 5] = [
+        Monument::Flummi,
+        Monument::Bollard,
+        Monument::Vacant,
+        Monument::Shoes,
+        Monument::Line,
+    ];
 
     /// The plaque's two lines. Deadpan municipal, like the signs.
     fn inscription(self) -> (&'static str, &'static str) {
@@ -56,6 +71,8 @@ impl Monument {
             Monument::Flummi => ("DER UNBEKANNTE FLUMMI", "ER PRALLTE FÜR UNS ALLE AB"),
             Monument::Bollard => ("DEM ERFINDER DES POLLERS", "ER GEWINNT. IMMER."),
             Monument::Vacant => ("DENKMAL DER GEDULD", "SEIT 1874 IN ARBEIT"),
+            Monument::Shoes => ("DIE SCHUHE DES STIFTERS", "DER REST FOLGT"),
+            Monument::Line => ("DENKMAL DER SCHLANGE", "SIE BEWEGT SICH NOCH"),
         }
     }
 }
@@ -86,8 +103,13 @@ pub struct StatueKit {
     plinth: (Handle<Mesh>, Handle<StandardMaterial>),
     sphere: (Handle<Mesh>, Handle<StandardMaterial>),
     bollard: (Handle<Mesh>, Handle<StandardMaterial>),
+    /// One granite shoe, used twice, and one granite pebble, used four
+    /// times. Both take the plinth's own weathered stone: a monument and
+    /// its pedestal are quarried together and it shows.
+    shoe: Handle<Mesh>,
+    pebble: Handle<Mesh>,
     plaque: Handle<Mesh>,
-    inscriptions: [(Monument, Handle<StandardMaterial>); 3],
+    inscriptions: [(Monument, Handle<StandardMaterial>); Monument::ALL.len()],
 }
 
 /// The granite sphere's radius. Life size, as it happens.
@@ -105,6 +127,24 @@ const SPHERE_SUBDIVISIONS: u32 = 3;
 /// The memorial bollard: the street one is 0.11 by 0.95, this is three of it.
 const BOLLARD_RADIUS: f32 = 0.33;
 const BOLLARD_HEIGHT: f32 = 2.85;
+/// The stifter's shoes, in metres. A figure's shoe is 0.245 long; these are
+/// a civic pair, which is to say slightly larger than anybody's feet.
+const SHOE: Vec3 = Vec3::new(0.16, 0.13, 0.38);
+const SHOES_APART: f32 = 0.21;
+/// The queue on its plinth: four of these, this far apart, each nudged a
+/// little out of line. A queue carved dead straight is a colonnade.
+const PEBBLE_RADIUS: f32 = 0.17;
+const QUEUE_LENGTH: usize = 4;
+const QUEUE_PITCH: f32 = 0.33;
+const QUEUE_WANDER: f32 = 0.07;
+
+// Both new monuments have to stand on the plinth the city bought as a job
+// lot: a queue that runs off the granite is a queue standing in the grass,
+// and two shoes closer together than one shoe is one shoe.
+const _: () = assert!((QUEUE_LENGTH as f32 - 1.0) * QUEUE_PITCH + PEBBLE_RADIUS * 2.0 < PLINTH.x);
+const _: () = assert!(QUEUE_WANDER * 2.0 + PEBBLE_RADIUS * 2.0 < PLINTH.z);
+const _: () = assert!(SHOES_APART * 2.0 + SHOE.x < PLINTH.x);
+const _: () = assert!(SHOES_APART > SHOE.x * 0.5);
 
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
@@ -143,6 +183,13 @@ pub fn build_assets(
             meshes.add(super::props::cylinder(BOLLARD_RADIUS, BOLLARD_HEIGHT)),
             granite,
         ),
+        shoe: meshes.add(Cuboid::new(SHOE.x, SHOE.y, SHOE.z)),
+        pebble: meshes.add(
+            Sphere::new(PEBBLE_RADIUS)
+                .mesh()
+                .ico(2)
+                .expect("an icosphere at two subdivisions"),
+        ),
         plaque: meshes.add(Rectangle::new(PLAQUE.x, PLAQUE.y)),
         inscriptions: Monument::ALL.map(|monument| {
             (
@@ -167,7 +214,7 @@ fn monument_for(seed: u64, area: super::citygen::Rect) -> Option<(Monument, f32)
     if roll & 0b11 == 0 {
         return None;
     }
-    let monument = Monument::ALL[((roll >> 2) % 3) as usize];
+    let monument = Monument::ALL[((roll >> 2) % Monument::ALL.len() as u64) as usize];
     // Facing one of the four compass points, which is how municipal art is
     // actually installed: square to something, never to the sun.
     let yaw = std::f32::consts::FRAC_PI_2 * ((roll >> 4) & 0b11) as f32;
@@ -254,6 +301,51 @@ pub fn spawn(commands: &mut Commands, kit: &StatueKit, seed: u64, block: &Block,
                 range,
             ));
         }
+        Monument::Shoes => {
+            // Side by side, pointing the way the plinth faces, and nothing
+            // above them. The city has not taken the shoes away because it
+            // is expecting the rest of him back.
+            let across = facing * Vec3::X;
+            for side in [-1.0f32, 1.0] {
+                let at = Vec3::new(centre.x, top + SHOE.y * 0.5, centre.y)
+                    + across * (side * SHOES_APART);
+                commands.spawn((
+                    ChunkOf(chunk),
+                    Mesh3d(kit.shoe.clone()),
+                    MeshMaterial3d(kit.plinth.1.clone()),
+                    Transform::from_translation(at).with_rotation(facing),
+                    range.clone(),
+                ));
+            }
+        }
+        Monument::Line => {
+            // Four of them, across the plaque face so the queue reads as a
+            // queue from where anybody stands to read about it, each pushed
+            // a little out of line — the wander is what stops it being a
+            // colonnade, and it is the only honest thing about a queue.
+            let across = facing * Vec3::X;
+            let forward = facing * Vec3::Z;
+            for index in 0..QUEUE_LENGTH {
+                let along = (index as f32 - (QUEUE_LENGTH as f32 - 1.0) * 0.5) * QUEUE_PITCH;
+                // Alternating rather than drawn: a monument is respawned
+                // with its chunk and has to come back the same shape.
+                let wander = if index % 2 == 0 {
+                    QUEUE_WANDER
+                } else {
+                    -QUEUE_WANDER
+                };
+                let at = Vec3::new(centre.x, top + PEBBLE_RADIUS, centre.y)
+                    + across * along
+                    + forward * wander;
+                commands.spawn((
+                    ChunkOf(chunk),
+                    Mesh3d(kit.pebble.clone()),
+                    MeshMaterial3d(kit.plinth.1.clone()),
+                    Transform::from_translation(at).with_rotation(facing),
+                    range.clone(),
+                ));
+            }
+        }
         Monument::Vacant => {}
     }
 }
@@ -320,7 +412,11 @@ mod tests {
                 None => lawns += 1,
             }
         }
-        assert_eq!(seen.len(), 3, "only {seen:?} ever get built");
+        assert_eq!(
+            seen.len(),
+            Monument::ALL.len(),
+            "only {seen:?} ever get built"
+        );
         assert!(lawns > 0, "every single park has a statue");
         assert!(lawns < 40, "almost every park is a lawn");
     }

@@ -73,6 +73,19 @@ const GAWK_SECONDS: f32 = 2.4;
 /// what stops the whole street snapping round like a drill team.
 const GAWK_CHANCE: f32 = 0.75;
 
+/// And the second-hand look: how near, how many it takes, and how likely per
+/// second.
+///
+/// Half of what anybody in a city ever looks at, they look at because somebody
+/// beside them was looking at it first. Nobody in this ripple saw the accident
+/// — they saw *the neighbours seeing it*, which is a different and much more
+/// social piece of intelligence, and it is what turns a wallop from an event
+/// with a radius into an event with a wake. The quorum is two because one
+/// person staring is a person staring and two people staring is news.
+const CATCH_RANGE: f32 = 7.0;
+const CATCH_QUORUM: usize = 2;
+const CATCH_CHANCE: f32 = 1.6;
+
 /// A car this close and this fast is, to a Wutbürger, a personal insult.
 /// The speed matches `CrowdConfig::scare_speed`: the traffic that worries
 /// everybody else is the traffic that outrages him.
@@ -174,6 +187,7 @@ impl Plugin for SocialPlugin {
                     strike_up_chats,
                     start_loitering,
                     rubberneck_at_wallops,
+                    catch_the_gawk,
                     sour_at_traffic,
                     show_off,
                     busk,
@@ -259,6 +273,11 @@ fn strike_up_chats(
             Without<Composure>,
             Without<Grudge>,
             Without<Launched>,
+            // Somebody standing in a line is not available: a chat walks
+            // both parties to talking distance, which is out of their slot
+            // and out of the queue, and losing your place because a
+            // stranger said hello is not a behaviour anybody asked for.
+            Without<super::queue::Queueing>,
             Without<crate::mood::scuffle::Scuffle>,
         ),
     >,
@@ -425,6 +444,8 @@ fn start_loitering(
             Without<Composure>,
             Without<Grudge>,
             Without<Launched>,
+            // Already standing still, and for a better reason.
+            Without<super::queue::Queueing>,
         ),
     >,
 ) {
@@ -527,6 +548,86 @@ fn rubberneck_at_wallops(
                 left: GAWK_SECONDS * rng.random_range(0.7..1.2),
             });
         }
+    }
+}
+
+/// How long a look lasts that was caught off the neighbours rather than
+/// earned by seeing anything, given a roll in 0..1.
+fn secondhand(roll: f32) -> f32 {
+    GAWK_SECONDS * (0.45 + 0.15 * roll)
+}
+
+/// Whether a look still has enough left in it to be worth catching.
+///
+/// This one line is what keeps the ripple from becoming a standing wave. A
+/// second-hand look is short by construction — see [`secondhand`] — so it can
+/// never be fresh enough to start a third-hand one, and the whole chain
+/// terminates two hops from whatever actually happened without a cooldown
+/// component, a generation counter or a cap on anything. The test below holds
+/// the two functions to that relationship, because the damping lives entirely
+/// in the gap between them and a retune of either would close it silently.
+fn worth_catching(left: f32) -> bool {
+    left > GAWK_SECONDS * 0.6
+}
+
+/// „Was gucken die denn alle?"
+///
+/// Nobody here saw the accident. They saw two people turn round, which in a
+/// crowd is the same information and arrives a beat later — which is exactly
+/// how it looks from the pavement, and why a street that does this reads as
+/// people rather than as triggers with a radius.
+///
+/// Both queries read `Transform` and neither writes one: the turning is
+/// [`gawk`]'s job and all this does is hand out the marker.
+fn catch_the_gawk(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut rng: ResMut<AudioRng>,
+    lookers: Query<(&Transform, &Rubbernecking)>,
+    bystanders: Query<
+        (Entity, &Transform),
+        (
+            With<Pedestrian>,
+            Without<Rubbernecking>,
+            Without<Launched>,
+            Without<Chatting>,
+        ),
+    >,
+) {
+    let dt = time.delta_secs();
+    // The looks worth catching, gathered once: a street in the middle of a
+    // pile-up has a handful of them and every bystander would otherwise walk
+    // the whole crowd.
+    let fresh: Vec<(Vec3, Vec3)> = lookers
+        .iter()
+        .filter(|(_, look)| worth_catching(look.left))
+        .map(|(transform, look)| (transform.translation, look.at))
+        .collect();
+    if fresh.len() < CATCH_QUORUM {
+        return;
+    }
+
+    for (entity, transform) in &bystanders {
+        let here = transform.translation;
+        let mut seen = 0usize;
+        let mut at = Vec3::ZERO;
+        for (looker, target) in &fresh {
+            if looker.distance(here) < CATCH_RANGE {
+                seen += 1;
+                at += *target;
+            }
+        }
+        if seen < CATCH_QUORUM || rng.random::<f32>() > CATCH_CHANCE * dt {
+            continue;
+        }
+        // Aimed at the average of what the neighbours are looking at, which
+        // is the best anybody gets second-hand and is why the ripple's outer
+        // ring is looking at roughly the right place rather than at exactly
+        // it. That is the correct amount of wrong.
+        commands.entity(entity).insert(Rubbernecking {
+            at: at / seen as f32,
+            left: secondhand(rng.random::<f32>()),
+        });
     }
 }
 
@@ -643,17 +744,29 @@ fn notice_the_player(
     mut commands: Commands,
     time: Res<Time>,
     mut rng: ResMut<AudioRng>,
-    players: Query<&Transform, (With<crate::player::on_foot::Player>, Without<Pedestrian>)>,
+    players: Query<
+        (&Transform, &Mood),
+        (With<crate::player::on_foot::Player>, Without<Pedestrian>),
+    >,
     mut crowd: Query<
         (Entity, &Transform, Option<&mut Glanced>),
         (With<Pedestrian>, Without<Chatting>, Without<Launched>),
     >,
 ) {
-    let Ok(player) = players.single() else { return };
+    let Ok((player, mood)) = players.single() else {
+        return;
+    };
     let now = time.elapsed_secs();
     let at = player
         .translation
         .with_y(player.translation.y + LOOK_AT_FACE);
+    // A flummi walking down the street in a state gets looked at more. The
+    // face is already painted with how the player feels and the street has
+    // been ignoring it; this is the cheapest possible way for the city to
+    // admit it can see. Scaled on the *interval* rather than the range, so a
+    // scarlet player is glanced at oftener by the same people rather than
+    // tracked from further off, which would read as being followed.
+    let conspicuous = 1.0 - 0.45 * mood.value.abs();
 
     for (entity, transform, glanced) in &mut crowd {
         if transform.translation.distance(at) > NOTICE_RANGE {
@@ -662,11 +775,11 @@ fn notice_the_player(
         match glanced {
             Some(glanced) if glanced.at > now => continue,
             Some(mut glanced) => {
-                glanced.at = now + rng.random_range(GLANCE_AGAIN.0..GLANCE_AGAIN.1);
+                glanced.at = now + rng.random_range(GLANCE_AGAIN.0..GLANCE_AGAIN.1) * conspicuous;
             }
             None => {
                 commands.entity(entity).insert(Glanced {
-                    at: now + rng.random_range(GLANCE_AGAIN.0..GLANCE_AGAIN.1),
+                    at: now + rng.random_range(GLANCE_AGAIN.0..GLANCE_AGAIN.1) * conspicuous,
                 });
             }
         }
@@ -955,6 +1068,26 @@ mod tests {
         let crowd = GameConfig::default().crowd;
         let fastest = crowd.walk_speed * 1.3 * 1.5 * hurry(1.0);
         assert!(fastest < crowd.flee_speed + 1.6);
+    }
+
+    #[test]
+    fn a_second_hand_look_never_starts_a_third() {
+        // The whole damping of the rubbernecking ripple is the gap between
+        // these two functions: a look caught off the neighbours is short by
+        // construction, and therefore never fresh enough to be caught off in
+        // turn. Close that gap by retuning either one and the crowd stands in
+        // the street staring at each other until the sun goes down, which
+        // builds, runs, and is only findable with a patrol.
+        for step in 0..=20 {
+            let caught = secondhand(step as f32 / 20.0);
+            assert!(
+                !worth_catching(caught),
+                "a {caught:.2}s look is still worth catching"
+            );
+            assert!(caught > 0.4, "a {caught:.2}s look is not a look");
+        }
+        // And a look somebody actually earned is worth catching for a while.
+        assert!(worth_catching(GAWK_SECONDS * 1.2 * 0.95));
     }
 
     #[test]

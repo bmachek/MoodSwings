@@ -266,6 +266,20 @@ pub fn spawn_lot(
     }
 }
 
+/// Which of a lot board's names this lot hangs.
+///
+/// Off the lot's own corner rather than out of a draw, exactly the way a
+/// parked car picks its number plate and a building picks its shopfront: a
+/// lot is respawned every time its chunk comes back, and a drawn variant
+/// would rename the market every time the player walked away from it.
+fn board_variant(rect: &Rect) -> u32 {
+    let x = (rect.min.x * 10.0) as i64 as u64;
+    let y = (rect.min.y * 10.0) as i64 as u64;
+    let mut hash = x.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ y.rotate_left(29);
+    hash ^= hash >> 31;
+    (hash.wrapping_mul(0xFF51_AFD7_ED55_8CCD) >> 40) as u32
+}
+
 /// A market: two rows of stalls facing a central lane, an awning each, and
 /// loose crates by the counters — dynamic on purpose, because a car through
 /// a market that does not scatter crates is a missed appointment.
@@ -354,7 +368,7 @@ fn spawn_market(commands: &mut Commands, kit: &LotKit, signs: &SignKit, rect: &R
     }
 
     // The board on its pole at the lot's centre front, over the lane.
-    let (mesh, material, board) = signs.markt();
+    let (mesh, material, board) = signs.markt(board_variant(rect));
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(kit.hoop_post.clone()),
@@ -510,7 +524,7 @@ fn spawn_gas_station(
         .map(|(side, _)| side)
         .unwrap_or(3);
     use std::f32::consts::{FRAC_PI_2, PI};
-    let (board_mesh, board_material, board) = signs.tankstelle();
+    let (board_mesh, board_material, board) = signs.tankstelle(board_variant(rect));
     let (at, board_yaw) = match front {
         0 => (centre + Vec2::new(-(ex * 0.5 + 0.05), 0.0), -FRAC_PI_2),
         1 => (centre + Vec2::new(ex * 0.5 + 0.05, 0.0), FRAC_PI_2),

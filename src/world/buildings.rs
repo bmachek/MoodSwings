@@ -1636,7 +1636,9 @@ fn spawn_building(
             + Vec3::Y * crate::world::interior::SPILL_HEIGHT;
         commands.spawn((
             ChunkOf(chunk),
-            crate::world::interior::Shopfront,
+            crate::world::interior::Shopfront {
+                outward: outward.xz(),
+            },
             crate::world::interior::PlaceId::at(position),
             Transform::from_translation(position),
         ));

@@ -15,6 +15,7 @@ pub mod giveway;
 pub mod observe;
 pub mod pedestrian;
 pub mod pigeon;
+pub mod queue;
 pub mod resident;
 pub mod social;
 pub mod steering;
@@ -34,6 +35,7 @@ impl Plugin for AiPlugin {
             pedestrian::PedestrianPlugin,
             social::SocialPlugin,
             errands::ErrandPlugin,
+            queue::QueuePlugin,
             crossing::CrossingPlugin,
             captain::CaptainPlugin,
             cyclist::CyclistPlugin,
