@@ -27,3 +27,6 @@ shots/*/
 # Auditioned sound, written by `cargo run -- --audition`
 /shots/audio/
 __pycache__/
+
+# Claude Code worktrees and session files
+/.claude/

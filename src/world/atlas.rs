@@ -701,7 +701,68 @@ pub fn footprints(
     if uphill > 0 {
         info!("{uphill} of the town's buildings stand up on the hill and are left to it");
     }
+    level_the_courtyards(&mut blocks);
     blocks
+}
+
+/// How close two hill landmarks stand before they share one ground.
+const COURTYARD: f32 = 22.0;
+
+/// Gives a cluster of landmarks up on the hill one ground between them.
+///
+/// The castle is a dozen buildings round two courtyards, and a courtyard is
+/// level: the wings stand on one paved floor whatever the hill under it does.
+/// Given each its own ground off the model they stood a few metres apart in
+/// height, and where their plateaus met, the terrain blended the two and
+/// neither wing quite reached the earth. So anything within [`COURTYARD`] of
+/// another hill landmark takes the highest ground in its cluster, which is
+/// the courtyard the hill was cut down to when the castle was built.
+fn level_the_courtyards(blocks: &mut [Block]) {
+    let uphill: Vec<usize> = (0..blocks.len())
+        .filter(|&i| blocks[i].buildings.iter().any(|b| b.ground > 0.0))
+        .collect();
+    if uphill.len() < 2 {
+        return;
+    }
+    // Union-find over the hill landmarks, joined where their boxes come
+    // within a courtyard's width of each other.
+    let mut parent: Vec<usize> = (0..uphill.len()).collect();
+    fn root(parent: &mut [usize], i: usize) -> usize {
+        let mut i = i;
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let near = |a: &Rect, b: &Rect| {
+        let gap = (a.min - b.max).max(b.min - a.max).max(Vec2::ZERO);
+        gap.length() < COURTYARD
+    };
+    for i in 0..uphill.len() {
+        for j in (i + 1)..uphill.len() {
+            if near(&blocks[uphill[i]].area, &blocks[uphill[j]].area) {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                if a != b {
+                    parent[a] = b;
+                }
+            }
+        }
+    }
+    let mut highest: HashMap<usize, f32> = HashMap::default();
+    for (k, &i) in uphill.iter().enumerate() {
+        let r = root(&mut parent, k);
+        let ground = blocks[i].buildings[0].ground;
+        let entry = highest.entry(r).or_insert(ground);
+        *entry = entry.max(ground);
+    }
+    for (k, &i) in uphill.iter().enumerate() {
+        let r = root(&mut parent, k);
+        let ground = highest[&r];
+        for building in &mut blocks[i].buildings {
+            building.ground = ground;
+        }
+    }
 }
 
 pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signposts) {
