@@ -757,11 +757,17 @@ Landshüpf stopped being a postcard of nowhere. `assets/cities/landshut.ron`
 is the real town, and the game builds it as it stands:
 
 - **The streets** are the real ones, off OpenStreetMap, with their names,
-  their widths and what they are paved with — the Altstadt in setts, the
-  Neustadt in slabs. A folded band like the market street is centred between
-  its house rows rather than left on whichever lane was longest, and every
-  street is capped to what fits between its buildings, because a medieval
-  lane is narrower between its walls than its lane count implies.
+  their widths and what they are paved with — the Altstadt in ten-centimetre
+  granite Kleinpflaster laid in courses, the Neustadt in slabs. A folded band
+  like the market street is centred between its house rows rather than left
+  on whichever lane was longest, and every street is capped to what fits
+  between its buildings, because a medieval lane is narrower between its
+  walls than its lane count implies. The Altstadt is mapped as one closed
+  way — up one lane, round the top and down the other — and once both lanes
+  are on one centreline that loop is the same street twice, with a pavement
+  laid across the carriageway at every turn-round; the bake cuts a looped
+  band down to its longest run and puts every side street that met the
+  dropped lane back onto the spine as a junction.
 - **The buildings** are the real footprints, from the Overture Maps buildings
   theme: each polygon cut at bake time into the rectangles that cover it (an
   L is two, a courtyard block four), so the ring blocks round a courtyard
@@ -777,11 +783,20 @@ is the real town, and the game builds it as it stands:
   to the town, with the castle's wings on one levelled courtyard on top. A
   street the map takes up the hill is left to the hill rather than cut into
   it as a trench.
-- **The roofs** are a carpet of steep red tile to the edge of town:
-  Vorschussmauer screens with an attic storey of windows on the Altstadt
-  houses, plain Satteldächer and Walmdächer everywhere else, with dormers,
-  chimneys on the ridge, and flat decks only on the supermarket and the car
-  park.
+- **The roofs** are a carpet of steep red tile to the edge of town, and
+  drawn to the edge of town: Vorschussmauer screens with an attic storey of
+  windows on the Altstadt houses, plain Satteldächer and Walmdächer
+  everywhere else, with dormers, chimneys on the ridge, and flat decks only
+  on the supermarket and the car park. From the air the roofs are the town,
+  so they outlive the facade courses by two kilometres rather than stopping
+  where the walls turn into plain boxes.
+- **The castle** is whitewashed. Whatever the map put up on the Hofberg
+  wears the cream slot of the palette and the plainest window grid there
+  is, with no shopfront under it: a wing of Trausnitz drawn as a parade of
+  shops in dusty rose was the one thing in the aerial framing that said
+  "generated". Past the edge of the baked relief the rolling country the
+  invented cities stand in is faded back in, so the skyline behind the real
+  hills is hills and not the sea a plain to the horizon reads as.
 - **The mill races** that run down a street are in a pipe, as they have been
   for a century; the Isar is the grey-green of a glacial river.
 
@@ -1095,7 +1110,11 @@ in the world.
   polygons they came from — a courtyard is four boxes, a curved wing is two
   or three — and the pavement beside every street is one width for the
   whole town, so a lane between houses eight metres apart carries the same
-  three-metre pavements as the market street.
+  three-metre pavements as the market street. The castle on the Hofberg is
+  its real wings in whitewash under red roofs, not Trausnitz's arcaded
+  courtyard; the country past the six-kilometre relief grid is invented; and
+  the Altstadt's shop windows are painted displays behind glass, with
+  arcades, oriels and the wall lanterns still to come.
 
 - The canal is one straight street of water. It reads as a river because the
   kerbs read as quays and every crossing reads as a bridge, but it neither

@@ -54,9 +54,13 @@ use super::gable::GableKit;
 use super::texture::{self, FacadeClass};
 use crate::core::config::RoofDials;
 
-/// How far a roof is drawn. As far as the building it caps: a roofline is a
-/// silhouette, and a silhouette is the last thing to stop mattering.
-pub const RANGE: f32 = 900.0;
+/// How far a roof is drawn. Further than the building it caps keeps its
+/// courses: a roofline is a silhouette, and a silhouette is the last thing to
+/// stop mattering. It was nine hundred metres, which from the air is where
+/// Landshut stopped being a red-roofed town and became a tray of pastel
+/// boxes; a roof is a dozen triangles, so the whole town's are cheaper than
+/// one storey of one facade, and there is no reason to stop drawing them.
+pub const RANGE: f32 = 2_600.0;
 
 /// And how far its trim is — fascia, gutter, bargeboard, the coping on a
 /// screen. All of it is a hand's width thick, and past a few hundred metres
@@ -1043,7 +1047,7 @@ pub fn spawn(
     chunk: IVec2,
     lod_scale: f32,
 ) {
-    let far = (RANGE * lod_scale).min(2_000.0);
+    let far = (RANGE * lod_scale).min(3_000.0);
     let range = VisibilityRange {
         start_margin: 0.0..0.0,
         end_margin: far..(far * 1.05),

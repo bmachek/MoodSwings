@@ -154,6 +154,10 @@ const TOWN_MARGIN: f32 = 120.0;
 const FALL: f32 = 12.0;
 const FALL_OVER: f32 = 320.0;
 
+/// Over how many metres, inside the edge of a baked relief's coarse grid, the
+/// procedural landscape is faded in to carry the ground on past it.
+const HORIZON_FADE: f32 = 1_500.0;
+
 /// Texels a side of the level field.
 ///
 /// Coarser than the shading mask, and it can be: what this resolves is a
@@ -422,6 +426,24 @@ impl Terrain {
                 // model has it. A cap tried here made a step at the outer
                 // edge of the fade instead, which is worse than a bank.
                 open += relief.at(at).max(floor);
+
+                // Past the coarse grid the map has nothing to say, and the
+                // ground went on at the grid's edge value all the way to the
+                // horizon: a plain, and from a rooftop a plain to the horizon
+                // under forty kilometres of haze reads as a sea. The rolling
+                // country the generated cities stand in is faded in over the
+                // last stretch of the grid instead, so the skyline past the
+                // real hills is hills either way.
+                // Never inside the played square, whatever size the grid is:
+                // a test's relief is a few cells across, and the square is
+                // where the map's word is final.
+                let start = (relief.far_reach() - HORIZON_FADE).max(self.town);
+                let out = smoothstep((at.abs().max_element() - start) / HORIZON_FADE);
+                if out > 0.0 {
+                    let n = fbm(p / RELIEF_TILE);
+                    let ridged = 1.0 - (n * 2.0 - 1.0).abs();
+                    open += ridged * RELIEF_RISE * out;
+                }
             }
             None => {
                 // Square distance, not radius — see [`RELIEF_START`].

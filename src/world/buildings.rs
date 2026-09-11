@@ -49,6 +49,13 @@ pub const SIDEWALK_HEIGHT: f32 = 0.28;
 const PLINTH_HEIGHT: f32 = 0.62;
 /// How far the plinth stands proud of the wall above it.
 const PLINTH_PROUD: f32 = 0.11;
+/// The palette slot a building up on the hill wears: the cream one, in the
+/// Landshüpf palette (`style_palette`), which is the only style with a hill
+/// to stand anything on. Whitewash is what a Bavarian castle is rendered in,
+/// and the one colour a roll across six pastels could not be trusted to land
+/// on.
+const CASTLE_PALETTE: u8 = 2;
+
 /// How far away the plinth stops being drawn, before `lod_scale`.
 ///
 /// It is eleven centimetres deep. Past a couple of hundred metres that is well
@@ -1315,7 +1322,6 @@ fn spawn_building(
     let size = site.span;
     let center = site.centre;
     let height = building.height;
-    let class = FacadeClass::for_height(height);
     // Where this building's ground floor starts: the pavement, or up on the
     // hill the plateau the terrain holds under a landmark kept there. Every
     // y below is written off this rather than off the kerb, which is the
@@ -1326,6 +1332,22 @@ fn spawn_building(
     // on a pavement it does not have, no poster for traffic that never
     // passes.
     let uphill = building.ground > 0.0;
+    // Nor a shopfront. What stands on the hill is the castle — Trausnitz is
+    // a ring of whitewashed wings round two courtyards — and a wing drawn as
+    // a parade of shops with flats over them, in whatever pastel its palette
+    // roll gave it, was the one thing in the aerial framing that said
+    // "generated". A house facade is the plainest window grid there is, and
+    // the cream slot is the render with nothing stirred into it.
+    let class = if uphill {
+        FacadeClass::House
+    } else {
+        FacadeClass::for_height(height)
+    };
+    let palette = if uphill {
+        CASTLE_PALETTE
+    } else {
+        building.palette
+    };
 
     // One seed for everything about this building's roof, derived from where it
     // stands. Chunks regenerate on re-entry, so anything keyed on spawn order
@@ -1346,11 +1368,16 @@ fn spawn_building(
     // origin, so all three measure the same distance and hand over to one
     // another on precisely the same metre — which is what Bevy needs before it
     // will dither one into the next instead of blinking between them.
-    let material = assets.material_for(district, site.quarter, building.palette, class);
+    let material = assets.material_for(district, site.quarter, palette, class);
     let (near, far) = shell::ranges(ctx.lod_scale);
     // Which balconies and which awnings, from the building's own seed rather
-    // than from a counter, for the same reason its roof is.
-    let variant = (seed >> 19) as u32;
+    // than from a counter, for the same reason its roof is — unless the town
+    // has no balconies, in which case the bare wall.
+    let variant = if ctx.style.balconies() {
+        (seed >> 19) as u32
+    } else {
+        shell::BARE
+    };
     // A quarter picks its restaurants' chain for them: every dining room in
     // Klein-Neapel is the Pizzeria, every one in the Fernost-Viertel is the
     // Wok — which is how real quarters advertise themselves, one cuisine
@@ -1687,7 +1714,7 @@ fn spawn_building(
         building.roof,
         rolls,
     );
-    let wall = assets.plain_for(district, site.quarter, building.palette);
+    let wall = assets.plain_for(district, site.quarter, palette);
     let pitch = match roof {
         super::roof::Roof::Flat => None,
         super::roof::Roof::Screened => Some(super::gable::spawn(

@@ -288,6 +288,18 @@ impl CityStyle {
     /// supermarket and the multi-storey car park. Minga is the same country.
     /// Everywhere else stays the flat-slab city it was, because a pitched
     /// roof on a New York block is a suburb of somewhere else.
+    /// Whether this town's walls carry balconies.
+    ///
+    /// Landshut's do not: a Bürgerhaus on the Altstadt hangs an oriel off
+    /// its front and nothing else, and every reference photograph of the
+    /// market is a wall of flat lime render from the shopfronts to the
+    /// screens. The shell has a balcony-free pattern (`shell::BARE`) for
+    /// exactly this, and the dial is here rather than at the use site
+    /// because a style decides what it wears.
+    pub fn balconies(self) -> bool {
+        !matches!(self, Self::Landshuepf)
+    }
+
     pub fn roofs(self) -> RoofDials {
         match self {
             Self::Landshuepf => RoofDials {
