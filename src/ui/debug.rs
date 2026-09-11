@@ -40,6 +40,7 @@ fn agent_panel(
     mut contexts: EguiContexts,
     observations: Res<crate::ai::observe::AgentObservations>,
     residents: Res<crate::ai::resident::Residents>,
+    giveway: Res<crate::ai::giveway::GiveWay>,
     focus: Res<crate::ai::focus::SimFocus>,
     mut config: ResMut<GameConfig>,
     mut selected: Local<Option<Entity>>,
@@ -65,6 +66,16 @@ fn agent_panel(
                 "residents: {}/{} visible",
                 residents.active_count(),
                 residents.total_count()
+            ));
+            // A yielding car is not blocked and never will be, so the counts
+            // above cannot show one. This is the only readout that does.
+            ui.label(format!(
+                "give way: {} waiting at a mouth · {} single-file streets taken · \
+                 longest {:.0}s · {} stood aside",
+                giveway.waiting,
+                giveway.occupied_runs(),
+                giveway.longest_wait,
+                giveway.stood_aside
             ));
             let mut nearby: Vec<_> = observations.agents.iter().collect();
             nearby.sort_by(|(id_a, a), (id_b, b)| {

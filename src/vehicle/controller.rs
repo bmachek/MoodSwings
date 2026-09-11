@@ -298,6 +298,12 @@ fn wheel_axes(steer_angle: f32, wheel: usize, forward: Vec3, up: Vec3) -> (Vec3,
     (flat, up.cross(flat))
 }
 
+/// The rolling speed, in m/s, below which the handbrake tapers off.
+///
+/// It is a holding brake, not a winch: what it must not do is push a stopped
+/// car in whichever direction the sign of zero happens to point.
+const HANDBRAKE_HOLD: f32 = 0.3;
+
 fn longitudinal_force(
     spec: &VehicleSpec,
     input: &VehicleInput,
@@ -323,7 +329,14 @@ fn longitudinal_force(
     }
 
     if input.handbrake && rear {
-        force -= rolling_speed.signum() * spec.brake_force * 0.15;
+        // Opposes the way the wheel is actually rolling, and tapers to nothing
+        // as it stops. `f32::signum(0.0)` is 1.0, so the plain sign put four
+        // kilonewtons backwards through a car that was standing perfectly
+        // still: every abandoned car in the city — `player::interact` leaves
+        // the handbrake on so they do not roll — sat buzzing between one
+        // ninetieth of a metre a second forwards and the same backwards, and
+        // a traffic car asked to hold at a stop line could not be held at all.
+        force -= (rolling_speed / HANDBRAKE_HOLD).clamp(-1.0, 1.0) * spec.brake_force * 0.15;
     }
 
     force
@@ -616,6 +629,40 @@ mod tests {
         assert!(
             sliding > gripping,
             "the handbrake should report more slip: {gripping:.3} vs {sliding:.3} m/s"
+        );
+    }
+
+    #[test]
+    fn a_handbrake_holds_a_standing_car_instead_of_shoving_it() {
+        // `f32::signum(0.0)` is 1.0, so the sign of the rolling speed alone
+        // put a constant four kilonewtons backwards through a car at rest —
+        // and `player::interact` leaves the handbrake on under every abandoned
+        // car in the city. Nothing may move a car nobody is driving, and a
+        // traffic car told to wait at a stop line has nothing else to hold it.
+        let (mut app, car, _) = harness(VehicleClass::Sedan, 0.6);
+        step(&mut app, 120);
+        set_input(
+            &mut app,
+            car,
+            VehicleInput {
+                handbrake: true,
+                ..default()
+            },
+        );
+        step(&mut app, 60);
+        let mut worst = 0.0f32;
+        for _ in 0..120 {
+            step(&mut app, 1);
+            let speed = app
+                .world()
+                .get::<LinearVelocity>(car)
+                .map(|v| v.0.xz().length())
+                .unwrap_or_default();
+            worst = worst.max(speed);
+        }
+        assert!(
+            worst < 0.005,
+            "a car standing on its handbrake was shoved about at {worst:.4} m/s"
         );
     }
 

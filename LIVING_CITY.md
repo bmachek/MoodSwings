@@ -42,6 +42,75 @@ the game's verbs. Everyday routines must work before interruptions become funny.
   that feeling when it returns; the remaining mutable facts are the next data
   model once places have stable ids.
 
+### Single-file streets
+
+The first thing measured rather than assumed. Two ninety-second Landshut
+patrols recorded 42 and 49 traffic recoveries — cars deleted after twenty-six
+seconds of going nowhere — and matching each against the street it happened on
+put **63% of them on a four-metre carriageway**. That is not a routing bug. On
+four metres `steering::lane_offset` puts the two travel lanes 1.90 m apart and
+the cars in this game are 1.80 m to 2.10 m across, so two of them meeting in a
+Gasse overlap; they touch, they stop, and a single forward ray at that lateral
+separation cannot even see what stopped them. 45% of Landshut's 45 km of road
+is under 4.5 m.
+
+- `steering::single_file` answers "can two cars pass here at all" from the lane
+  geometry and the widest car in the game, not from a width threshold picked by
+  eye. `passing_gap` adds the two lanes rather than doubling one, because a
+  street parked down one kerb is not symmetrical.
+- `ai::giveway` reserves such a stretch for one direction at a time. A *run*
+  reaches from one passing place to the next, and a passing place is a junction
+  — three streets meeting leave somewhere to pull aside, a bend does not.
+  Landshut has 184 of them among its 1565 streets — median 84 m, longest 481 m.
+  Whoever is in a run has it and a convoy may follow; the moment anybody stands
+  at the far mouth the near mouth stops admitting and the run drains, which is
+  the whole starvation rule. A run with one way in takes one car rather than a
+  convoy, because the one at the bottom of it has turned round and is coming
+  back — and 102 of the 184 are that shape, which was not the expectation.
+- A held car is `DriverObservation::Yielding`: a legitimate wait the recovery
+  timer leaves alone. That exemption is the dangerous part, because a yielding
+  car also reads to `ai::observe` as *waiting* rather than blocked — it is not
+  asking to move — so a give-way that has gone wrong is the one kind of stuck
+  with no symptom anywhere. Hence: every way a reservation can outlive its cars
+  has its own timeout, a wreck holding a run is logged by name, the patrol
+  complains about a long wait, the dev panel shows the queue, and the exemption
+  itself expires after 75 seconds.
+- Traffic no longer fades in on a single-file street, and prefers not to turn
+  into one. Both are preferences and not bans: banning them outright shatters
+  the drivable network into 88 pieces, the largest a tenth of the whole,
+  because one pinch point between two houses cuts off everything past it.
+- A car told to stop at a line had nothing to stop it with. Below 0.5 m/s a
+  negative throttle is the reverse gear rather than the brake, below 0.4 m/s
+  `throttle_for_speed` has a deadband, and the only other longitudinal force is
+  quadratic drag — so it coasted through the line at 0.4 m/s. It now holds the
+  handbrake, which `vehicle::controller` no longer applies as a constant shove
+  backwards at a standstill: `f32::signum(0.0)` is 1.0, and every abandoned car
+  in the city was sitting on that.
+- Measured, interleaved on one machine, four ninety-second Landshut patrols
+  run back to back with the two binaries alternating: **40 and 41 traffic
+  recoveries before, 15 and 13 after**. An earlier pair, on a machine that was
+  not yet swapping, read 47 and 37 against 26 and 29. Both pairs point the same
+  way and neither is a controlled experiment — `core::patrol` picks its next
+  junction from elapsed time, so no two runs walk the same streets, and the
+  second pair ran ten to twenty times slower than realtime under memory
+  pressure, which both binaries felt equally. The give-way readout in the last
+  sample of the last run was `4 waiting at a mouth over 10 runs`: the rule is
+  firing, not merely installed.
+- The A/B also caught a regression, and a real bug under it. Both of the first
+  after-runs launched fourteen cars skyward at one second from the same
+  handful of positions. `maintain_population` checks a spawn candidate against
+  every vehicle in the world, but a car it spawned two lines earlier is behind
+  a `Commands` queue and is not in that query until the next frame — and the
+  first tick of a session spawns the whole population at once, fifty cars none
+  of which can see each other. Halving the candidate streets turned a rare
+  overlap into a likely one. Candidates are now checked against the positions
+  this tick has already used, and the cluster is gone from both after-runs.
+- Not claimed: junction right of way, pedestrian gates, or any directed lane
+  topology. A run is a piece of road two cars may not share; a crossing is the
+  other one, and `roadgraph::movements_conflict` is still waiting for a caller
+  — and still cannot tell two perpendicular straight-through movements apart,
+  which is the first thing that has to change when it gets one.
+
 ### Stable place foundation
 
 - Every streamed `Shopfront` now carries a deterministic `PlaceId` derived from

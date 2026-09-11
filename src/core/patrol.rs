@@ -365,6 +365,7 @@ fn keep_watch(
     patrol: Res<Patrol>,
     mut watch: ResMut<Watch>,
     agents: Res<crate::ai::observe::AgentObservations>,
+    giveway: Res<crate::ai::giveway::GiveWay>,
     entities: Query<()>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -421,9 +422,13 @@ fn keep_watch(
             .filter(|agent| agent.motion == crate::ai::observe::Motion::Blocked)
             .count();
         info!(
-            "patrol agents: {} observed, {blocked} blocked, {} blocked episodes",
+            "patrol agents: {} observed, {blocked} blocked, {} blocked episodes, \
+             {} waiting at a mouth over {} runs, {} given way so far",
             agents.agents.len(),
-            agents.blocked_episodes
+            agents.blocked_episodes,
+            giveway.waiting,
+            giveway.occupied_runs(),
+            giveway.stood_aside,
         );
     }
     let at = patrol.elapsed;
@@ -554,6 +559,20 @@ fn keep_watch(
                 ));
             }
         }
+    }
+
+    // A car waiting its turn at the mouth of a single-file street is not
+    // blocked and is deliberately exempt from the recovery timer, which means
+    // a give-way rule that has gone wrong is the one failure with no symptom
+    // at all: `ai::observe` reads a yielding car as *waiting* — it is not
+    // asking to move — and nothing else would ever mention it. So the watch
+    // asks directly. Well past the alternation a busy Gasse produces, and well
+    // under the minute a five-hundred-metre run legitimately takes.
+    if giveway.longest_wait > 40.0 {
+        complain(format!(
+            "a car has given way for {:.0}s, with {} waiting",
+            giveway.longest_wait, giveway.waiting
+        ));
     }
 
     // Rodio mixes every source it has been handed whether or not it is audible,

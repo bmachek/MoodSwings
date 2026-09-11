@@ -82,6 +82,10 @@ pub enum DriverObservation {
     Clear,
     Following(Entity),
     Obstacle(Entity),
+    /// Standing at the mouth of a street it has been told to wait for.
+    /// Somebody else's right of way is a reason to be stopped, and a reason
+    /// the recovery timer has no business acting on — see [`ai::giveway`].
+    Yielding,
 }
 
 /// A driver who has been sitting still long enough to lean on the horn.
@@ -106,6 +110,11 @@ impl Default for TrafficTimer {
     }
 }
 
+/// The traffic systems, as a set, so anything that has to decide something
+/// *before* a car is driven can say so. `ai::giveway` is the first of them.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Driving;
+
 pub struct TrafficPlugin;
 
 impl Plugin for TrafficPlugin {
@@ -116,6 +125,7 @@ impl Plugin for TrafficPlugin {
                 Update,
                 (maintain_population, drive_traffic)
                     .chain()
+                    .in_set(Driving)
                     .in_set(crate::core::schedule::GameSet::Ai),
             );
     }
@@ -137,9 +147,20 @@ fn choose_exit(city: &City, from: NodeId, at: NodeId, rng: &mut ChaCha8Rng) -> N
         .graph
         .neighbors(at)
         .filter(|(node, _)| *node != from)
-        .map(|(node, _)| {
+        .map(|(node, edge)| {
             let direction = (city.graph.node(node).pos - here).normalize_or_zero();
-            (node, incoming.dot(direction))
+            // Straight on is worth the most, and a street two cars cannot pass
+            // on is worth a good deal less than any street they can. Not a ban:
+            // an empty Gasse is as wrong as a jammed one, and half of
+            // Landshut's road length is that narrow — refusing it outright
+            // shatters the drivable network into eighty-eight pieces. This is
+            // a preference, and the penalty is large enough that a narrow
+            // street straight ahead loses to an ordinary one round a corner.
+            let narrow = super::steering::single_file(city.graph.edge(edge).width);
+            (
+                node,
+                incoming.dot(direction) - if narrow { NARROW_PENALTY } else { 0.0 },
+            )
         })
         .collect();
 
@@ -157,6 +178,13 @@ fn choose_exit(city: &City, from: NodeId, at: NodeId, rng: &mut ChaCha8Rng) -> N
         exits[rng.random_range(1..exits.len())].0
     }
 }
+
+/// What a single-file street costs a driver choosing where to turn.
+///
+/// More than the whole range of the straight-on score, which runs -1 to 1, so
+/// a narrow exit is only taken when every exit is narrow — or when the random
+/// branch below picks one anyway, which is what keeps the alleys from emptying.
+const NARROW_PENALTY: f32 = 2.5;
 
 /// How wide the street between two junctions is, if they are joined at all.
 fn width_between(city: &City, from: NodeId, to: NodeId) -> Option<f32> {
@@ -215,13 +243,26 @@ fn maintain_population(
                 .node(edge.a)
                 .pos
                 .midpoint(city.graph.node(edge.b).pos);
-            (config.traffic.spawn_min..config.traffic.spawn_max).contains(&midpoint.distance(focus))
+            // Never inside a Gasse. Two cars faded in at opposite ends of a
+            // street they cannot pass on are a deadlock nobody asked for and
+            // nobody granted: `ai::giveway` arbitrates who goes *in*, and has
+            // nothing to say to two cars that were already there.
+            !super::steering::single_file(edge.width)
+                && (config.traffic.spawn_min..config.traffic.spawn_max)
+                    .contains(&midpoint.distance(focus))
         })
         .collect();
     if candidates.is_empty() {
         return;
     }
 
+    // Where this tick has already put a car. `Commands` are deferred, so a car
+    // spawned two lines below is invisible to the `parked` query until the
+    // next frame — and the very first tick of a session spawns the whole
+    // population at once, fifty cars none of which can see each other. Two of
+    // them landing in the same place is the launch the spawner's own comment
+    // is about, arriving from the one direction it was not watching.
+    let mut placed: Vec<Vec2> = Vec::new();
     let mut attempts = 0;
     while alive < config.traffic.population && attempts < 60 {
         attempts += 1;
@@ -247,10 +288,13 @@ fn maintain_population(
         // solver's opinion about two overlapping cars.
         if parked
             .iter()
-            .any(|other| other.translation.xz().distance_squared(position) < CLEAR_SPAWN.powi(2))
+            .map(|other| other.translation.xz())
+            .chain(placed.iter().copied())
+            .any(|other| other.distance_squared(position) < CLEAR_SPAWN.powi(2))
         {
             continue;
         }
+        placed.push(position);
         let class = VehicleClass::CIVILIAN[rng.0.random_range(0..VehicleClass::CIVILIAN.len())];
         let mut spec = class.spec();
         (spec.body_color, spec.body_metallic, spec.body_age) =
@@ -296,6 +340,7 @@ fn drive_traffic(
     time: Res<Time>,
     city: Res<City>,
     spatial: SpatialQuery,
+    giveway: Res<super::giveway::GiveWay>,
     mut rng: ResMut<TrafficRng>,
     mut horns: MessageWriter<Impatient>,
     mut cars: Query<(
@@ -327,7 +372,14 @@ fn drive_traffic(
         // the whole segment was driven on the last frame's steering.
         let mut start = start;
         let mut end = end;
-        if position.distance(end) < arrival_radius(start.distance(end)) {
+        // Unless it is being held at this junction, in which case it has not
+        // arrived at anything: the handover is what puts a car *on* the next
+        // street, and the whole of the hold is that it may not go there yet.
+        // The stop line is 3.6 m short of the node and the arrival radius
+        // reaches nine, so without this the car books itself in from the
+        // queue and the street it was waiting for is its own.
+        let held = giveway.hold(entity);
+        if held.is_none() && position.distance(end) < arrival_radius(start.distance(end)) {
             driver.from = driver.to;
             driver.to = driver.after;
             driver.after = choose_exit(&city, driver.from, driver.to, &mut rng.0);
@@ -366,6 +418,15 @@ fn drive_traffic(
         let cornering = 1.0 - input.steer.abs() * 0.55;
         let approach = turn_approach_factor(driver.turn, (end - position).length());
         let mut desired = driver.cruise_speed * cornering * approach;
+
+        // Somebody else has the street this one is about to enter. Stop at the
+        // mouth, on the same braking law the following distance uses, so it
+        // arrives at the line rather than at the car already in the Gasse.
+        if let Some(mouth) = held {
+            desired = desired.min(stopping_speed(
+                position.distance(mouth) - super::giveway::STOP_SHORT,
+            ));
+        }
 
         // And keep a gap to whatever is in front. The ray used to be a yes/no
         // question — anything within five metres plus a second and a bit of
@@ -407,6 +468,14 @@ fn drive_traffic(
             };
         }
 
+        // Being held is a *reason*, and it outranks whatever the ray happened
+        // to find: a car waiting its turn at a mouth has not failed to get
+        // anywhere. It is also what keeps the recovery timer off it, which is
+        // why the hold has a life of its own — see `ai::giveway`.
+        if held.is_some() {
+            driver.observation = DriverObservation::Yielding;
+        }
+
         // Never reverse into the street behind. `longitudinal_force` reads a
         // negative throttle as braking only while the car is actually moving
         // forwards; under half a metre a second it is the reverse gear, and a
@@ -416,7 +485,15 @@ fn drive_traffic(
         if desired < 0.2 && state.forward_speed < 0.5 {
             input.throttle = 0.0;
         }
-        input.handbrake = false;
+        // And nothing else would hold it there. Below half a metre a second
+        // the throttle cannot brake, `throttle_for_speed` has a deadband under
+        // four tenths, and the only other longitudinal force on the car is
+        // quadratic drag, which at walking pace is nothing at all. A car told
+        // to stop at a line therefore coasts through it at 0.4 m/s — six
+        // metres over a fifteen-second wait, which is the far side of the
+        // junction. What holds a stopped car is the handbrake, which is what
+        // `player::interact` already leaves on when a car is abandoned.
+        input.handbrake = held.is_some() && state.forward_speed.abs() < 1.0;
         driver.desired_speed = desired;
 
         // Preserve a legitimate queue. Only an unexplained stop or a static
@@ -447,6 +524,10 @@ const HEADWAY: f32 = 1.6;
 /// given up on entirely.
 const HONK_AFTER: f32 = 5.0;
 const GIVE_UP: f32 = 26.0;
+
+/// And how long a car will wait its turn at a mouth before it stops counting
+/// as waiting its turn. Past this it is stuck like anything else is stuck.
+const YIELD_PATIENCE: f32 = 75.0;
 
 /// Slow before the junction, where steering alone is too late to make a
 /// narrow street turn believable. The factor reaches one outside the
@@ -481,12 +562,35 @@ impl TrafficDriver {
             return false;
         }
         self.waiting += dt;
-        if matches!(self.observation, DriverObservation::Following(_)) {
+        // A queue and a right of way are both legitimate stops: only an
+        // unexplained one, or a static obstruction, advances the timer that
+        // deletes the car. The right of way is bounded, though, and that
+        // matters more than it looks — a yielding car is exempt from this
+        // timer *and* reads to `ai::observe` as waiting rather than blocked,
+        // because it is not asking to move, so a give-way gone wrong is the
+        // one kind of stuck with no symptom anywhere. `giveway` has a timeout
+        // on every way a reservation can outlive its cars; this is the belt
+        // under those braces, set past any wait the alternation produces.
+        let legitimate = match self.observation {
+            DriverObservation::Following(_) => true,
+            DriverObservation::Yielding => self.waiting < YIELD_PATIENCE,
+            _ => false,
+        };
+        if legitimate {
             self.stuck = 0.0;
         } else {
             self.stuck += dt;
         }
-        if self.waiting > HONK_AFTER && !self.honked {
+        // A driver who knows why it is waiting is more patient about it. Not
+        // silent — a horn at the mouth of a Gasse is the joke — but five
+        // seconds of it from every car in a queue is a dozen spatial one-shots
+        // a junction, which the patrol complains about by name.
+        let patience = if matches!(self.observation, DriverObservation::Yielding) {
+            HONK_AFTER * 2.6
+        } else {
+            HONK_AFTER
+        };
+        if self.waiting > patience && !self.honked {
             self.honked = true;
             return true;
         }
@@ -494,17 +598,24 @@ impl TrafficDriver {
     }
 }
 
-/// The fastest a car may be going with `gap` metres of clear road in front.
+/// The fastest a car may be going and still stop in `room` metres.
 ///
 /// A braking law rather than a rule of thumb: `v = sqrt(2·a·s)` is the speed
-/// something can shed over a distance at a given deceleration, and what is left
-/// after the buffer is the distance this car actually has. Below the buffer it
-/// asks for zero and the throttle goes to a hold rather than to reverse.
+/// something can shed over a distance at a given deceleration. Below zero room
+/// it asks for zero, and the throttle goes to a hold rather than to reverse.
+fn stopping_speed(room: f32) -> f32 {
+    const BRAKING: f32 = 3.4;
+    (2.0 * BRAKING * room.max(0.0)).sqrt()
+}
+
+/// The fastest a car may be going with `gap` metres of clear road in front.
+///
+/// The same law, against the distance left once the car in front has been
+/// given its bumper's worth of room. A stop line wants no such buffer — it is
+/// a line, not a car — which is why the two are separate.
 fn following_speed(gap: f32) -> f32 {
     const BUFFER: f32 = 3.2;
-    const BRAKING: f32 = 3.4;
-    let room = (gap - BUFFER).max(0.0);
-    (2.0 * BRAKING * room).sqrt()
+    stopping_speed(gap - BUFFER)
 }
 
 #[cfg(test)]
@@ -579,6 +690,21 @@ mod tests {
         assert!(!same_queue(0.0, 1.0, 1.0));
         assert!(!same_queue(1.0, -1.0, 1.0));
         assert!(!same_queue(1.0, 1.0, -1.0));
+    }
+
+    #[test]
+    fn giving_way_is_a_wait_until_it_has_gone_on_too_long() {
+        // The exemption that keeps a give-way queue alive, and the bound that
+        // stops it being a way for a car to be stuck for ever in silence.
+        let mut driver = driver();
+        driver.observation = DriverObservation::Yielding;
+        driver.note_stop(0.0, GIVE_UP + 1.0);
+        assert_eq!(driver.stuck, 0.0, "a car waiting its turn was given up on");
+        driver.note_stop(0.0, YIELD_PATIENCE);
+        assert!(
+            driver.stuck > 0.0,
+            "a car that has yielded for two minutes is not yielding, it is stuck"
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod cyclist;
 pub mod errands;
 pub mod figure;
 pub mod focus;
+pub mod giveway;
 pub mod observe;
 pub mod pedestrian;
 pub mod pigeon;
@@ -29,6 +30,7 @@ impl Plugin for AiPlugin {
             focus::FocusPlugin,
             observe::AgentObserverPlugin,
             traffic::TrafficPlugin,
+            giveway::GiveWayPlugin,
             pedestrian::PedestrianPlugin,
             social::SocialPlugin,
             errands::ErrandPlugin,

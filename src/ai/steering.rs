@@ -135,6 +135,48 @@ pub fn lane_offset(width: f32, parked_beside: bool) -> f32 {
     ideal.min(limit).max(0.0)
 }
 
+/// How far apart two cars passing each other on this street are.
+///
+/// The two lanes are not the same distance from the centreline on a street
+/// parked down one kerb — the driver beside the row is squeezed against the
+/// middle of the road and the other one has the rest of it — so this adds the
+/// two rather than doubling either, and each is measured to its own side.
+pub fn passing_gap(width: f32) -> f32 {
+    match parking_for(width) {
+        Parking::None => lane_offset(width, false) * 2.0,
+        Parking::BothSides => lane_offset(width, true) * 2.0,
+        Parking::OneSide => lane_offset(width, true) + lane_offset(width, false),
+    }
+}
+
+/// Daylight left between two cars passing, over and above the metal.
+///
+/// A hand's breadth either side. Not comfort: a car that is *exactly* as wide
+/// as its half of the road is one wobble from a contact, and the wobble is
+/// guaranteed — these are steered by a pure-pursuit controller on rubber
+/// suspension, not railed.
+const PASSING_CLEARANCE: f32 = 0.15;
+
+/// Is this carriageway too narrow for two cars to pass at all?
+///
+/// Landshut's answer to this is the whole reason it exists. The bake's
+/// narrowest street is four metres — 45% of the town's 45 km of road is under
+/// four and a half — and on four metres `lane_offset` puts the two lanes 1.90 m
+/// apart, while the cars in this game are 1.80 m across at the smallest and
+/// 2.10 m at the largest. So two vans meeting in a Gasse overlap by twenty
+/// centimetres, and a van meeting a hatchback by five: they touch, they stop,
+/// and neither one's forward ray can even see the other, because a single ray
+/// down the middle passes a car offset by 1.90 m with 85 cm to spare. What the
+/// traffic recovery timer then deletes is not a navigation failure, it is two
+/// cars obeying geometry.
+///
+/// A street this narrow is single file, and the town is full of them. It is
+/// also what the real Altstadt is: you wait at the mouth of the Gasse for the
+/// one coming the other way.
+pub fn single_file(width: f32) -> bool {
+    passing_gap(width) < LANE_CAR_HALF * 2.0 + PASSING_CLEARANCE
+}
+
 /// And how far out a bicycle rides: the kerb side of the same lane, tucked
 /// just inside whatever is parked there.
 pub fn cycle_offset(width: f32, parked_beside: bool) -> f32 {
@@ -475,5 +517,42 @@ mod tests {
                 "both directions think the parked row is on their right"
             );
         }
+    }
+
+    #[test]
+    fn a_four_metre_gasse_cannot_hold_two_cars_abreast() {
+        // The measured case: 4.0 m is the bake's narrowest street and 45% of
+        // Landshut is under 4.5. The widest car is 2.10 m across.
+        assert!((passing_gap(4.0) - 1.90).abs() < 1e-5);
+        assert!(single_file(4.0));
+        // And the smallest street two of them do fit on.
+        assert!(!single_file(5.0));
+        assert!(passing_gap(5.0) >= LANE_CAR_HALF * 2.0);
+    }
+
+    #[test]
+    fn a_parked_row_does_not_make_an_ordinary_street_single_file() {
+        // The one that would quietly empty the town: the moment a street is
+        // wide enough to park on, a row eats a lane's worth of it, and a rule
+        // written as "how wide is the street" rather than "what is left of it"
+        // reads 7.5 m — 82% of Landshut — as an alley.
+        for width in [6.9, 7.5, 8.0, 9.6, 13.6, 15.1] {
+            assert!(
+                !single_file(width),
+                "{width} m came out single file, gap {}",
+                passing_gap(width)
+            );
+        }
+    }
+
+    #[test]
+    fn passing_adds_the_two_lanes_rather_than_doubling_one() {
+        // A street parked down one kerb is the asymmetric case, and doubling
+        // either lane gets it wrong in a different direction.
+        let width = 7.5;
+        let squeezed = lane_offset(width, true);
+        let roomy = lane_offset(width, false);
+        assert!(squeezed < roomy);
+        assert!((passing_gap(width) - (squeezed + roomy)).abs() < 1e-5);
     }
 }
