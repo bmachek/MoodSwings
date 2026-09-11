@@ -36,7 +36,7 @@ use crate::audio::AudioRng;
 use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::schedule::GameSet;
 use crate::mood::grudge::Grudge;
-use crate::world::interior::Shopfront;
+use crate::world::interior::{PlaceId, Shopfront};
 
 /// How far a citizen will go out of their way for a window, in metres.
 ///
@@ -65,6 +65,9 @@ pub struct Errand {
     /// front is streamed with its chunk: an errand outlives the thing it is
     /// aimed at, and a position keeps working while a handle would dangle.
     pub at: Vec3,
+    /// Stable identity, so a later resident schedule can count visits even
+    /// after the front's streamed entity has disappeared.
+    pub place: PlaceId,
     /// True for the door, false for the window.
     pub inside: bool,
     /// Given up on after this. A front on the far side of a building the
@@ -110,7 +113,7 @@ fn set_out(
     mut commands: Commands,
     time: Res<Time>,
     mut rng: ResMut<AudioRng>,
-    fronts: Query<&Transform, With<Shopfront>>,
+    fronts: Query<(&Transform, &PlaceId), With<Shopfront>>,
     candidates: Query<
         (Entity, &Transform, &Pedestrian),
         (
@@ -135,16 +138,17 @@ fn set_out(
         // The nearest front worth crossing a pavement for. A linear scan, and
         // it can be: the roll above has already thrown away all but a handful
         // of citizens this frame.
-        let Some(front) = fronts
+        let Some((front, place)) = fronts
             .iter()
-            .map(|front| front.translation)
-            .filter(|at| at.distance(here) < ERRAND_RANGE)
-            .min_by(|a, b| a.distance(here).total_cmp(&b.distance(here)))
+            .map(|(transform, place)| (transform.translation, *place))
+            .filter(|(at, _)| at.distance(here) < ERRAND_RANGE)
+            .min_by(|(a, _), (b, _)| a.distance(here).total_cmp(&b.distance(here)))
         else {
             continue;
         };
         commands.entity(entity).insert(Errand {
             at: front,
+            place,
             inside: rng.random::<f32>() < GOES_IN,
             until: now + PATIENCE,
         });

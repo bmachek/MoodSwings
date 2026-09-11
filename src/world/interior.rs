@@ -184,6 +184,21 @@ pub const SPILL_HEIGHT: f32 = 2.3;
 #[derive(Component)]
 pub struct Shopfront;
 
+/// Stable destination identity for a front. The mesh is streamed, this value
+/// is not: errands can remember a shop while its chunk is out of range.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PlaceId(pub u64);
+
+impl PlaceId {
+    /// Quantising to decimetres makes the identity independent of f32 noise
+    /// while keeping two neighbouring doors distinct in the whole town.
+    pub fn at(position: Vec3) -> Self {
+        let x = (position.x * 10.0).round() as i64 as u64;
+        let z = (position.z * 10.0).round() as i64 as u64;
+        Self(x.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ z.rotate_left(23))
+    }
+}
+
 /// Everything `spawn` needs to know about where the room stands.
 pub struct Doorframe {
     /// World position of the footprint's centre, at pavement level.
@@ -429,3 +444,26 @@ pub fn spawn(
 // screen, with slack for the crossfade band.
 const _: () = assert!(LINING < WALL);
 const _: () = assert!(RANGE > shell::NEAR * 1.1);
+
+#[cfg(test)]
+mod place_tests {
+    use super::PlaceId;
+
+    #[test]
+    fn place_ids_are_stable_under_repeated_generation() {
+        let position = bevy::prelude::Vec3::new(12.34, 2.3, -56.78);
+        assert_eq!(PlaceId::at(position), PlaceId::at(position));
+        assert_eq!(
+            PlaceId::at(position),
+            PlaceId::at(position + bevy::prelude::Vec3::Y * 9.0)
+        );
+    }
+
+    #[test]
+    fn neighbouring_fronts_get_different_ids() {
+        assert_ne!(
+            PlaceId::at(bevy::prelude::Vec3::new(0.0, 2.3, 0.0)),
+            PlaceId::at(bevy::prelude::Vec3::new(0.2, 2.3, 0.0))
+        );
+    }
+}

@@ -36,6 +36,25 @@ pub struct RoadEdge {
     pub length: f32,
 }
 
+/// The movement a vehicle makes at a junction. Kept in the road module so
+/// traffic, crossings and future signals agree on the same geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnKind {
+    Straight,
+    Left,
+    Right,
+    UTurn,
+}
+
+/// Conservative conflict rule for two movements sharing a junction. It is
+/// intentionally geometry-free until lane connectors exist: a straight or
+/// turning movement reserves the crossing, while two same-direction straight
+/// movements can share it. This gives signals and pedestrian gates one common
+/// policy to build on.
+pub fn movements_conflict(a: TurnKind, b: TurnKind) -> bool {
+    !(a == TurnKind::Straight && b == TurnKind::Straight)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RoadGraph {
     nodes: Vec<RoadNode>,
@@ -182,6 +201,32 @@ impl RoadGraph {
 
         None
     }
+
+    /// Which way a vehicle arriving from `from` turns at `at` to leave by `to`.
+    ///
+    /// A positive 2D cross product is a turn to the driver's **right**, not
+    /// their left. These `Vec2`s are `(x, z)` in the world — every caller gets
+    /// them from `Transform::translation.xz()` — and the world's right-hand
+    /// side is `steering::right_of(d) = (-d.z, d.x)`, which is the side
+    /// `RIGHT_HAND_TRAFFIC` keeps its lane on and the side the patrol walks
+    /// its pavement on. Heading east along `(1, 0)` and leaving along `(0, 1)`
+    /// is `right_of((1, 0))` exactly, and it is a right turn.
+    pub fn turn_kind(&self, from: NodeId, at: NodeId, to: NodeId) -> TurnKind {
+        let incoming = (self.node(at).pos - self.node(from).pos).normalize_or_zero();
+        let outgoing = (self.node(to).pos - self.node(at).pos).normalize_or_zero();
+        let dot = incoming.dot(outgoing);
+        if dot < -0.65 {
+            return TurnKind::UTurn;
+        }
+        let cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+        if cross.abs() < 0.22 {
+            TurnKind::Straight
+        } else if cross > 0.0 {
+            TurnKind::Right
+        } else {
+            TurnKind::Left
+        }
+    }
 }
 
 fn reconstruct(came_from: &HashMap<NodeId, NodeId>, goal: NodeId) -> Vec<NodeId> {
@@ -218,5 +263,74 @@ impl Ord for Candidate {
 impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cross() -> RoadGraph {
+        let mut graph = RoadGraph::default();
+        graph.add_node(Vec2::new(-10.0, 0.0), (0, 0));
+        graph.add_node(Vec2::ZERO, (1, 0));
+        graph.add_node(Vec2::new(0.0, 10.0), (1, 1));
+        graph.add_node(Vec2::new(10.0, 0.0), (2, 0));
+        graph
+    }
+
+    #[test]
+    fn classifies_left_right_and_straight_movements() {
+        let graph = cross();
+        // Arriving from the west and leaving south. `(0, 10)` is +z, which is
+        // `right_of` due east, so this is a right turn — the same answer the
+        // lane offset and the pavement walk give for that side.
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(2)),
+            TurnKind::Right
+        );
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(3)),
+            TurnKind::Straight
+        );
+        assert_eq!(
+            graph.turn_kind(NodeId(3), NodeId(1), NodeId(2)),
+            TurnKind::Left
+        );
+    }
+
+    #[test]
+    fn a_turn_is_named_for_the_side_the_lane_offset_uses() {
+        // The one check that ties the classification to the rest of the game.
+        // Whichever way `steering::right_of` points is what `Right` has to
+        // mean here, or every give-way rule built on it reads the junction
+        // mirrored — and the two live in different modules, so nothing else
+        // would ever notice them disagreeing.
+        let graph = cross();
+        let at = graph.node(NodeId(1)).pos;
+        let incoming = (at - graph.node(NodeId(0)).pos).normalize();
+        let exit = (graph.node(NodeId(2)).pos - at).normalize();
+        assert!(crate::ai::steering::right_of(incoming).dot(exit) > 0.9);
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(2)),
+            TurnKind::Right
+        );
+    }
+
+    #[test]
+    fn classifies_a_dead_end_turnaround() {
+        let graph = cross();
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(0)),
+            TurnKind::UTurn
+        );
+    }
+
+    #[test]
+    fn conflict_rule_allows_only_parallel_straight_flow() {
+        assert!(!movements_conflict(TurnKind::Straight, TurnKind::Straight));
+        assert!(movements_conflict(TurnKind::Straight, TurnKind::Left));
+        assert!(movements_conflict(TurnKind::Right, TurnKind::Right));
+        assert!(movements_conflict(TurnKind::UTurn, TurnKind::Straight));
     }
 }

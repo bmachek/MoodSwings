@@ -1631,14 +1631,14 @@ fn spawn_building(
     // behind the camera.
     if class != FacadeClass::House && !uphill {
         let outward = Quat::from_rotation_y(yaw) * Vec3::Z;
+        let position = Vec3::new(center.x, floor, center.y)
+            + outward * (throat * 0.5 + 1.1)
+            + Vec3::Y * crate::world::interior::SPILL_HEIGHT;
         commands.spawn((
             ChunkOf(chunk),
             crate::world::interior::Shopfront,
-            Transform::from_translation(
-                Vec3::new(center.x, floor, center.y)
-                    + outward * (throat * 0.5 + 1.1)
-                    + Vec3::Y * crate::world::interior::SPILL_HEIGHT,
-            ),
+            crate::world::interior::PlaceId::at(position),
+            Transform::from_translation(position),
         ));
     }
 

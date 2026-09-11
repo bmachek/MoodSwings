@@ -26,9 +26,147 @@ pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(FpsOverlayPlugin::default())
-            .add_systems(EguiPrimaryContextPass, (tuning_panel, vehicle_panel));
+        app.add_plugins(FpsOverlayPlugin::default()).add_systems(
+            EguiPrimaryContextPass,
+            (tuning_panel, vehicle_panel, agent_panel),
+        );
     }
+}
+
+/// Select a live body and keep following its evidence even as other people
+/// come closer. Entity ids name the temporary body; residents have a separate
+/// stable number that stays in the population pool when the body streams out.
+fn agent_panel(
+    mut contexts: EguiContexts,
+    observations: Res<crate::ai::observe::AgentObservations>,
+    residents: Res<crate::ai::resident::Residents>,
+    giveway: Res<crate::ai::giveway::GiveWay>,
+    focus: Res<crate::ai::focus::SimFocus>,
+    mut config: ResMut<GameConfig>,
+    mut selected: Local<Option<Entity>>,
+) -> Result {
+    let ctx = contexts.ctx_mut()?;
+    egui::Window::new("agents")
+        .default_pos([310.0, 12.0])
+        .default_width(340.0)
+        .vscroll(true)
+        .show(ctx, |ui| {
+            use crate::ai::observe::Motion;
+            let blocked = observations
+                .agents
+                .values()
+                .filter(|a| a.motion == Motion::Blocked)
+                .count();
+            ui.label(format!(
+                "{} observed · {blocked} blocked · {} blocked episodes",
+                observations.agents.len(),
+                observations.blocked_episodes
+            ));
+            ui.label(format!(
+                "residents: {}/{} visible",
+                residents.active_count(),
+                residents.total_count()
+            ));
+            // A yielding car is not blocked and never will be, so the counts
+            // above cannot show one. This is the only readout that does.
+            ui.label(format!(
+                "give way: {} waiting at a mouth · {} single-file streets taken · \
+                 longest {:.0}s · {} stood aside",
+                giveway.waiting,
+                giveway.occupied_runs(),
+                giveway.longest_wait,
+                giveway.stood_aside
+            ));
+            let mut nearby: Vec<_> = observations.agents.iter().collect();
+            nearby.sort_by(|(id_a, a), (id_b, b)| {
+                a.position
+                    .distance_squared(focus.0)
+                    .total_cmp(&b.position.distance_squared(focus.0))
+                    .then_with(|| id_a.cmp(id_b))
+            });
+            ui.collapsing("Nearby agents", |ui| {
+                for (entity, agent) in nearby.iter().take(12) {
+                    if ui
+                        .selectable_label(
+                            *selected == Some(**entity),
+                            format!(
+                                "{entity:?} {} · {:.0}m · {:?}",
+                                agent.kind,
+                                agent.position.distance(focus.0),
+                                agent.motion,
+                            ),
+                        )
+                        .clicked()
+                    {
+                        *selected = Some(**entity);
+                    }
+                }
+            });
+            if ui.button("Inspect nearest").clicked() {
+                *selected = nearby.first().map(|(entity, _)| **entity);
+            }
+            if let Some(entity) = *selected {
+                ui.separator();
+                ui.label(format!("Live entity {entity:?}"));
+                if let Some(agent) = observations.agents.get(&entity) {
+                    ui.label(format!("{} · {:?}", agent.kind, agent.motion));
+                    if let Some(citizen) = agent.citizen {
+                        ui.label(format!("resident #{}", citizen.0));
+                    }
+                    ui.label(format!(
+                        "speed {:.2} / desired {:.2} m/s",
+                        agent.speed, agent.desired_speed
+                    ));
+                    if let Some(mood) = agent.mood {
+                        ui.label(format!("mood {mood:+.2}"));
+                    }
+                    if let Some((from, to)) = agent.route {
+                        ui.label(format!("route {} → {}", from.0, to.0));
+                    }
+                    let labels: Vec<_> = agent.activity.labels().collect();
+                    ui.label(format!(
+                        "Active behaviours: {}",
+                        if labels.is_empty() {
+                            "none".into()
+                        } else {
+                            labels.join(", ")
+                        }
+                    ));
+                    if let Some(traffic) = agent.traffic {
+                        ui.label(format!("driver sees: {traffic:?}"));
+                        ui.label(format!(
+                            "stopped {:.1}s · recovery timer {:.1}s",
+                            agent.waiting, agent.recovery
+                        ));
+                    }
+                    ui.collapsing("Recent transitions (last 6)", |ui| {
+                        for transition in agent.history.iter().rev() {
+                            ui.label(format!(
+                                "{:.1}s {:?} · {}",
+                                transition.at,
+                                transition.motion,
+                                transition.activity.labels().collect::<Vec<_>>().join(", ")
+                            ));
+                            if let Some(traffic) = transition.traffic {
+                                ui.label(format!("  {traffic:?}"));
+                            }
+                        }
+                    });
+                } else {
+                    ui.label("This body has despawned. Select another live agent.");
+                }
+            }
+            ui.collapsing("Movement diagnostics", |ui| {
+                let watch = &mut config.agent_watch;
+                ui.add(egui::Slider::new(&mut watch.progress_metres, 0.1..=2.0).text("progress m"));
+                ui.add(
+                    egui::Slider::new(&mut watch.blocked_seconds, 2.0..=30.0)
+                        .text("blocked after s"),
+                );
+                ui.add(egui::Slider::new(&mut watch.intent_speed, 0.05..=1.0).text("intent m/s"));
+            });
+        });
+    Ok(())
 }
 
 fn tuning_panel(

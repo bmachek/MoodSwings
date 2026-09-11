@@ -37,6 +37,7 @@ use rand_chacha::ChaCha8Rng;
 
 use super::spec::VehicleClass;
 use crate::ai::figure::{Rest, WalkCycle, body};
+use crate::ai::steering::Parking;
 use crate::bounce::controller::Bouncer;
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
@@ -44,9 +45,26 @@ use crate::core::schedule::GameSet;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
 
-/// Chance a street has a delivery going on. One in thirty-odd: a city where
-/// every street is being unloaded is a distribution depot.
-const CHANCE: f32 = 0.030;
+/// Chance a street has a delivery going on.
+///
+/// One in eleven, and it used to be one in thirty-odd — the *denominator*
+/// changed, not the density.
+///
+/// The streets with nowhere to stop have dropped out of the draw, which takes
+/// Landshut from the six hundred-odd streets long enough for a delivery to the
+/// 191 that also have a parking lane. One in thirty-odd of *those* is four
+/// vans in a whole city, which is not a city being delivered to, it is a
+/// coincidence.
+///
+/// Chosen so the *expected* number of vans is the number that was tuned —
+/// 191 × this is seventeen, against the eighteen it used to be — and not
+/// against what this seed happens to draw. At one in eight the same town came
+/// out with twenty-six and at one in eleven with twelve, which is one
+/// standard deviation either side of the same density: a constant fitted to
+/// one seed's Bernoulli draw is fitted to nothing. The scatter logs both
+/// halves of the ratio so the next person does not have to guess the
+/// denominator the way this comment once did.
+const CHANCE: f32 = 0.088;
 
 /// How far off the street's own line the van is left, in radians. Enough to
 /// read as abandoned rather than parked, not enough to block a lane.
@@ -58,6 +76,16 @@ const BLINK: f32 = 0.75;
 
 /// How far the hazards and the courier are drawn.
 const RANGE: f32 = 110.0;
+
+/// How many places along a street are tried before giving up on it, and how
+/// much daylight the van wants beyond its own nose.
+///
+/// A parked row stands bumper to bumper with gaps in it, so the first place
+/// tried is often somebody's boot. These are stepped evenly along the middle
+/// half of the street, so the search covers it; none of them clear, and the
+/// street simply has no delivery on it today.
+const PITCHES: usize = 8;
+const ROOM: f32 = 2.6;
 
 /// Metres the courier walks between the van's tail and the pavement, and how
 /// long they stand at each end.
@@ -156,8 +184,18 @@ fn scatter(
     figures: Option<Res<crate::ai::figure::FigureAssets>>,
     faces: Option<Res<crate::mood::face::FaceAssets>>,
     tempers: Option<Res<crate::mood::feeling::Tempers>>,
+    // The row this van is going to stand in. `scatter` is ordered after
+    // `spawn_parked_vehicles` and the sync point between them means the cars
+    // are real entities by now, not queued commands.
+    parked: Query<&Transform, With<super::spawn::Vehicle>>,
 ) {
     let mut rng = stream_for(config.world_seed, stream::DELIVERIES);
+    // Streets that could have had one, so the log says what the chance above
+    // is a chance *of*.
+    let mut eligible = 0usize;
+    // And the vans this run has already put down, which the query above
+    // cannot see for the same reason: `Commands` are deferred.
+    let mut standing: Vec<Vec2> = Vec::new();
     let range = VisibilityRange {
         start_margin: 0.0..0.0,
         end_margin: RANGE..(RANGE * 1.1),
@@ -166,7 +204,23 @@ fn scatter(
     let mut left = 0usize;
 
     for edge in city.graph.edges() {
-        if rng.random_range(0.0..1.0) > CHANCE || edge.length < 24.0 {
+        // The draw happens first whatever else is true, so that adding a
+        // reason to skip a street does not reshuffle which of the others get
+        // a van.
+        let rolled = rng.random_range(0.0..1.0) <= CHANCE;
+        // Only where there is a parking lane to stop in. The module note above
+        // says the van stands in the parking lane rather than the running one,
+        // and on a street with no parking lane there is no such place: the
+        // offset this used to carry put the van ten centimetres off the
+        // centreline of a four-metre Gasse, which is not a delivery, it is a
+        // roadblock — and 45% of Landshut's road length is that narrow. It is
+        // the same test `spawn_parked_vehicles` applies, for the same reason.
+        let parking = crate::ai::steering::parking_for(edge.width);
+        let suitable = edge.length >= 24.0 && parking != Parking::None;
+        if suitable {
+            eligible += 1;
+        }
+        if !rolled || !suitable {
             continue;
         }
         let a = city.graph.node(edge.a).pos;
@@ -175,19 +229,21 @@ fn scatter(
             continue;
         };
         let normal = Vec2::new(-direction.y, direction.x);
-        let side = if rng.random_range(0.0..1.0) < 0.5 {
-            1.0
-        } else {
-            -1.0
+        // Which kerb. A street parked down one side has its row on the kerb
+        // the street itself names, and a van left in the other half is left in
+        // the running lane — the one thing the module note says it must not
+        // be. `parked_kerb` is the same answer the row, the traffic and the
+        // cyclists all get.
+        let side = match parking {
+            Parking::BothSides => {
+                if rng.random_range(0.0..1.0) < 0.5 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            _ => crate::ai::steering::parked_kerb(a, b).dot(normal).signum(),
         };
-
-        // In the parking lane, at an angle. See the module note on why this is
-        // not in the running lane whatever the name says.
-        let along = rng.random_range(0.25..0.75) * edge.length;
-        let at = a + *direction * along + normal * ((edge.width * 0.5 - 1.9) * side);
-        let facing = if side > 0.0 { *direction } else { -*direction };
-        let skew = rng.random_range(SKEW.0..SKEW.1) * side;
-        let heading = super::spawn::heading_towards(facing) + skew;
 
         // The box van of this cast. `Truck` is what the generator calls it and
         // it is the only body in the fleet with a back you could get a parcel
@@ -195,6 +251,40 @@ fn scatter(
         let mut spec = VehicleClass::Truck.spec();
         (spec.body_color, spec.body_metallic, spec.body_age) = super::paint::street_paint(&mut rng);
         let half = spec.half_extents;
+
+        // In the parking lane, at an angle — and *exactly* where a parked one
+        // would stand, which is what the number this replaces was not. It was
+        // 1.9 m in from the kerb, justified by a comment saying parked cars
+        // sit 1.6 m in; they have sat `steering::parked_depth` in since the
+        // row learned its own depth, so the van stood further into the
+        // carriageway than the row it was meant to be standing in.
+        let offset = super::spawn::kerb_offset(edge.width, half.x);
+        let facing = if side > 0.0 { *direction } else { -*direction };
+        let skew = rng.random_range(SKEW.0..SKEW.1) * side;
+        let heading = super::spawn::heading_towards(facing) + skew;
+
+        // Somewhere along the street with nothing already standing in it.
+        // The row is parked bumper to bumper with gaps, and a van dropped
+        // into one without looking is a van dropped *into a parked car*: two
+        // bodies in one place, which Avian resolves by firing one of them
+        // over the rooftops. The patrol has a complaint with that exact
+        // wording and this was one of the things making it.
+        let phase = rng.random_range(0.0..1.0);
+        let Some(at) = (0..PITCHES).find_map(|pitch| {
+            // Stepped along the street rather than sampled from it. Random
+            // pitches re-test the same stretch and miss the gap two bays
+            // further on: sampling found three deliveries in the whole city
+            // where walking the street finds the same number as before.
+            let t = 0.25 + (pitch as f32 + phase) / PITCHES as f32 * 0.5;
+            let at = a + *direction * (t * edge.length) + normal * (offset * side);
+            let clear = |other: &Vec2| other.distance(at) > half.z + ROOM;
+            (parked.iter().all(|other| clear(&other.translation.xz()))
+                && standing.iter().all(clear))
+            .then_some(at)
+        }) else {
+            continue;
+        };
+        standing.push(at);
         let transform = Transform::from_xyz(at.x, super::spawn::resting_height(&spec), at.y)
             .with_rotation(Quat::from_rotation_y(heading));
         let van =
@@ -236,7 +326,10 @@ fn scatter(
         left += 1;
     }
 
-    info!("{left} deliveries in progress around the city");
+    info!(
+        "{left} deliveries in progress around the city, on {eligible} streets \
+         long enough and wide enough to have one"
+    );
 }
 
 /// One courier, dressed like anybody else and carrying a box.
@@ -376,20 +469,38 @@ mod tests {
 
     /// The van is out of the running lane.
     #[test]
-    fn a_delivery_does_not_block_the_traffic() {
-        // Parked cars sit 1.6m in from the kerb line and traffic copes with
-        // those, so a van 1.9m in is further out of the way than something the
-        // AI already drives past every day.
-        let van_in = 1.9f32;
-        let parked_in = 1.6f32;
-        assert!(
-            van_in > parked_in,
-            "the van is further into the lane than a parked car"
+    fn a_delivery_stands_exactly_where_a_parked_car_stands() {
+        // What this replaces asserted that a van 1.9 m in from the kerb was
+        // further out of the way than a parked car "1.6 m in". Parked cars
+        // have not been 1.6 m in since the row learned its own depth — they
+        // stand at `spawn::kerb_offset`, which on Landshut's median street is
+        // 2.4 m off the kerb — so the number the van carried put it *into* the
+        // running lane, and the test agreed with it because both numbers were
+        // written down in the test.
+        let half = VehicleClass::Truck.spec().half_extents.x;
+        for width in [7.5f32, 9.6, 13.6, 15.1] {
+            let van = crate::vehicle::spawn::kerb_offset(width, half);
+            let lane = crate::ai::steering::lane_offset(width, true);
+            assert!(
+                van > lane + half,
+                "on a {width} m street the van at {van} m is in the lane at {lane} m"
+            );
+        }
+    }
+
+    #[test]
+    fn nobody_delivers_to_a_street_with_nowhere_to_stop() {
+        // The one that made it a roadblock. On a four-metre Gasse there is no
+        // parking lane at all, and the old offset put the van ten centimetres
+        // off the centreline of a street two cars already cannot pass on.
+        assert_eq!(
+            crate::ai::steering::parking_for(4.0),
+            crate::ai::steering::Parking::None
         );
-        // On the narrowest street in the generator the van still has to be on
-        // the correct side of the centreline.
-        let narrowest = 9.5f32;
-        assert!(narrowest * 0.5 - van_in > 0.0, "the van is over the middle");
+        assert_ne!(
+            crate::ai::steering::parking_for(7.5),
+            crate::ai::steering::Parking::None
+        );
     }
 
     /// It reads as stopped rather than as parked.
