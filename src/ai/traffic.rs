@@ -21,7 +21,7 @@ use crate::vehicle::controller::{VehicleInput, VehicleState};
 use crate::vehicle::spawn::{AlwaysSimulated, VehicleAssets, resting_height, spawn_vehicle};
 use crate::vehicle::spec::VehicleClass;
 use crate::world::City;
-use crate::world::roadgraph::NodeId;
+use crate::world::roadgraph::{NodeId, TurnKind};
 
 // How many cars, and how far out they come and go, is
 // `GameConfig::traffic` now: "how alive is this city" is a thing the player
@@ -60,6 +60,7 @@ pub struct TrafficDriver {
     /// is at the end of the segment for the whole of it and the car chords
     /// across every bend — over the kerb and into the frontages.
     pub after: NodeId,
+    pub turn: TurnKind,
     pub lane_width: f32,
     /// Target cruising speed in m/s.
     pub cruise_speed: f32,
@@ -262,11 +263,13 @@ fn maintain_population(
 
         let cruise = rng.0.random_range(8.0..15.0);
         let vehicle = spawn_vehicle(&mut commands, &assets, &mut materials, spec, transform);
+        let after = choose_exit(&city, from, to, &mut rng.0);
         commands.entity(vehicle).insert((
             TrafficDriver {
                 from,
                 to,
-                after: choose_exit(&city, from, to, &mut rng.0),
+                after,
+                turn: city.graph.turn_kind(from, to, after),
                 lane_width: edge.width,
                 cruise_speed: cruise,
                 stuck: 0.0,
@@ -328,6 +331,7 @@ fn drive_traffic(
             driver.from = driver.to;
             driver.to = driver.after;
             driver.after = choose_exit(&city, driver.from, driver.to, &mut rng.0);
+            driver.turn = city.graph.turn_kind(driver.from, driver.to, driver.after);
             driver.lane_width =
                 width_between(&city, driver.from, driver.to).unwrap_or(driver.lane_width);
             start = city.graph.node(driver.from).pos;
@@ -492,6 +496,7 @@ mod tests {
             from: NodeId(0),
             to: NodeId(1),
             after: NodeId(2),
+            turn: TurnKind::Straight,
             lane_width: 8.0,
             cruise_speed: 10.0,
             stuck: 0.0,

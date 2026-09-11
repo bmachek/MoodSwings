@@ -36,6 +36,16 @@ pub struct RoadEdge {
     pub length: f32,
 }
 
+/// The movement a vehicle makes at a junction. Kept in the road module so
+/// traffic, crossings and future signals agree on the same geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnKind {
+    Straight,
+    Left,
+    Right,
+    UTurn,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RoadGraph {
     nodes: Vec<RoadNode>,
@@ -182,6 +192,23 @@ impl RoadGraph {
 
         None
     }
+
+    pub fn turn_kind(&self, from: NodeId, at: NodeId, to: NodeId) -> TurnKind {
+        let incoming = (self.node(at).pos - self.node(from).pos).normalize_or_zero();
+        let outgoing = (self.node(to).pos - self.node(at).pos).normalize_or_zero();
+        let dot = incoming.dot(outgoing);
+        if dot < -0.65 {
+            return TurnKind::UTurn;
+        }
+        let cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+        if cross.abs() < 0.22 {
+            TurnKind::Straight
+        } else if cross > 0.0 {
+            TurnKind::Left
+        } else {
+            TurnKind::Right
+        }
+    }
 }
 
 fn reconstruct(came_from: &HashMap<NodeId, NodeId>, goal: NodeId) -> Vec<NodeId> {
@@ -218,5 +245,45 @@ impl Ord for Candidate {
 impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cross() -> RoadGraph {
+        let mut graph = RoadGraph::default();
+        graph.add_node(Vec2::new(-10.0, 0.0), (0, 0));
+        graph.add_node(Vec2::ZERO, (1, 0));
+        graph.add_node(Vec2::new(0.0, 10.0), (1, 1));
+        graph.add_node(Vec2::new(10.0, 0.0), (2, 0));
+        graph
+    }
+
+    #[test]
+    fn classifies_left_right_and_straight_movements() {
+        let graph = cross();
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(2)),
+            TurnKind::Left
+        );
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(3)),
+            TurnKind::Straight
+        );
+        assert_eq!(
+            graph.turn_kind(NodeId(3), NodeId(1), NodeId(2)),
+            TurnKind::Right
+        );
+    }
+
+    #[test]
+    fn classifies_a_dead_end_turnaround() {
+        let graph = cross();
+        assert_eq!(
+            graph.turn_kind(NodeId(0), NodeId(1), NodeId(0)),
+            TurnKind::UTurn
+        );
     }
 }
