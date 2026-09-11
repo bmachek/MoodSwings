@@ -1422,6 +1422,39 @@ fn spawn_building(
         );
         return;
     }
+    // A wall tower is masonry with a pointed cap, not a thin office block:
+    // drawn through the facade classes, a twenty-metre tower five metres
+    // square came out as a Midrise with a window on every storey, and the
+    // seven of them up on the Hofberg read as a business park. The brick the
+    // churches are built of, a box, and a pyramid of tile.
+    if building.kind == super::citygen::BuildingKind::Tower {
+        let brick = assets.brick();
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(assets.stone_cube.clone()),
+            MeshMaterial3d(brick.clone()),
+            Transform::from_xyz(center.x, height * 0.5 + floor, center.y)
+                .with_rotation(Quat::from_rotation_y(yaw))
+                .with_scale(Vec3::new(frontage, height, throat)),
+            RigidBody::Static,
+            Collider::cuboid(1.0, 1.0, 1.0),
+        ));
+        let cap = super::roof::Pitch::plain(true, frontage, throat, height);
+        super::roof::spawn(
+            commands,
+            ctx.gables,
+            &brick,
+            seed,
+            super::roof::Rolls::from_seed(seed).age,
+            center,
+            yaw,
+            height + floor,
+            &cap,
+            chunk,
+            ctx.lod_scale,
+        );
+        return;
+    }
     // The church replaces its box the same way the garage does: the whole
     // structure comes from `world::church`, plus the sign on the nave. The
     // cathedral is the same anatomy at postcard scale.
