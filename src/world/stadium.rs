@@ -84,7 +84,7 @@ fn pitch_texture() -> Image {
                 (d - 52.0).abs() < 2.0
             }))
             .or(line(
-                (u < 0.13 || u > 0.87) && (0.28..0.72).contains(&v) && {
+                !(0.13..=0.87).contains(&u) && (0.28..0.72).contains(&v) && {
                     let edge_u = if u < 0.5 {
                         (u - 0.13).abs()
                     } else {
@@ -111,7 +111,7 @@ fn score_texture() -> Image {
     let title = encode("FC WUMMS - SV BOING");
     let score = encode("0 : 0 - VERLÄNGERUNG: EWIG");
     painted_rect(512, 128, TextureFormat::Rgba8UnormSrgb, move |u, v| {
-        if u < 0.015 || u > 0.985 || v < 0.06 || v > 0.94 {
+        if !(0.015..=0.985).contains(&u) || !(0.06..=0.94).contains(&v) {
             return [18, 20, 24, 255];
         }
         let lit =

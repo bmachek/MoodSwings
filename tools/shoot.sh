@@ -29,6 +29,11 @@
 #   tools/shoot.sh --only street,night   # just these framings
 #   tools/shoot.sh --town landshut       # the Landshut battery instead
 #
+# This is the visual half of judging a town. The numeric half is
+# `cargo run -- --survey --city landshuepf`, which builds the same layout
+# without a window and prints a scorecard in under a second; run it first,
+# because a change that moved a number is a change worth shooting.
+#
 # `--town` is a whole different battery rather than a `--city` spliced into the
 # framings above, and it has to be. Those framings carry hard coordinates of the
 # *generated* city on the default seed — a gas station, a basketball court, a
@@ -127,16 +132,21 @@ LANDSHUT=(
     # The Altstadt looking south down the market street: the postcard, and the
     # one framing that shows the setts, the gabled terrace and the width of the
     # street in the same frame.
-    "altstadt|--city Landshuepf --at 49.6,1.7,215 --look 49.6,1.4,150 --hour 12 --frames 200"
-    "altstadt-night|--city Landshuepf --at 49.6,1.7,215 --look 49.6,1.4,150 --hour 21.5 --frames 200"
+    # On the market street's own centreline, which the bake now puts between
+    # the house rows -- a framing on the old line stands inside a real house.
+    "altstadt|--city Landshuepf --at 34.2,1.7,197.7 --look -1.3,1.4,301.6 --hour 12 --frames 200"
+    "altstadt-night|--city Landshuepf --at 34.2,1.7,197.7 --look -1.3,1.4,301.6 --hour 21.5 --frames 200"
+    # And back the other way, north towards the Isar, in the afternoon light.
+    "altstadt-north|--city Landshuepf --at -1.3,1.7,301.6 --look 43.7,1.4,170.0 --hour 15 --frames 200"
     # Down onto the paving from a first-floor window. The only framing that
     # shows the size of a sett, which is the thing a plan view cannot lie about.
-    "setts|--city Landshuepf --at 49.6,7.0,215 --look 55,0,185 --hour 12 --frames 120"
+    "setts|--city Landshuepf --at 34.2,7.0,197.7 --look 40,0,168 --hour 12 --frames 120"
     # A junction from above: pavements, mitres, the junction plate and whether
     # anything is standing in the road.
-    "junction|--city Landshuepf --at 49.6,45,150 --look 49.6,0,149 --hour 12 --frames 120"
+    "junction|--city Landshuepf --at 43.7,45,170 --look 43.7,0,169 --hour 12 --frames 120"
     # Where the Isar runs, and does not yet.
-    "isar|--city Landshuepf --at 40,4.5,-224 --look -25,1,-329 --hour 12 --frames 120"
+    # From above the riverside trees, which the terrain now plants.
+    "isar|--city Landshuepf --at 40,14,-224 --look -25,1,-329 --hour 12 --frames 120"
     "isar-air|--city Landshuepf --at 30,170,-70 --look -20,0,-310 --stream-radius 1500 --hour 12 --frames 200"
     # The bare ground inside the town, which is the complaint this battery was
     # written to be able to see.
@@ -145,6 +155,29 @@ LANDSHUT=(
     # The whole town, for the roofline and for whether it still stops dead at
     # the edge of the built area.
     "air|--city Landshuepf --at 0,620,900 --look 0,20,-200 --stream-radius 1800 --hour 10 --frames 200"
+    # The Hofberg, from the Altstadt looking south up the hill: the one
+    # framing that shows the relief standing behind the roofs, and whether
+    # the town's flat floor meets it as a slope or as a cliff. The castle is
+    # up there on its own ground, so `trausnitz` looks across at it from the
+    # hill's own height rather than up from the street.
+    "hofberg|--city Landshuepf --at -37.1,1.7,429.7 --look 150,60,700 --stream-radius 1500 --hour 15 --frames 200"
+    "trausnitz|--city Landshuepf --at 200,45,380 --look 140,60,660 --hour 15 --frames 200"
+    # Down onto the Altstadt roofs from sixty metres: the roof shapes the map
+    # gave each building are only visible from above, and a gable that the
+    # map says is a hip is a mistake that no street framing can see.
+    "roofs|--city Landshuepf --at 36,60,330 --look 60,20,180 --stream-radius 1500 --hour 15 --frames 200"
+    # From high over the Isar plain, looking south across the whole town to
+    # the hill behind it: the postcard the relief was baked for.
+    "south-air|--city Landshuepf --at -300,420,-500 --look 150,30,600 --stream-radius 1800 --hour 10 --frames 200"
+    # One house front from nine metres at eye height, on the Altstadt. The
+    # framing that shows a render, a window reveal and a shutter at the size a
+    # person sees them, which is the size at which a facade is wrong.
+    "facade-close|--city Landshuepf --at 40,1.7,200 --look 56,6,197 --hour 15 --frames 120"
+    # A narrow side lane: the Ländgasse, four metres of setts running between
+    # the Altstadt and the Isar, from its midpoint looking along it. The
+    # market street is the postcard; a lane is where the street wall, the
+    # gap between two rows and the paving are all within arm's reach.
+    "lane|--city Landshuepf --at 41.8,1.7,37 --look 63.4,1.4,3.4 --hour 15 --frames 120"
     "cast|--city Landshuepf --lineup --hour 12"
 )
 

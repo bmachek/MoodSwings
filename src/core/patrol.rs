@@ -211,9 +211,7 @@ fn plan(city: &crate::world::City, here: Vec2, elapsed: f32) -> Vec<Vec2> {
             let half = behind
                 .and_then(|from| graph.neighbors(from).find(|(to, _)| *to == node))
                 .map_or(4.0, |(_, edge)| graph.edge(edge).width * 0.5);
-            walked.push(
-                at + crate::ai::steering::right_of(*direction) * (half + PAVEMENT_WALK),
-            );
+            walked.push(at + crate::ai::steering::right_of(*direction) * (half + PAVEMENT_WALK));
         }
         previous = at;
         behind = Some(node);
@@ -402,7 +400,11 @@ fn keep_watch(
         // however much it has to make up. Whether the parked cars leaving the
         // ground are a hitch or a placement bug is a question about *when*, and
         // the report could not answer it.
-        info!("patrol {:.0}s: a {:.0}ms frame", patrol.elapsed, frame * 1000.0);
+        info!(
+            "patrol {:.0}s: a {:.0}ms frame",
+            patrol.elapsed,
+            frame * 1000.0
+        );
     }
 
     watch.since += frame;

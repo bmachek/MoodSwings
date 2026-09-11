@@ -118,9 +118,18 @@ const AWNING_THICK: f32 = 0.022;
 ///
 /// Two rather than one because a residential street is a row of buildings of
 /// the same class, and one pattern would put every balcony in the city on the
-/// same bay of the same floor. Two rather than five because the patterns are
-/// baked into shared meshes, and every one of them is a mesh per class.
-pub const VARIANTS: u32 = 2;
+/// same bay of the same floor. Not five, because the patterns are baked into
+/// shared meshes, and every one of them is a mesh per class. The third is
+/// [`BARE`]: the same wall with no balcony on it at all, which is what an
+/// old town is — a Bürgerhaus hangs an oriel off its front and nothing
+/// else, and a concrete balcony on a lime-rendered gable house is the
+/// single loudest "1970" a street can say. A style that has no balconies
+/// (`CityStyle::balconies`) forces it; everywhere else it is one roll in
+/// three, which is also more variety than two patterns gave.
+pub const VARIANTS: u32 = 3;
+
+/// The variant with no balconies — see [`VARIANTS`].
+pub const BARE: u32 = 2;
 
 // ----------------------------------------------------------------- doors ----
 
@@ -536,7 +545,10 @@ fn has_balconies(class: FacadeClass) -> bool {
 
 /// Which cells carry a balcony, given the building's variant.
 fn balcony_at(class: FacadeClass, column: u32, row: u32, variant: u32) -> bool {
-    has_balconies(class) && row >= 1 && (column + row + variant).is_multiple_of(3)
+    has_balconies(class)
+        && variant % VARIANTS != BARE
+        && row >= 1
+        && (column + row + variant).is_multiple_of(3)
 }
 
 /// Which shopfronts have an awning out.

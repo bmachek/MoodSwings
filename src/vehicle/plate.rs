@@ -75,7 +75,7 @@ pub fn texture(registration: &str) -> Image {
             // The reflective white, and a dark rim around it — a plate is
             // pressed, and the pressing is what you see of it at any distance
             // where the letters have stopped resolving.
-            let border = u < 0.035 || u > 0.965 || v < 0.06 || v > 0.94;
+            let border = !(0.035..=0.965).contains(&u) || !(0.06..=0.94).contains(&v);
             let field: [u8; 4] = if border {
                 [26, 28, 34, 255]
             } else {

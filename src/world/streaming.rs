@@ -205,6 +205,8 @@ pub struct StreetKits<'w> {
     signs: Res<'w, crate::world::atlas::Signposts>,
     /// Where the tarmac is, so nothing upright is stood on it.
     corridors: Res<'w, crate::world::streetside::Corridors>,
+    /// The shape of the ground, for anything planted off a street.
+    terrain: Res<'w, crate::world::terrain::Terrain>,
 }
 
 pub fn update_streaming(
@@ -317,10 +319,28 @@ pub fn update_streaming(
                     &street.foliage,
                     &mut sowing,
                     &city.grounds[i],
+                    &street.terrain,
                     chunk,
                     foliage_range,
                 );
             }
+        }
+        // And the hillside, which is on no map at all — it is read off the
+        // relief. Its own stream, so a wood does not reshuffle the parks.
+        {
+            let mut sowing = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::WOODS,
+                (chunk.x, chunk.y),
+            );
+            super::vegetation::spawn_hillside(
+                &mut commands,
+                &street.foliage,
+                &mut sowing,
+                &street.terrain,
+                chunk,
+                foliage_range,
+            );
         }
         if let Some(streets) = index.streets_in(chunk) {
             let mut rng = crate::core::rng::stream_for_chunk(

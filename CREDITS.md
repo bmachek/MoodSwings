@@ -4,8 +4,8 @@ Mood Swings is an original work. The city, the vehicles, the crowd, every
 texture and every face are generated at runtime from a seed — there is no
 third-party art in this repository and no trademark is used.
 
-There are now two exceptions, and the second one arrived with Landshut — see
-*Map data* below. Everything else still holds.
+There are now three exceptions, and the last two arrived with Landshut — see
+*Map data* and *Relief* below. Everything else still holds.
 
 The one thing the game does not make for itself is sound. Every sound in the
 bank is a **CC0 1.0** recording made by somebody else, fetched by
@@ -83,16 +83,24 @@ on load.
 `assets/cities/landshut.ron` is Landshut itself, in a square about two
 kilometres across centred on the Altstadt:
 
-- five hundred and fifty streets with their real names, widths and surfaces;
-- two thousand six hundred buildings where they really stand, each reduced to
-  the smallest rotated rectangle that holds it, with the storeys the mappers
-  counted and what the tags say it is for;
+- three hundred and eighty streets with their real names, widths and
+  surfaces, the widths capped to what fits between the houses;
+- two thousand nine hundred and fifty buildings where they really stand, each
+  polygon cut into the rectangles that cover it (an L is two, a courtyard
+  block four), with the storeys the mappers counted, what the tags say it is
+  for, and the roof shape where anybody recorded one;
 - the Isar and its arms — Große Isar, Kleine Isar — and the mill races;
-- and eighty-five pieces of open ground: the parks, the pitches, the
-  allotments, the cemetery.
+- eighty-five pieces of open ground: the parks, the pitches, the allotments,
+  the cemetery;
+- and the shape of the ground — see *Relief*.
 
 It is baked from Overpass extracts by `tools/fetch-city.sh`, which downloads
-them, and `tools/bake-city.py`, which projects them into metres.
+them, and `tools/bake-city.py`, which projects them into metres. The
+buildings come from the [Overture Maps](https://overturemaps.org) buildings
+theme, fetched by `tools/fetch-overture.py`: the OpenStreetMap footprints,
+plus the ones Microsoft traced from imagery where nobody has mapped a shed by
+hand. Overture publishes the theme as a whole under ODbL 1.0 — **© OpenStreetMap
+contributors** and **© Microsoft** — so the baked file's licence does not change.
 
 **Map data © OpenStreetMap contributors**, licensed under the
 [Open Database Licence 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
@@ -112,10 +120,26 @@ The *game* is not a derived database. Screenshots, recordings and the rendered
 world are Produced Works, which ODbL allows under any terms; the game's own
 code stays GPL-3.0-or-later as it always was.
 
-Only the roads were taken. No building footprints, no addresses, no points of
-interest — every building standing on those streets is generated from the seed
-by `world::streetside`, and any resemblance to the house actually standing
-there is a coincidence of arithmetic.
+No addresses and no points of interest were taken; the seventy buildings a
+person would walk across town to see keep their names, and the two thousand
+nine hundred that make up the street walls are anonymous. Where the map has
+no building, `world::streetside` invents one from the seed, and any
+resemblance to the house actually standing there is a coincidence of
+arithmetic.
+
+## Relief — [Copernicus DEM](https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model) GLO-30
+
+The `relief` section of the baked file is the ground under Landshut: the
+Copernicus GLO-30 surface model, thirty metres a pixel, resampled onto a fine
+grid over the town and a coarse one to the horizon and written as metres
+above the valley floor. It is what puts the Hofberg behind St. Martin.
+
+**Copernicus DEM GLO-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space
+GmbH 2014-2018, provided under COPERNICUS by the European Union and ESA; all
+rights reserved.** It is free to use and to redistribute in a derived form on
+condition of that notice, which the bake writes into the file's header and
+which stands here. The tile is fetched by `tools/fetch-overture.py dem` from
+the public bucket; nothing but the resampled grid is committed.
 
 ## Software
 

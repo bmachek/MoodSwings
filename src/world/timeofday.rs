@@ -53,9 +53,14 @@ const WINDOW_GLOW: f32 = 3.0;
 /// And what a window is lit to when it is broad daylight outside.
 ///
 /// Against a sunlit render at about two thirds of the white point, an eighth
-/// reads as a room seen through glass — darker than the wall around it, which
-/// is right, and not black, which it was.
-const DAYLIT_PANE: f32 = 0.12;
+/// was meant to read as a room seen through glass — darker than the wall
+/// around it. It did not: an eighth of `WINDOW_GLOW` is over a third of a
+/// white point, *added* to a pane that is already reflecting the sky, and
+/// through the mask's tungsten tint, so every window in Landshut at noon was
+/// a warm yellow rectangle and every shopfront a cream board brighter than
+/// the sunlit wall. A twentieth keeps the room from going black and lets the
+/// glass be glass.
+const DAYLIT_PANE: f32 = 0.05;
 
 #[derive(Resource, Debug, Clone)]
 pub struct TimeOfDay {

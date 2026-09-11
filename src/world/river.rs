@@ -173,12 +173,53 @@ const BANK_THICK: f32 = 0.8;
 /// between the wall and the surface at a grazing angle.
 const BANK_BITE: f32 = 0.35;
 
+/// Water narrower than this that runs *along* a street is in a pipe.
+///
+/// Landshut is threaded with mill races — the Stadtbach, the Hammerbach, the
+/// Klötzlmühlbach — and where one runs down a street it was culverted a
+/// century ago: the map still carries the watercourse, the street is laid
+/// over it. Drawn as open water it was a black stripe along the kerb of the
+/// Altstadt, which is what the first screenshot of the market showed. The
+/// Isar is wider than this and crosses streets rather than following them,
+/// and a crossing is a bridge, which is a road that was going to be there
+/// anyway.
+const CULVERT_WIDTH: f32 = 8.0;
+
+/// Whether a point lies within a street's corridor: carriageway and pavement,
+/// and a little slack for the kerb.
+fn under_a_street(graph: &super::roadgraph::RoadGraph, at: Vec2) -> bool {
+    for edge in graph.edges() {
+        let (a, b) = (graph.node(edge.a).pos, graph.node(edge.b).pos);
+        let span = b - a;
+        let length = span.length_squared();
+        if length < 1e-6 {
+            continue;
+        }
+        let t = ((at - a).dot(span) / length).clamp(0.0, 1.0);
+        let reach = edge.width * 0.5 + super::citygen::SIDEWALK_WIDTH + 0.5;
+        if at.distance_squared(a + span * t) < reach * reach {
+            return true;
+        }
+    }
+    false
+}
+
+/// A segment of a narrow watercourse whose both ends are under a street is
+/// culverted there and not drawn. A wide river is never; a narrow one that
+/// merely crosses a street has an end on either side of it.
+fn culverted(layout: &CityLayout, width: f32, from: Vec2, to: Vec2) -> bool {
+    width < CULVERT_WIDTH
+        && under_a_street(&layout.graph, from)
+        && under_a_street(&layout.graph, to)
+}
+
 /// Raises a town's real rivers.
 ///
 /// Nothing here looks for a bridge and nothing needs to. The water is laid at
 /// [`super::layer::WATER`], one millimetre off the grass and thirteen under the
 /// lowest carriageway, so every street that crosses it is already drawn over
-/// it. A bridge is a road that was going to be there anyway.
+/// it. A bridge is a road that was going to be there anyway. What it does look
+/// for is a stream running *along* a street — see [`CULVERT_WIDTH`].
 pub fn spawn_waters(
     commands: &mut Commands,
     layout: &CityLayout,
@@ -196,7 +237,11 @@ pub fn spawn_waters(
     // surface gets the reflection for nothing and the sky comes free from the
     // atmosphere probe.
     let water = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.10, 0.20, 0.24),
+        // The Isar is a glacial river and comes down from the Alps grey-green,
+        // not the ink the first pass here was; from above it reads as a pale
+        // jade band between the trees, and that is what the town's own
+        // postcards show.
+        base_color: Color::srgb(0.18, 0.30, 0.29),
         perceptual_roughness: 0.08,
         metallic: 0.0,
         ..default()
@@ -210,15 +255,21 @@ pub fn spawn_waters(
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
 
     let mut surfaces = 0usize;
+    let mut piped = 0usize;
     for (index, arm) in layout.waters.iter().enumerate() {
         // A slot per arm, so where two arms of one river run into each other
         // around an island the two surfaces are not laid at the same height.
-        let level = super::layer::WATER + super::layer::slot(index as u32, super::layer::WATER_SLOTS);
+        let level =
+            super::layer::WATER + super::layer::slot(index as u32, super::layer::WATER_SLOTS);
         for pair in arm.points.windows(2) {
             let (from, to) = (pair[0], pair[1]);
             let Ok(direction) = Dir2::new(to - from) else {
                 continue;
             };
+            if culverted(layout, arm.width, from, to) {
+                piped += 1;
+                continue;
+            }
             let middle = from.midpoint(to);
             let yaw = direction.x.atan2(direction.y);
             // Half its own width longer than the segment, so consecutive
@@ -266,6 +317,9 @@ pub fn spawn_waters(
             let Ok(direction) = Dir2::new(to - from) else {
                 continue;
             };
+            if culverted(layout, arm.width, from, to) {
+                continue;
+            }
             let middle = from.midpoint(to);
             commands.spawn((
                 Name::new("Water body"),
@@ -278,16 +332,67 @@ pub fn spawn_waters(
         }
     }
     info!(
-        "{} arms of the town's rivers, {surfaces} surfaces",
+        "{} arms of the town's rivers, {surfaces} surfaces, {piped} runs culverted under a street",
         layout.waters.len()
     );
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::world::citygen;
+
+    /// A mill race down a street is in a pipe; the same race crossing the
+    /// street is under a bridge, and the river never is.
+    #[test]
+    fn a_stream_along_a_street_is_culverted_and_one_across_it_is_not() {
+        use crate::world::atlas::Surface;
+        use crate::world::roadgraph::RoadGraph;
+        let mut graph = RoadGraph::default();
+        let west = graph.add_node(Vec2::new(-100.0, 0.0), (0, 0));
+        let east = graph.add_node(Vec2::new(100.0, 0.0), (0, 1));
+        graph.connect(west, east, 8.0, false, Surface::Asphalt);
+        let layout = citygen::CityLayout {
+            seed: 1,
+            half_extent: 400.0,
+            x_streets: Vec::new(),
+            z_streets: Vec::new(),
+            blocks: Vec::new(),
+            graph,
+            canal: None,
+            grounds: Vec::new(),
+            waters: Vec::new(),
+            relief: None,
+        };
+        // Along the street, inside its corridor: piped.
+        assert!(culverted(
+            &layout,
+            5.0,
+            Vec2::new(-40.0, 2.0),
+            Vec2::new(-28.0, 2.0)
+        ));
+        // Across it: an end on either side, not piped.
+        assert!(!culverted(
+            &layout,
+            5.0,
+            Vec2::new(0.0, -12.0),
+            Vec2::new(0.0, 12.0)
+        ));
+        // Well away from it: not piped.
+        assert!(!culverted(
+            &layout,
+            5.0,
+            Vec2::new(-40.0, 40.0),
+            Vec2::new(-28.0, 40.0)
+        ));
+        // The Isar, whatever it runs along.
+        assert!(!culverted(
+            &layout,
+            42.0,
+            Vec2::new(-40.0, 2.0),
+            Vec2::new(-28.0, 2.0)
+        ));
+    }
 
     #[test]
     fn the_canal_is_a_minor_street_and_its_edges_are_gone() {

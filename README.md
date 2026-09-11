@@ -218,6 +218,7 @@ afforded.
 | `--city S` | Build this `CityStyle` instead of the persisted one (`landshuepf`, `newdork`, …) |
 | `--film DIR` | Write a numbered frame into `DIR` instead of one still — see below |
 | `--film-every N` / `--film-frames N` | How often to write, and how many |
+| `--survey` | Build the layout without a window and print a scorecard instead of a frame — see below; takes `--city` and `--seed N` |
 
 ### Filming a run
 
@@ -238,6 +239,30 @@ Frames are written one at a time — encoding a 1600x900 PNG takes longer than a
 frame does, so a filmed run plays at about ten a second and the clock is the
 game's rather than the recorder's. The first take of this found three defects
 in ten minutes, two of which no still framing and no unit test could have seen.
+
+### The survey
+
+A screenshot cannot count. How much of the mapped footprint the bake kept, how
+much of a street has a wall along it, whether the ground under every corridor
+is still exactly zero — those are numbers, and rendering a frame to guess at
+one of them is a minute of GPU for a quarter of the town.
+
+```sh
+cargo run -- --survey --city landshuepf            # the committed Landshut
+cargo run -- --survey --city landshuepf --seed 7   # another seed's terraces
+cargo run -- --survey                              # the persisted city and seed
+```
+
+builds exactly what the game builds — atlas, layout, the town's own footprints,
+the marcher's terraces, the terrain — and prints one screen of figures in under
+half a second, without starting Bevy at all: streets by width and surface, real
+buildings against invented ones, the roof mix the map gave, coverage of the
+mapped footprint, street-wall closure overall and in the core with the ten
+longest unbuilt stretches named and placed, the relief's range and the worst
+height under any street. `core::survey`'s tests hold the committed Landshut to
+a bar on each of those, so a re-bake that lost a tenth of the Altstadt fails
+`cargo test` before anybody shoots it. The survey is the numeric half of
+`tools/shoot.sh --town landshut`; run it first, and shoot what moved.
 
 ## Licence
 
@@ -726,6 +751,59 @@ Irgendstadt, Landshüpf (low pastels under the world's tallest brick tower),
 New Dork (1.8× heights, twice the advertising), Londoof, Minga (extra
 markets) or Paree — chosen in the settings, applied at the next launch.
 
+## Landshut
+
+Landshüpf stopped being a postcard of nowhere. `assets/cities/landshut.ron`
+is the real town, and the game builds it as it stands:
+
+- **The streets** are the real ones, off OpenStreetMap, with their names,
+  their widths and what they are paved with — the Altstadt in ten-centimetre
+  granite Kleinpflaster laid in courses, the Neustadt in slabs. A folded band
+  like the market street is centred between its house rows rather than left
+  on whichever lane was longest, and every street is capped to what fits
+  between its buildings, because a medieval lane is narrower between its
+  walls than its lane count implies. The Altstadt is mapped as one closed
+  way — up one lane, round the top and down the other — and once both lanes
+  are on one centreline that loop is the same street twice, with a pavement
+  laid across the carriageway at every turn-round; the bake cuts a looped
+  band down to its longest run and puts every side street that met the
+  dropped lane back onto the spine as a junction.
+- **The buildings** are the real footprints, from the Overture Maps buildings
+  theme: each polygon cut at bake time into the rectangles that cover it (an
+  L is two, a courtyard block four), so the ring blocks round a courtyard
+  exist instead of being thrown away as too ragged for a box. Two thousand
+  nine hundred and fifty of them, in four thousand seven hundred parts,
+  covering ninety-nine percent of the mapped footprint; the marcher invents
+  a house only where the map has none. Roof shapes come with them where
+  anybody recorded one.
+- **The ground** is the Copernicus elevation model, baked as metres above the
+  valley floor. The town stays exactly flat wherever a street runs — that is
+  the rule every spawner relies on — and where no street reaches, the
+  Hofberg rises seventy metres behind St. Martin, wooded on the face it turns
+  to the town, with the castle's wings on one levelled courtyard on top. A
+  street the map takes up the hill is left to the hill rather than cut into
+  it as a trench.
+- **The roofs** are a carpet of steep red tile to the edge of town, and
+  drawn to the edge of town: Vorschussmauer screens with an attic storey of
+  windows on the Altstadt houses, plain Satteldächer and Walmdächer
+  everywhere else, with dormers, chimneys on the ridge, and flat decks only
+  on the supermarket and the car park. From the air the roofs are the town,
+  so they outlive the facade courses by two kilometres rather than stopping
+  where the walls turn into plain boxes.
+- **The castle** is whitewashed. Whatever the map put up on the Hofberg
+  wears the cream slot of the palette and the plainest window grid there
+  is, with no shopfront under it: a wing of Trausnitz drawn as a parade of
+  shops in dusty rose was the one thing in the aerial framing that said
+  "generated". Past the edge of the baked relief the rolling country the
+  invented cities stand in is faded back in, so the skyline behind the real
+  hills is hills and not the sea a plain to the horizon reads as.
+- **The mill races** that run down a street are in a pipe, as they have been
+  for a century; the Isar is the grey-green of a glacial river.
+
+The bake is `tools/fetch-city.sh` and `tools/bake-city.py`, and a bake of its
+own output is its own output. `cargo run -- --survey --city landshuepf` says
+in numbers what the render says in pixels — see *The survey* above.
+
 ## Deferred
 
 The opaque pass writes a g-buffer rather than shading in place, at every quality
@@ -1025,12 +1103,18 @@ in the world.
 
 ## Known limitations
 
-- A `CityStyle` is a postcard, not a map. Landshüpf gets the real
-  Landshut's heights, pastels, spire count and one absurdly tall St. Martin,
-  but the street plan underneath is still the same perturbed grid — the
-  whole world is axis-aligned rectangles from the kerbs up, and a layout
-  that follows the real Altstadt needs curved blocks the pipeline cannot
-  hold yet. Map-faithful cities are their own future milestone.
+- A `CityStyle` is a postcard, and only Landshüpf is also a map. The other
+  five are the same perturbed grid in different clothes; a second real town
+  is a run of `tools/fetch-city.sh` and a match arm, but nobody has run it.
+  Landshut's buildings are rectangles in their own frames rather than the
+  polygons they came from — a courtyard is four boxes, a curved wing is two
+  or three — and the pavement beside every street is one width for the
+  whole town, so a lane between houses eight metres apart carries the same
+  three-metre pavements as the market street. The castle on the Hofberg is
+  its real wings in whitewash under red roofs, not Trausnitz's arcaded
+  courtyard; the country past the six-kilometre relief grid is invented; and
+  the Altstadt's shop windows are painted displays behind glass, with
+  arcades, oriels and the wall lanterns still to come.
 
 - The canal is one straight street of water. It reads as a river because the
   kerbs read as quays and every crossing reads as a bridge, but it neither
@@ -1042,15 +1126,16 @@ in the world.
   walks in through a turnstile, and the fixture on the scoreboard will never
   progress past nil-nil, which is at least thematically consistent.
 
-- The town has hills round it and no hill in it. `world::terrain` displaces the
-  ground, but only where nothing is built — the height is exactly zero inside a
-  corridor rasterised from the road graph, because about thirty spawners write
-  a world y directly and every one of them means "the ground here is at zero".
-  So the streets are level, the back land rolls by centimetres, and the
-  landscape is out past where the player can walk. Landshut happens to want
-  exactly that, being a town on a valley floor; a hill town would want the
-  other thing, and would want every one of those thirty spawners rewritten
-  first.
+- The town is flat wherever it is built. `world::terrain` shapes the ground
+  from the elevation model, but the height is exactly zero inside a corridor
+  rasterised from the road graph, because about thirty spawners write a world
+  y directly and every one of them means "the ground here is at zero". So
+  the Hofberg is real and the castle stands on it, but the streets the map
+  takes up the hill — the Hofberg quarter, the Alte Bergstraße climbing to the
+  castle, the tunnel under it — are left out rather than built as trenches,
+  and a landmark up there keeps its walls and its roof and nothing that
+  assumes a pavement. A town built *on* its hill would want every one of
+  those thirty spawners rewritten first.
 
 - The cultural quarters recolour; they do not rebuild. Klein-Neapel and the
   Fernost-Viertel wear their own palettes, force their own restaurants and

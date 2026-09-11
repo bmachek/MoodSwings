@@ -52,6 +52,13 @@ fn main() {
         crate::audio::audition::write(&directory);
         return;
     }
+    // Builds the town the way the game does, prints a scorecard and stops.
+    // Same shape as the audition, same reason: the layout is a pure function
+    // of seed, style and atlas, and judging it by numbers needs no window.
+    if let Some(request) = crate::core::survey::requested() {
+        crate::core::survey::run(&request);
+        return;
+    }
 
     App::new()
         .add_plugins(

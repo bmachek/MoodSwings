@@ -63,6 +63,7 @@ pub fn spawn(
     commands: &mut Commands,
     assets: &CityAssets,
     center: Vec2,
+    ground: f32,
     width: f32,
     depth: f32,
     height: f32,
@@ -70,7 +71,9 @@ pub fn spawn(
     chunk: IVec2,
 ) {
     let spin = Quat::from_rotation_y(yaw);
-    let place = |at: Vec3| spin * at + Vec3::new(center.x, SIDEWALK_HEIGHT, center.y);
+    // On the pavement, or on the plateau under a gatehouse kept up on the
+    // hill — see `Building::ground`.
+    let place = |at: Vec3| spin * at + Vec3::new(center.x, ground + SIDEWALK_HEIGHT, center.y);
     let brick = assets.brick();
 
     // A gate that cannot clear a lorry is not one. The map gives the Ländtor
@@ -128,7 +131,17 @@ pub fn spawn(
             Vec3::new(jamb, height, tower_depth),
             Quat::IDENTITY,
         );
-        parapet(commands, assets, &place, spin, chunk, at, height, jamb, tower_depth);
+        parapet(
+            commands,
+            assets,
+            &place,
+            spin,
+            chunk,
+            at,
+            height,
+            jamb,
+            tower_depth,
+        );
     }
 
     // The span over the opening: solid, and starting at the clearance, so what

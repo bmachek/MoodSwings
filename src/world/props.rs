@@ -250,6 +250,11 @@ pub struct PropAssets {
     bench: (Handle<Mesh>, Handle<StandardMaterial>, f32),
     news_box: (Handle<Mesh>, Handle<StandardMaterial>, f32),
     planter: (Handle<Mesh>, Handle<StandardMaterial>, f32),
+    /// What grows in the planter. Without it the trough was a grey block at
+    /// the kerb — the one prop a player circled on a screenshot and asked what
+    /// it was, which is a fair question about a concrete cube with nothing in
+    /// it.
+    planter_top: (Handle<Mesh>, Handle<StandardMaterial>),
     phone_box: (Handle<Mesh>, Handle<StandardMaterial>, f32),
     /// The signal head, its pole, and the lens plate that faces the traffic.
     signal_post: (Handle<Mesh>, Handle<StandardMaterial>, f32),
@@ -345,12 +350,25 @@ pub fn build_assets(
         ),
         planter: (
             meshes.add(Cuboid::new(0.86, 0.58, 0.86)),
+            // Pale cast concrete, weathered. It was a darker grey-brown, and a
+            // dark cube at a kerb reads as a bin or a junction box; a trough is
+            // pale because it is made of the same mix as a kerbstone.
             materials.add(StandardMaterial {
-                base_color: Color::srgb(0.44, 0.42, 0.39),
+                base_color: Color::srgb(0.58, 0.56, 0.52),
                 perceptual_roughness: 0.97,
                 ..default()
             }),
             0.58,
+        ),
+        planter_top: (
+            // A clipped box shrub, a little wider than tall and lower than a
+            // head: what a council actually puts in a trough.
+            meshes.add(Sphere::new(0.46).mesh().uv(16, 10)),
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(0.22, 0.33, 0.16),
+                perceptual_roughness: 0.96,
+                ..default()
+            }),
         ),
         phone_box: (
             meshes.add(Cuboid::new(0.94, 2.42, 0.94)),
@@ -567,6 +585,18 @@ pub fn spawn_edge(
                 }
             }
 
+            if prop == Prop::Planter {
+                // The shrub sits in the trough, its underside inside the
+                // concrete so it reads as planted rather than balanced. The
+                // planter's mesh is centred, so the rim is half its height up.
+                let (top_mesh, top_material) = &assets.planter_top;
+                entity.with_child((
+                    Mesh3d(top_mesh.clone()),
+                    MeshMaterial3d(top_material.clone()),
+                    Transform::from_xyz(0.0, height * 0.5 + 0.20, 0.0)
+                        .with_scale(Vec3::new(1.0, 0.72, 1.0)),
+                ));
+            }
             if prop == Prop::Sign {
                 // The plate rides near the top of its post, facing along the
                 // street rather than at a random angle — a sign nobody can read
@@ -647,8 +677,8 @@ mod tests {
     #[test]
     fn a_signal_looks_back_at_the_traffic_it_is_for() {
         // An arm running east out of the origin: traffic arrives heading west.
-        let (foot, yaw) = signal_pose(Vec2::ZERO, Vec2::new(60.0, 0.0), 17.0)
-            .expect("an arm with a length");
+        let (foot, yaw) =
+            signal_pose(Vec2::ZERO, Vec2::new(60.0, 0.0), 17.0).expect("an arm with a length");
 
         assert!(
             foot.x > 0.0,

@@ -235,12 +235,14 @@ pub fn maybe_chimney(
     footprint_centre: Vec2,
     size: Vec2,
     yaw: f32,
-    // How far this building's ridge stands above its eaves, if it has one.
-    // `None` is a flat roof, where the deck *is* the top of the wall and a
-    // stack stands straight on it. On a pitched one the top of the wall is the
-    // eaves, and a chimney stood there is a chimney inside a roof — which is
-    // what every chimney in the Altstadt was.
-    ridge: Option<f32>,
+    // The roof over this building, if it is a pitch. `None` is a flat roof,
+    // where the deck *is* the top of the wall and a stack stands straight on
+    // it. On a pitched one the top of the wall is the eaves, and a chimney
+    // stood there is a chimney inside a roof — which is what every chimney in
+    // the Altstadt was. The pitch knows which way its ridge runs and how high
+    // its tiles are at any point, which is what puts the stack *on* them
+    // whether the ridge runs back from the street or along it.
+    pitch: Option<&super::roof::Pitch>,
     chunk: IVec2,
     range: &VisibilityRange,
 ) {
@@ -253,7 +255,7 @@ pub fn maybe_chimney(
     // nothing on it. A flat deck keeps the old rate — a plant room and a
     // ventilation stack are what a flat roof puts up there, and `rooftop`
     // already does those.
-    let lit = if ridge.is_some() {
+    let lit = if pitch.is_some() {
         GABLED_FIRES
     } else {
         CHIMNEYS
@@ -272,24 +274,30 @@ pub fn maybe_chimney(
     // Near the ridge on a pitched roof, because that is where a flue comes out
     // and because a stack halfway down a slope has to be built twice as tall
     // on its downhill side to stand up straight.
-    let spread = if ridge.is_some() { 0.16 } else { 0.34 };
-    let across = rng.random_range(-spread..spread) * size.x;
-    let back = rng.random_range(0.08..0.34) * size.y;
-    let offset = Quat::from_rotation_y(yaw) * Vec3::new(across, 0.0, back);
-    let at = footprint_centre + offset.xz();
-    // The roof surface under the stack. A `Giebelhaus` falls to its two side
-    // walls, so the surface at `across` from the ridge is the ridge less what
-    // the pitch does over that distance — and the pitch is the ridge over the
-    // half-frontage, which is all this needs to know about it.
-    let standing = match ridge {
-        Some(ridge) => ridge * (1.0 - across.abs() / (size.x * 0.5).max(0.1)).max(0.0),
-        None => 0.0,
+    //
+    // Two draws, in this order, whatever the roof: the first pass drew them
+    // as `across` and `back` for a ridge that always ran back from the
+    // street, and a `Giebelhaus` still reads them exactly that way — so every
+    // fire lit in the Altstadt is lit where it was. A `Traufhaus` turns the
+    // same two numbers round; a hip keeps them on the ridge. `Pitch` owns
+    // that arithmetic, and the height of the tiles under the result.
+    let spread = if pitch.is_some() { 0.16 } else { 0.34 };
+    let near = rng.random_range(-spread..spread);
+    let along = rng.random_range(0.08..0.34);
+    let (spot, standing) = match pitch {
+        Some(pitch) => {
+            let spot = pitch.chimney_spot(near, along);
+            (spot, pitch.surface(spot.x, spot.y))
+        }
+        None => (Vec2::new(near * size.x, along * size.y), 0.0),
     };
+    let offset = Quat::from_rotation_y(yaw) * Vec3::new(spot.x, 0.0, spot.y);
+    let at = footprint_centre + offset.xz();
     chimney(
         commands,
         kit,
         at,
-        super::buildings::SIDEWALK_HEIGHT + building.height + standing,
+        super::buildings::SIDEWALK_HEIGHT + building.ground + building.height + standing,
         yaw,
         chunk,
         range,
