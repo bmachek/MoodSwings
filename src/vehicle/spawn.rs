@@ -652,6 +652,17 @@ const BAY_GAP: f32 = 0.35;
 const PARK_CELL: f32 = 8.0;
 
 /// Scatters parked cars along the kerbs so there is always something to steal.
+/// Where a body of this half-width stands when it is parked against the kerb
+/// of a street this wide, measured from the centreline.
+///
+/// One function because two things park at a kerb — the row itself and
+/// `vehicle::delivery`'s van — and the van used to carry its own number for
+/// it. A magic 1.9 m, justified by a comment claiming parked cars sit 1.6 m
+/// in, which stopped being true the day the row learned its own depth.
+pub fn kerb_offset(width: f32, half_width: f32) -> f32 {
+    (width * 0.5 - half_width - KERB_CLEARANCE).max(0.0)
+}
+
 pub fn spawn_parked_vehicles(
     mut commands: Commands,
     config: Res<GameConfig>,
@@ -766,7 +777,7 @@ pub fn spawn_parked_vehicles(
             // resolves that the only way it can, and the patrol caught what it
             // looks like: a parked car leaving the ground at thirteen metres a
             // second and coming down from seventy.
-            let offset = (edge.width * 0.5 - spec.half_extents.x - KERB_CLEARANCE).max(0.0);
+            let offset = kerb_offset(edge.width, spec.half_extents.x);
             // Where in its own bay the car stands, measured to its *middle*.
             // A bay is a car's length plus shunting room, so the middle can
             // only move by what is left over — half a metre or so for a truck.

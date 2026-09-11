@@ -111,6 +111,54 @@ is under 4.5 m.
   — and still cannot tell two perpendicular straight-through movements apart,
   which is the first thing that has to change when it gets one.
 
+### The van that was parked in the road
+
+With the alleys sorted, the same question again, asked of the same log: where
+do the *remaining* recoveries happen? The answer inverted. Before, 63% were on
+a four-metre carriageway and 25% on the Altstadt; after, 25% are on a Gasse and
+**68% are on the Altstadt band** — and 25 of the 28 read `Obstacle`, blocked by
+low-index, generation-zero entities, which is to say by bodies that were
+standing there before the traffic arrived and never moved.
+
+`vehicle::delivery` was one of them, and its own module note says it should not
+have been. The note is explicit that the van stands *in the parking lane*
+rather than the running one, because "`ai::traffic` drives edge to edge with no
+idea the van is there". The code did not do that:
+
+- It stood the van `width * 0.5 - 1.9` from the centreline, a number justified
+  by a comment saying parked cars sit 1.6 m in. They have stood at
+  `spawn::kerb_offset` since the row learned its own depth, so the van was
+  further into the carriageway than the row it was supposed to be in. The test
+  agreed because both numbers were written down in the test.
+- It did that on *every* street, including the ones with no parking lane at
+  all. On a four-metre Gasse `width * 0.5 - 1.9` is ten centimetres off the
+  centreline: a van parked across a street two cars already could not pass on.
+- It never checked whether anything was already standing there. A van dropped
+  into an occupied bay is two bodies in one place, which Avian resolves by
+  firing one of them over the rooftops — the patrol's "a parked car is going up
+  at 25 m/s" complaint, which had been showing up unexplained for two rounds of
+  QA.
+
+It now stands exactly where a parked one of the same body would, on the kerb
+`steering::parked_kerb` names, only on streets that have a parking lane, and
+only where eight places stepped along the street find one that is clear.
+
+### Measured while measuring something else
+
+Two findings the width arithmetic turned up, both recorded rather than acted on:
+
+- **A band can be wider than the gap between its own walls.** Measuring the
+  committed atlas's building rectangles the way `cap_widths` measures them,
+  Leukstraße is drawn at 8.0 m between walls 6.8 m apart — `BAND_FLOOR = 8.0`
+  overrode a real narrowing, so its houses stand in its road. It was the third
+  worst street for recoveries in the baseline.
+- **The Altstadt's pavements are right.** 15.1 m of carriageway plus two 3.2 m
+  pavements is 21.5 m in a 21.9 m gap: the pavement stops 20 cm short of the
+  wall. An aerial frame reads as though there were bare ground between the two,
+  and there is not — that is the sett carriageway, which really is fifteen
+  metres wide. Wittstraße (54 m between walls, 22 m drawn) and Gutenbergweg
+  (43 against 26) are where an unpaved margin genuinely exists.
+
 ### Stable place foundation
 
 - Every streamed `Shopfront` now carries a deterministic `PlaceId` derived from
