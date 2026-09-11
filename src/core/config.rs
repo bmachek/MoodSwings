@@ -279,6 +279,33 @@ impl CityStyle {
         }
     }
 
+    /// What this postcard puts on top of everything [`gables`](Self::gables)
+    /// does not screen — see [`RoofDials`].
+    ///
+    /// Landshut from the air is a carpet of steep red tile on *every* house,
+    /// not only on the screened Altstadt ones: the suburbs are Satteldächer
+    /// and Walmdächer to the edge of town, and the few flat roofs are the
+    /// supermarket and the multi-storey car park. Minga is the same country.
+    /// Everywhere else stays the flat-slab city it was, because a pitched
+    /// roof on a New York block is a suburb of somewhere else.
+    pub fn roofs(self) -> RoofDials {
+        match self {
+            Self::Landshuepf => RoofDials {
+                screened: self.gables(),
+                pitched: 0.90,
+                hipped: 0.25,
+                midrise_hipped: 0.60,
+            },
+            Self::Minga => RoofDials {
+                screened: self.gables(),
+                pitched: 0.85,
+                hipped: 0.30,
+                midrise_hipped: 0.50,
+            },
+            _ => RoofDials::FLAT,
+        }
+    }
+
     /// The gable-poster roll ceiling, out of eight. New Dork wants to be
     /// Times Square everywhere at once.
     pub fn advert_appetite(self) -> u64 {
@@ -287,6 +314,37 @@ impl CityStyle {
             _ => 3,
         }
     }
+}
+
+/// How a style roofs the boxes it builds: the shares `world::roof::decide`
+/// rolls against, per class of building.
+///
+/// Shares rather than a `match` at the spawn site, for the reason everything
+/// a style decides lives here: the layout and the look must stay a pure
+/// function of `(seed, style)`, and a dial is a thing a test can read.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoofDials {
+    /// Share of the low classes in the core ring — the old town — whose front
+    /// wall carries on up past the roof as a screen. [`CityStyle::gables`].
+    pub screened: f32,
+    /// Share of the low classes that pitch their roof at all, outside the
+    /// core and inside it for whatever the screens leave. The rest are flat.
+    pub pitched: f32,
+    /// Of those pitched, the share hipped rather than gabled.
+    pub hipped: f32,
+    /// Share of the middle class hipped; the rest are flat, because a
+    /// nine-storey block with a Satteldach is a barn on stilts.
+    pub midrise_hipped: f32,
+}
+
+impl RoofDials {
+    /// The city as it always was: a slab on every box.
+    pub const FLAT: RoofDials = RoofDials {
+        screened: 0.0,
+        pitched: 0.0,
+        hipped: 0.0,
+        midrise_hipped: 0.0,
+    };
 }
 
 /// Whether the city walks or bounces.

@@ -24,6 +24,7 @@ pub mod props;
 pub mod river;
 pub mod road;
 pub mod roadgraph;
+pub mod roof;
 pub mod rooftop;
 pub mod shell;
 pub mod signage;
