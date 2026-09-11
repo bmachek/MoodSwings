@@ -451,7 +451,10 @@ mod tests {
         // The arms reach forward for the bars and stay there.
         for step in 0..8 {
             let crank = step as f32 / 8.0 * TAU;
-            assert_eq!(riding_angle(Limb::LeftArm, crank), crate::ai::figure::body::BARS_REACH);
+            assert_eq!(
+                riding_angle(Limb::LeftArm, crank),
+                crate::ai::figure::body::BARS_REACH
+            );
             assert_eq!(riding_stretch(Limb::RightArm, crank), 1.0);
         }
     }

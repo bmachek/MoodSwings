@@ -302,7 +302,8 @@ mod tests {
         // And it matches the height it claims to differentiate.
         let step = 0.01;
         for across in [-3.0f32, -1.0, 0.5, 2.0] {
-            let measured = (crown(width, across + step) - crown(width, across - step)) / (2.0 * step);
+            let measured =
+                (crown(width, across + step) - crown(width, across - step)) / (2.0 * step);
             assert!(
                 (measured - crown_slope(width, across)).abs() < 1e-3,
                 "at {across} m the slope says {} and the height says {measured}",
@@ -339,10 +340,18 @@ mod tests {
         }
         // A junction at the start only.
         let flat = (true, false);
-        assert_eq!(crown_fade(0.0, length, flat).0, 0.0, "not flat at the crossing");
+        assert_eq!(
+            crown_fade(0.0, length, flat).0,
+            0.0,
+            "not flat at the crossing"
+        );
         assert!(crown_fade(CROWN_FLAT * 0.5, length, flat).0 > 0.1);
         assert_eq!(crown_fade(CROWN_FLAT, length, flat).0, 1.0);
-        assert_eq!(crown_fade(length, length, flat).0, 1.0, "the far end is a bend");
+        assert_eq!(
+            crown_fade(length, length, flat).0,
+            1.0,
+            "the far end is a bend"
+        );
         // Monotonic on the way in, so there is no crease across the approach.
         let mut last = -1.0;
         for step in 0..=20 {

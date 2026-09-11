@@ -238,11 +238,9 @@ impl LampPosts {
                     let cell = cell_of(foot);
                     (-1..=1).any(|dx| {
                         (-1..=1).any(|dz| {
-                            placed
-                                .get(&(cell.0 + dx, cell.1 + dz))
-                                .is_some_and(|near| {
-                                    near.iter().any(|other| other.distance(foot) < LAMP_APART)
-                                })
+                            placed.get(&(cell.0 + dx, cell.1 + dz)).is_some_and(|near| {
+                                near.iter().any(|other| other.distance(foot) < LAMP_APART)
+                            })
                         })
                     })
                 };
@@ -338,12 +336,10 @@ fn spawn_pool(
         ARM_RADIUS * 0.85,
         SCROLL_RADIUS * SCROLL_SWEEP / SCROLL_SEGMENTS as f32 * 1.25,
     ));
-    let lantern = meshes.add(Mesh::from(
-        Cone {
-            radius: LANTERN_WIDTH * 0.5,
-            height: LANTERN_HEIGHT,
-        },
-    ));
+    let lantern = meshes.add(Mesh::from(Cone {
+        radius: LANTERN_WIDTH * 0.5,
+        height: LANTERN_HEIGHT,
+    }));
     let cap = meshes.add(Mesh::from(Cone {
         radius: LANTERN_WIDTH * 0.62,
         height: LANTERN_CAP,
@@ -356,55 +352,59 @@ fn spawn_pool(
     });
 
     for i in 0..POOL_SIZE {
-        let lamp = commands.spawn((
-            Name::new(format!("Street Light {i}")),
-            StreetLight,
-            // Parked far below the world until assigned a lamp post.
-            Transform::from_xyz(0.0, -1000.0, 0.0),
-            Visibility::default(),
-            children![
-                (
-                    Name::new("Beam"),
-                    LampBeam,
-                    SpotLight {
-                        color: LAMP_COLOR,
-                        intensity: 0.0,
-                        range: 62.0,
-                        shadow_maps_enabled: false,
-                        outer_angle: LAMP_OUTER,
-                        inner_angle: LAMP_INNER,
-                        ..default()
-                    },
-                    // A quarter turn about X takes the entity's -Z from
-                    // straight ahead to straight down, and leaves its X — the
-                    // axis the parent's yaw is expressed in — alone.
-                    Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-                ),
-                (
-                    Mesh3d(head.clone()),
-                    MeshMaterial3d(glass.clone()),
-                    ModernLamp,
-                    Transform::default(),
-                ),
-                // The column stands under the light, not under the entity: the
-                // lamp head is what gets positioned, and the pole hangs off it
-                // reaching back to the kerb.
-                (
-                    Mesh3d(column.clone()),
-                    MeshMaterial3d(steel.clone()),
-                    ModernLamp,
-                    Transform::from_xyz(ARM_REACH, -LAMP_HEIGHT * 0.5, 0.0),
-                ),
-                (
-                    Mesh3d(arm.clone()),
-                    MeshMaterial3d(steel.clone()),
-                    ModernLamp,
-                    // Cylinders run along Y; lay it across to the column.
-                    Transform::from_xyz(ARM_REACH * 0.5, 0.0, 0.0)
-                        .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-                ),
-            ],
-        )).id();
+        let lamp = commands
+            .spawn((
+                Name::new(format!("Street Light {i}")),
+                StreetLight,
+                // Parked far below the world until assigned a lamp post.
+                Transform::from_xyz(0.0, -1000.0, 0.0),
+                Visibility::default(),
+                children![
+                    (
+                        Name::new("Beam"),
+                        LampBeam,
+                        SpotLight {
+                            color: LAMP_COLOR,
+                            intensity: 0.0,
+                            range: 62.0,
+                            shadow_maps_enabled: false,
+                            outer_angle: LAMP_OUTER,
+                            inner_angle: LAMP_INNER,
+                            ..default()
+                        },
+                        // A quarter turn about X takes the entity's -Z from
+                        // straight ahead to straight down, and leaves its X — the
+                        // axis the parent's yaw is expressed in — alone.
+                        Transform::from_rotation(Quat::from_rotation_x(
+                            -std::f32::consts::FRAC_PI_2
+                        )),
+                    ),
+                    (
+                        Mesh3d(head.clone()),
+                        MeshMaterial3d(glass.clone()),
+                        ModernLamp,
+                        Transform::default(),
+                    ),
+                    // The column stands under the light, not under the entity: the
+                    // lamp head is what gets positioned, and the pole hangs off it
+                    // reaching back to the kerb.
+                    (
+                        Mesh3d(column.clone()),
+                        MeshMaterial3d(steel.clone()),
+                        ModernLamp,
+                        Transform::from_xyz(ARM_REACH, -LAMP_HEIGHT * 0.5, 0.0),
+                    ),
+                    (
+                        Mesh3d(arm.clone()),
+                        MeshMaterial3d(steel.clone()),
+                        ModernLamp,
+                        // Cylinders run along Y; lay it across to the column.
+                        Transform::from_xyz(ARM_REACH * 0.5, 0.0, 0.0)
+                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+                    ),
+                ],
+            ))
+            .id();
         commands.entity(lamp).with_children(|lamp| {
             wrought_iron(lamp, &column, &link, &lantern, &cap, &steel, &glass);
         });
@@ -444,9 +444,8 @@ fn wrought_iron(
             WroughtLamp,
             Visibility::Hidden,
             // A cylinder runs along Y, so turn Y onto the tangent.
-            Transform::from_translation(middle).with_rotation(Quat::from_rotation_z(
-                -(tangent.x).atan2(tangent.y),
-            )),
+            Transform::from_translation(middle)
+                .with_rotation(Quat::from_rotation_z(-(tangent.x).atan2(tangent.y))),
         ));
         at += tangent * along;
     }
