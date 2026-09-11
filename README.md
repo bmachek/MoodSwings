@@ -1529,6 +1529,18 @@ then `--lineup --hour 12`, `--lineup --hour 21.5` and street and rain framings
 before and after, then `--patrol 120`. Look at head turns, short sleeves, long
 coats, wheelchair users and the camera at a corner.
 
+A queue whose head cannot reach the door now walks the door out to meet them.
+`hold_the_line` steers everybody straight at their slot with no path round
+anything, which is right — a queue is a straight line, and people in one do
+not navigate — but it means a sandwich board, a bike, a bin, a terrace, a kerb
+or a parked car leaves the head pressed against it and a metre short for good.
+The head is the one person in a line exempt from impatience, their waiting
+being over, so nothing ever timed out a head who had not actually arrived. The
+`stalled` field has measured exactly this since queues were written, and its
+own comment says nothing reads it. `--patrol 120` on the commit before this
+one: thirty-one complaints, twelve people standing in seven wedged lines.
+After: none, and two doors that reported themselves unreachable.
+
 `--lineup` stands the cast on a stage above the rooftops. Sixteen archetypes
 at 1.6 m is a row twenty-four metres wide, and photographing a row that wide
 needs twenty metres of clear standoff — which an old town does not have

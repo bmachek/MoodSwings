@@ -936,26 +936,36 @@ pub fn dress_person(
                     ));
                 }
                 if !archetype.bald() {
-                    // The pompadour is a costume, not a draw. Overriding only
-                    // the *scale* of whichever haircut the appearance stream
-                    // handed out left Elvis wearing it pushed five centimetres
-                    // backwards, in grey or ginger, with a bun on the back of
-                    // his head — which is three ways of not being Elvis. The
-                    // whole style is replaced, including the colour, and the
-                    // extras below are suppressed with it.
-                    let quiff = archetype == Archetype::Elvis;
-                    let (at, scale) = match appearance.hairstyle {
-                        _ if quiff => (
+                    // Two archetypes wear their hair as the costume, and for
+                    // them the appearance stream's draw is overruled outright
+                    // rather than adjusted. Overriding only the *scale* of
+                    // whichever haircut came up left Elvis wearing a quiff
+                    // pushed five centimetres backwards, in grey or ginger one
+                    // time in three, with a bun on the back of his head; and a
+                    // punk with a mohawk growing out of a blonde bob is not a
+                    // joke either, it is a figure that looks broken.
+                    let costume = matches!(archetype, Archetype::Elvis | Archetype::Punk);
+                    let (at, scale) = match archetype {
+                        // The pompadour: the same cap, worn taller and pushed
+                        // forward until it is a hairstyle rather than a hat.
+                        Archetype::Elvis => (
                             Vec3::new(0.0, body::HAIR_RISE, -0.016),
                             Vec3::new(0.96, body::HAIR_FLATTEN * 1.28, 1.08),
                         ),
-                        0 => (Vec3::new(0.0, 0.048, 0.020), Vec3::new(1.01, 0.68, 1.02)),
-                        1 => (Vec3::new(-0.018, 0.055, 0.015), Vec3::new(1.06, 0.70, 1.03)),
-                        2 => (Vec3::new(0.0, 0.025, 0.052), Vec3::new(1.07, 0.87, 0.86)),
-                        3 => (Vec3::new(0.0, 0.045, 0.024), Vec3::new(1.01, 0.70, 1.04)),
-                        _ => (Vec3::new(0.0, 0.039, 0.019), Vec3::new(0.99, 0.66, 1.01)),
+                        // A crest stands on a shaved scalp and on nothing else.
+                        Archetype::Punk => (
+                            Vec3::new(0.0, body::HAIR_RISE, 0.018),
+                            Vec3::new(1.0, body::HAIR_FLATTEN, 1.0),
+                        ),
+                        _ => match appearance.hairstyle {
+                            0 => (Vec3::new(0.0, 0.048, 0.020), Vec3::new(1.01, 0.68, 1.02)),
+                            1 => (Vec3::new(-0.018, 0.055, 0.015), Vec3::new(1.06, 0.70, 1.03)),
+                            2 => (Vec3::new(0.0, 0.025, 0.052), Vec3::new(1.07, 0.87, 0.86)),
+                            3 => (Vec3::new(0.0, 0.045, 0.024), Vec3::new(1.01, 0.70, 1.04)),
+                            _ => (Vec3::new(0.0, 0.039, 0.019), Vec3::new(0.99, 0.66, 1.01)),
+                        },
                     };
-                    let hair = if quiff {
+                    let hair = if archetype == Archetype::Elvis {
                         assets.hair_colours[0].clone()
                     } else {
                         hair.clone()
@@ -965,7 +975,7 @@ pub fn dress_person(
                         MeshMaterial3d(hair.clone()),
                         Transform::from_translation(at).with_scale(scale),
                     ));
-                    if quiff {
+                    if costume {
                         // Nothing else goes on that head.
                     } else if appearance.hairstyle == 2 {
                         // A bob frames the sides while leaving eyes and mouth open.
@@ -1700,13 +1710,14 @@ mod tests {
         // is not there. These are the same literals `dress_person` places,
         // in head-local space, scaled by the tallest head the face variants
         // build — so a sixth hairstyle has to be added here to be believed.
-        const HAIRSTYLES: [(f32, f32); 6] = [
+        const HAIRSTYLES: [(f32, f32); 7] = [
             (0.048, 0.68),
             (0.055, 0.70),
             (0.025, 0.87),
             (0.045, 0.70),
             (0.039, 0.66),
             (body::HAIR_RISE, body::HAIR_FLATTEN * 1.28), // the pompadour
+            (body::HAIR_RISE, body::HAIR_FLATTEN),        // under a crest
         ];
         // `head_scale` is (0.90 + face * 0.035, 1.10, 0.96); only y matters.
         let head_y = 1.10;

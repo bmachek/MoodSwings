@@ -94,6 +94,35 @@ const MAX: usize = 6;
 const SLOT: f32 = 0.28;
 const SHUFFLE: f32 = 0.75;
 
+/// A head that has stopped getting closer to the door, and how far the door
+/// is allowed to come to meet them.
+///
+/// `hold_the_line` walks everybody straight at their slot with no path round
+/// anything, which is right — a queue is a straight line and people in one do
+/// not navigate. It also means that anything between the pavement and the
+/// door, which on these frontages is a sandwich board, a bike, a bin, a
+/// terrace, a kerb or a parked car, leaves the head pressed against it and
+/// short for good. The head is the one person in a queue exempt from
+/// impatience, their waiting being over, so nothing in the city ever timed
+/// out a head who had not actually arrived. `stalled` has measured this since
+/// queues were written and its own comment says nothing reads it; `--patrol`
+/// duly found twelve people in seven such lines, none moved in eighty-seven
+/// seconds, every head between 0.6 m and 1.4 m short of a door it was walking
+/// straight at.
+///
+/// So the door comes to them, a step at a time, which is what a queue outside
+/// a shop with a board in its own doorway actually does. Past [`REACH`] of
+/// that the door is not reachable at all and the line lets the head go
+/// instead — they never got in, so they are still on the pavement, and
+/// `reconcile_lines` gives them their composure back.
+///
+/// Timed off *progress* rather than off the clock: an approach across a wide
+/// pavement is a dozen seconds of honest walking and timing that would time
+/// a walk.
+const PRESSING: f32 = 4.0;
+const NUDGE: f32 = 0.4;
+const REACH: f32 = 2.0;
+
 /// How long the business at the counter takes, either side of the draw.
 ///
 /// The rate at which a line drains, and therefore half of how long a line
@@ -263,6 +292,12 @@ struct Line {
     members: Vec<Entity>,
     /// Seconds left of the head's business at the counter.
     serving: f32,
+    /// The closest the current head has managed to get to the door, how long
+    /// they have failed to beat it, and how far the door has already been
+    /// walked out to meet them. See [`PRESSING`].
+    closest: f32,
+    pressing: f32,
+    reached: f32,
     /// How long this line has stood without anybody getting in.
     ///
     /// Not a mechanic — nothing reads it to decide anything — but an
@@ -433,6 +468,9 @@ impl Queues {
                 members: Vec::new(),
                 serving: SERVICE.0,
                 stalled: 0.0,
+                closest: f32::MAX,
+                pressing: 0.0,
+                reached: 0.0,
                 intrusion: 0.0,
                 outrage: 0.0,
                 jumped: None,
@@ -660,9 +698,40 @@ fn serve_the_head(
         let Ok((transform, _)) = standing.get(head) else {
             continue;
         };
-        if transform.translation.xz().distance(line.slot(0)) > SLOT * 2.0 {
+        let gap = transform.translation.xz().distance(line.slot(0));
+        if gap > SLOT * 2.0 {
+            // Still closing: an approach is not a stall. The margin is there
+            // so that a body jostled a centimetre by the crowd does not read
+            // as progress for ever.
+            if gap < line.closest - 0.02 {
+                line.closest = gap;
+                line.pressing = 0.0;
+            } else {
+                line.pressing += dt;
+            }
+            if line.pressing > PRESSING {
+                if line.reached < REACH {
+                    line.reached += NUDGE;
+                    line.door += line.outward * NUDGE;
+                } else {
+                    // Said out loud, like `ai::traffic`'s recovery: a line
+                    // that gives up is a door nothing can stand in front of,
+                    // and where it is is what says which one.
+                    warn!(
+                        "queue recovery: head {gap:.1}m short of {:?} after {REACH}m of door,                          {} waiting",
+                        line.slot(0),
+                        line.members.len()
+                    );
+                    line.members.remove(0);
+                    line.reached = 0.0;
+                }
+                line.closest = f32::MAX;
+                line.pressing = 0.0;
+            }
             continue;
         }
+        line.closest = f32::MAX;
+        line.pressing = 0.0;
         line.serving -= dt;
         if line.serving > 0.0 {
             continue;
@@ -673,6 +742,13 @@ fn serve_the_head(
         line.members.remove(0);
         line.serving = rng.random_range(SERVICE.0..SERVICE.1);
         line.stalled = 0.0;
+        // A door walked out to meet one head keeps its new spot for as long
+        // as the line lasts — whatever was in the way is still there — but
+        // the next head starts their own record from scratch. A line that
+        // empties is dropped, so nothing drifts across a session: the next
+        // queue at that door re-learns the same two metres, at four seconds
+        // a step, and pays for it in the only currency a queue has.
+        line.closest = f32::MAX;
         // Everybody moves up one, and moving up one is the only good thing
         // that happens to anybody in a queue.
         for member in &line.members {
