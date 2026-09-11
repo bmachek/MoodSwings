@@ -654,11 +654,17 @@ pub(crate) fn pieces(pitch: &Pitch) -> Vec<Piece> {
             // gable seen from the wrong end.
             for t in [-1.0f32, 1.0] {
                 let corner = Vec3::new(end, lip, t * w);
-                let run = corner - apex;
+                // Stopped a radius and a half short of the corner: a
+                // half-round's end is a disc, and a disc turned down a hip
+                // pokes past the tile edge it was meant to stop at.
+                let down = (corner - apex).normalize();
+                let start = apex + down * RIDGE_RADIUS;
+                let stop = corner - down * (RIDGE_RADIUS * 1.5);
+                let run = stop - start;
                 out.push(Piece {
                     part: Part::Capping,
-                    at: (apex + corner) * 0.5 + Vec3::Y * (RIDGE_RADIUS * 0.4),
-                    rotation: Quat::from_rotation_arc(Vec3::Y, run.normalize()),
+                    at: start + run * 0.5 + Vec3::Y * (RIDGE_RADIUS * 0.4),
+                    rotation: Quat::from_rotation_arc(Vec3::Y, down),
                     scale: Vec3::new(RIDGE_RADIUS, run.length(), RIDGE_RADIUS),
                 });
             }
