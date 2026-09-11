@@ -46,6 +46,15 @@ pub enum TurnKind {
     UTurn,
 }
 
+/// Conservative conflict rule for two movements sharing a junction. It is
+/// intentionally geometry-free until lane connectors exist: a straight or
+/// turning movement reserves the crossing, while two same-direction straight
+/// movements can share it. This gives signals and pedestrian gates one common
+/// policy to build on.
+pub fn movements_conflict(a: TurnKind, b: TurnKind) -> bool {
+    !(a == TurnKind::Straight && b == TurnKind::Straight)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RoadGraph {
     nodes: Vec<RoadNode>,
@@ -285,5 +294,13 @@ mod tests {
             graph.turn_kind(NodeId(0), NodeId(1), NodeId(0)),
             TurnKind::UTurn
         );
+    }
+
+    #[test]
+    fn conflict_rule_allows_only_parallel_straight_flow() {
+        assert!(!movements_conflict(TurnKind::Straight, TurnKind::Straight));
+        assert!(movements_conflict(TurnKind::Straight, TurnKind::Left));
+        assert!(movements_conflict(TurnKind::Right, TurnKind::Right));
+        assert!(movements_conflict(TurnKind::UTurn, TurnKind::Straight));
     }
 }
