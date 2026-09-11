@@ -186,6 +186,7 @@ fn redress_player(
 }
 
 fn drive_player(
+    time: Res<Time>,
     config: Res<GameConfig>,
     rigs: Query<&CameraRig>,
     mut players: Query<
@@ -202,7 +203,14 @@ fn drive_player(
     let yaw = rigs.single().map(|rig| rig.yaw).unwrap_or(0.0);
     let frame = Quat::from_rotation_y(yaw);
     let input = action_state.clamped_axis_pair(&Action::Move);
-    let direction = (frame * Vec3::NEG_Z * input.y + frame * Vec3::X * input.x).normalize_or_zero();
+    // Preserve stick magnitude — a gentle tilt should be a stroll, not a jog —
+    // but cap the length rather than normalising it. `VirtualDPad` has no
+    // circle bound and `clamped_axis_pair` clamps each axis on its own, so
+    // W+D hands this a vector of length √2 and the keyboard walks diagonally
+    // forty per cent faster than it walks forwards. Normalising killed the
+    // stick ramp; clamping keeps it and fixes the keyboard with it.
+    let direction =
+        (frame * Vec3::NEG_Z * input.y + frame * Vec3::X * input.x).clamp_length_max(1.0);
 
     let pace = if action_state.pressed(&Action::Sprint) {
         SPRINT_SPEED
@@ -211,12 +219,14 @@ fn drive_player(
     };
     bouncer.desired = direction.xz() * pace;
 
-    // Turn to face travel, and hold the last heading when idle. Written here
+    // Ease into travel, and hold the last heading when idle. Written here
     // rather than left to the solver because rotation is locked: nothing else
     // is going to turn the body, and a figure that walks sideways looks like a
     // bug rather than like a joke.
     if let Ok(facing) = Dir2::new(direction.xz()) {
-        transform.rotation = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
+        let target = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
+        let blend = 1.0 - (-config.stroll.turn_ease.max(0.0) * time.delta_secs()).exp();
+        transform.rotation = transform.rotation.slerp(target, blend);
     }
 
     // The resting hop is set every frame — the controller spends the scale on

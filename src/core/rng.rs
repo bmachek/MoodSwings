@@ -146,6 +146,8 @@ pub mod stream {
     /// polygon. Its own key for the reason `COMMONS` has one: the parks must
     /// not reshuffle because the hill grew a tree.
     pub const WOODS: u64 = 35;
+    /// Stable visual identities; never advances a layout or crowd stream.
+    pub const APPEARANCE: u64 = 36;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

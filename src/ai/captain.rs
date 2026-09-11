@@ -331,6 +331,7 @@ fn crown(
             &mut Mesh3d,
             &mut MeshMaterial3d<StandardMaterial>,
             &mut Rest,
+            Option<&Children>,
         ),
         With<Head>,
     >,
@@ -344,12 +345,20 @@ fn crown(
         captain.crowned = true;
 
         for &child in children {
-            if let Ok((mut mesh, mut material, mut rest)) = heads.get_mut(child) {
+            if let Ok((mut mesh, mut material, mut rest, furniture)) = heads.get_mut(child) {
                 // The lower lobe takes the head's slot, so it squashes and
                 // scales through the same `Rest` machinery as any head.
                 mesh.0 = assets.lobe.clone();
                 material.0 = assets.shell.clone();
                 *rest = Rest::posed(Vec3::new(0.0, 0.58, 0.0), Vec3::new(1.0, 1.1, 0.95));
+                // And everything the head was wearing goes with it. A head is
+                // no longer one sphere: `dress_person` hangs a nose, two ears
+                // and — on about a fifth of seeds — a pair of spectacles off
+                // it, all children, all of which happily rode round on the
+                // outside of a peanut until this line.
+                for &part in furniture.into_iter().flatten() {
+                    commands.entity(part).despawn();
+                }
                 continue;
             }
             // Gloves. Bare parts follow the mood's complexion on everybody

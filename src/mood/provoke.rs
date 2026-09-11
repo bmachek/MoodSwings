@@ -89,6 +89,14 @@ pub struct Provocation {
     pub kind: Rudeness,
 }
 
+/// An actual positive change, not merely a whistle near an already happy
+/// citizen. Activity feedback must report the result of the simulation.
+#[derive(Message, Clone, Copy)]
+pub struct Cheered {
+    pub by: Entity,
+    pub who: Entity,
+}
+
 /// When somebody may next be rude.
 ///
 /// On every flummi including the player, because the limit is the same for
@@ -110,14 +118,16 @@ pub struct ProvokePlugin;
 
 impl Plugin for ProvokePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Provocation>().add_systems(
-            Update,
-            ((player_provokes, npcs_provoke), feel_provocations)
-                .chain()
-                .in_set(Provoking)
-                .in_set(GameSet::Ai)
-                .after(crate::ai::pedestrian::Walking),
-        );
+        app.add_message::<Provocation>()
+            .add_message::<Cheered>()
+            .add_systems(
+                Update,
+                ((player_provokes, npcs_provoke), feel_provocations)
+                    .chain()
+                    .in_set(Provoking)
+                    .in_set(GameSet::Ai)
+                    .after(crate::ai::pedestrian::Walking),
+            );
     }
 }
 
@@ -325,6 +335,7 @@ fn announce(
 fn feel_provocations(
     config: Res<GameConfig>,
     mut provocations: MessageReader<Provocation>,
+    mut cheered: MessageWriter<Cheered>,
     mut flummis: Query<(
         Entity,
         &Transform,
@@ -350,6 +361,12 @@ fn feel_provocations(
                 Rudeness::Taunt => sting(apart, temper, &config.mood),
                 Rudeness::Cheer => warmth(apart, temper, &config.mood),
             };
+            if shift > 0.0 && mood.value < 1.0 {
+                cheered.write(Cheered {
+                    by: provocation.by,
+                    who: entity,
+                });
+            }
             if shift != 0.0 {
                 mood.value = (mood.value + shift).clamp(-1.0, 1.0);
             }

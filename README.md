@@ -1454,3 +1454,73 @@ in the world.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
 
+
+
+## Street moments and human character pass
+
+The follow-up to PR #26 gives the street more reasons to slow down.
+
+- **Stadtmomente** are three optional, session-local invitations: walk 250 m,
+  cheer five different residents, and spend twelve seconds near street music.
+  There is no countdown, penalty or failure. Disable them in the pause menu.
+  A cheer counts a *resident*, by their stable id, so the same neighbour
+  respawning round the next corner is not somebody new; a ride, a quick load
+  and being punted across a junction by a car are none of them a walk.
+- The right stick steers the camera on its own axis, because a stick is a rate
+  and a mouse is a displacement, and one action carrying both loses the units.
+  A radial deadzone stops the drift. The left stick keeps its magnitude, so a
+  gentle tilt is a stroll — clamped rather than normalised, because the
+  keyboard's WASD pad has no circle bound and the diagonal was forty per cent
+  faster than the straight line.
+- Camera settings hold vertical field of view, optional widening with speed,
+  stick sensitivity and deadzone. Five rays rather than one find the wall,
+  including one from each corner of the near plane, and they are cast again
+  after the smoothing rather than only before it. It is an approximation of a
+  swept sphere, not a swept sphere.
+- The HUD carries the town, the clock, the weather and a speedometer. **F3**
+  opens the developer windows, which are shut on a normal launch; while they
+  are open the game's own input is disabled, so dragging a slider does not
+  also taunt the street. Key hints read the player's own bindings.
+- Daylight and rain shape the ambient beds that are already mixed rather than
+  adding voices to them. Midnight takes the birds out and softens the traffic.
+- Citizens have six complexions, three face variants, five haircuts, six hair
+  colours, four silhouettes, varied builds and, on about a fifth of them,
+  glasses. Presentation is independent of role, mood and clothing. Noses,
+  ears, collars, pockets and hems give a figure an outline; the expression
+  moves and the complexion does not. Appearance is drawn on its own RNG
+  stream, keyed off the resident's id, so a body that streams back in is the
+  same person. Every face is still painted per pixel at startup.
+- A day is an hour of real time rather than ten minutes, and the pause menu
+  sets it. At twenty-five seconds to the in-game hour the light moved faster
+  than the player could cross a street, and no time of day ever settled.
+- Fifty-two more adverts, shopfronts and streetworks notices, including the
+  Amt für Spontanität (by appointment only) and a building site making
+  progress in a direction yet to be agreed. Some are Landshut at one remove:
+  a bridal shop with fittings every four years, a brickworks with the tallest
+  tower in the world and a request not to lean on it, two high streets that
+  are both the middle one.
+
+This is a procedural character pass, not scanned human assets, not facial
+animation capture and not a claim about visual quality. The mood portrait in
+the HUD keeps its exaggerated palette — it is a symbol, not a face. Street
+moment progress belongs to the outing and is not saved.
+
+A face is painted at 256², five expressions to a complexion and variant rather
+than the mood ladder's thirteen. Thirteen steps exist because an *emoji*
+changes colour continuously and bands without them; a human face moves a brow
+and a mouth, and the difference is better spent on texels. The features are
+drawn nearer caricature than anatomy, because a citizen two metres away is
+about sixty pixels of face and life proportions come out as two dots.
+
+Validating a change to any of this: `cargo fmt --all -- --check`,
+`cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,
+then `--lineup --hour 12`, `--lineup --hour 21.5` and street and rain framings
+before and after, then `--patrol 120`. Look at head turns, short sleeves, long
+coats, wheelchair users and the camera at a corner.
+
+`--lineup` stands the cast on a stage above the rooftops. Sixteen archetypes
+at 1.6 m is a row twenty-four metres wide, and photographing a row that wide
+needs twenty metres of clear standoff — which an old town does not have
+anywhere, so every lineup ever shot in Landshüpf was a photograph of the
+inside of a wall, including the ones used to sign off costume work. The
+fixture is not part of the world and can stand where there is room.

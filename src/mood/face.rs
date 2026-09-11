@@ -503,7 +503,13 @@ pub fn build_assets(
 /// Puts the right face on every head whose mood has moved a whole level.
 pub fn wear_the_mood(
     faces: Res<FaceAssets>,
-    figures: Query<(&super::feeling::Mood, &mut FaceLevel, &Children)>,
+    human_assets: Res<crate::ai::figure::FigureAssets>,
+    figures: Query<(
+        &super::feeling::Mood,
+        &mut FaceLevel,
+        &Children,
+        Option<&crate::ai::appearance::Appearance>,
+    )>,
     mut parts: Query<(
         &mut MeshMaterial3d<StandardMaterial>,
         Option<&crate::ai::figure::Head>,
@@ -511,14 +517,21 @@ pub fn wear_the_mood(
     )>,
     joints: Query<&Children>,
 ) {
-    for (mood, mut level, children) in figures {
+    for (mood, mut level, children, appearance) in figures {
         let next = level_of(mood.value);
         if next == level.0 {
             continue;
         }
         level.0 = next;
-        let face = faces.material(next);
-        let bare = faces.bare(next);
+        let (face, bare) = appearance.map_or_else(
+            || (faces.material(next), faces.bare(next)),
+            |a| {
+                (
+                    human_assets.humans.face(a.skin, a.face, next),
+                    human_assets.humans.skin(a.skin),
+                )
+            },
+        );
 
         for &child in children {
             if let Ok((mut material, head, skin)) = parts.get_mut(child) {
@@ -548,9 +561,237 @@ pub fn wear_the_mood(
     }
 }
 
+// Human complexions stay put while expressions change. The symbolic HUD
+// portrait keeps its exaggerated palette; the people in the street no longer
+// turn yellow or glow red. This replaces the earlier all-emoji art direction.
+const SKIN: [[f32; 3]; 6] = [
+    [0.94, 0.77, 0.65],
+    [0.82, 0.60, 0.44],
+    [0.68, 0.45, 0.30],
+    [0.52, 0.32, 0.21],
+    [0.37, 0.22, 0.15],
+    [0.24, 0.14, 0.10],
+];
+
+/// How wide a painted human face is.
+///
+/// The face is a quarter of the head's `u` and about half its `v`, so a 256²
+/// sheet spends roughly 64 by 128 texels on the face itself and the rest on
+/// plain complexion. That ratio is what sets the floor under how small a
+/// feature can be and still be that feature: at the 128 this was painted at,
+/// a pupil came out barely over one texel across and read as an aliased speck
+/// in a white almond — a googly eye, not an eye.
+const HUMAN_SIZE: u32 = 256;
+
+/// Expressions painted per complexion and face, against `LEVELS` moods.
+///
+/// The thirteen-step ladder exists because an *emoji* changes colour
+/// continuously and needs the steps or it bands. A human face keeps its
+/// complexion and moves a brow, an eyelid and a mouth, and five steps of that
+/// is finer than the eye separates at any distance a pedestrian is seen from.
+/// Spending the difference on resolution instead is the trade: 6 x 3 x 5
+/// sheets at 256² rather than 6 x 3 x 13 at 128² is fewer textures, a little
+/// more memory, and four times the texels where they are actually looked at.
+const HUMAN_STEPS: usize = 5;
+
+/// The mood each painted step is drawn at: the middle of the band of `LEVELS`
+/// it stands for, so neither end of the ladder is drawn at an extreme it only
+/// half covers.
+fn step_mood(step: usize) -> f32 {
+    mood_at((step * 2 + 1) * LEVELS / (2 * HUMAN_STEPS))
+}
+
+/// And which step a mood level lands on.
+fn step_of(level: usize) -> usize {
+    level.min(LEVELS - 1) * HUMAN_STEPS / LEVELS
+}
+
+pub struct HumanFaces {
+    faces: Vec<Handle<StandardMaterial>>,
+    skin: Vec<Handle<StandardMaterial>>,
+}
+
+impl HumanFaces {
+    pub fn face(&self, skin: usize, variant: usize, level: usize) -> Handle<StandardMaterial> {
+        self.faces[((skin % SKIN.len()) * 3 + variant % 3) * HUMAN_STEPS + step_of(level)].clone()
+    }
+
+    pub fn skin(&self, skin: usize) -> Handle<StandardMaterial> {
+        self.skin[skin % SKIN.len()].clone()
+    }
+}
+
+fn human_shade(p: Vec2, mood: f32, tone: usize, variant: usize) -> [f32; 3] {
+    let skin = SKIN[tone % SKIN.len()];
+    let mut colour = skin;
+    if p.x.abs() > 0.80 || p.y.abs() > 0.80 {
+        return colour;
+    }
+    let mood = mood.clamp(-1.0, 1.0);
+    // Sized for the distance a pedestrian is actually seen from, not for
+    // anatomy. The face wraps a quarter of the head's `u`, so a citizen two
+    // metres away is showing about sixty screen pixels of it — and features
+    // at life proportions come out as a pair of dots and no mouth at all,
+    // which is what the first pass shipped. These are pushed towards the
+    // caricature the rest of the city is drawn at.
+    let eye_space = 0.23 + variant as f32 * 0.025;
+    let eye_height = 0.044 + 0.024 * (1.0 - mood.abs());
+    let lip = mix(skin, [0.40, 0.13, 0.12], 0.74);
+    for side in [-1.0, 1.0] {
+        let eye = Vec2::new(side * eye_space, 0.16);
+        let socket = ellipse(p, eye + Vec2::Y * 0.025, Vec2::new(0.14, 0.10), 0.035);
+        colour = over(colour, mix(skin, [0.10, 0.06, 0.05], 0.35), socket * 0.32);
+        colour = over(
+            colour,
+            [0.88, 0.86, 0.81],
+            ellipse(p, eye, Vec2::new(0.115, eye_height), 0.012),
+        );
+        let iris = [[0.23, 0.14, 0.08], [0.22, 0.29, 0.24], [0.26, 0.32, 0.38]][variant % 3];
+        let eye_mask = ellipse(p, eye, Vec2::new(0.111, eye_height), 0.012);
+        // The iris is drawn *wider than the opening* and cropped back by it.
+        // Drawn smaller it floats in a field of white with a gap above and
+        // below, which is the one thing a human eye never does and a cartoon
+        // one always does — the lids sit on the iris, top and bottom.
+        colour = over(colour, iris, disc(p, eye, 0.062, 0.010) * eye_mask);
+        colour = over(
+            colour,
+            [0.025, 0.02, 0.018],
+            disc(p, eye, 0.028, 0.008) * eye_mask,
+        );
+        // Lash line. Without it the opening has no top and the eye reads as
+        // painted on rather than set in.
+        colour = over(
+            colour,
+            mix(skin, [0.08, 0.05, 0.05], 0.72),
+            (ellipse(p, eye, Vec2::new(0.122, eye_height + 0.014), 0.008)
+                - ellipse(p, eye, Vec2::new(0.115, eye_height), 0.010))
+            .clamp(0.0, 1.0),
+        );
+        // Level at neutral, and the two halves of the range are not mirror
+        // images of each other. A scowl drops the inner end towards the nose
+        // and lifts the outer; pleasure raises the whole brow instead. Running
+        // one signed term through both ends made a happy face inner-high,
+        // which is not delight but pleading — and left the neutral face with
+        // a permanent slight frown, because the two resting heights differed.
+        let frown = (-mood).max(0.0);
+        let lift = mood.max(0.0);
+        let inner = Vec2::new(
+            side * (eye_space - 0.110),
+            0.288 - frown * 0.050 + lift * 0.022,
+        );
+        let outer = Vec2::new(
+            side * (eye_space + 0.110),
+            0.288 + frown * 0.026 + lift * 0.030,
+        );
+        colour = over(
+            colour,
+            BROW_INK,
+            capsule2d(p, inner, outer, 0.026 + variant as f32 * 0.005, 0.012),
+        );
+        // A suggestion of cheek warmth, never a change of complexion.
+        colour = over(
+            colour,
+            lip,
+            ellipse(
+                p,
+                Vec2::new(side * 0.38, -0.10),
+                Vec2::new(0.16, 0.12),
+                0.05,
+            ) * mood.abs()
+                * 0.12,
+        );
+    }
+    let mouth = stroke(p, -0.26, 0.26, 0.040, |x| -0.32 + mood * 1.4 * x * x);
+    colour = over(colour, lip, mouth);
+    // Nostrils and philtrum anchor the face under the modelled nose.
+    for x in [-0.058, 0.058] {
+        colour = over(
+            colour,
+            mix(skin, [0.1, 0.05, 0.04], 0.80),
+            ellipse(p, Vec2::new(x, -0.115), Vec2::new(0.034, 0.020), 0.008),
+        );
+    }
+    colour
+}
+
+pub fn build_humans(
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+) -> HumanFaces {
+    let mut result = HumanFaces {
+        faces: Vec::new(),
+        skin: Vec::new(),
+    };
+    // Shared atlas palette, bounded at startup: never allocate a new material
+    // or image when a resident streams back in or their mood changes.
+    for (tone, colour) in SKIN.iter().enumerate() {
+        result.skin.push(materials.add(StandardMaterial {
+            base_color: Color::srgb(colour[0], colour[1], colour[2]),
+            perceptual_roughness: 0.62,
+            reflectance: 0.35,
+            ..default()
+        }));
+        for variant in 0..3 {
+            for step in 0..HUMAN_STEPS {
+                let texture = images.add(painted(
+                    HUMAN_SIZE,
+                    TextureFormat::Rgba8UnormSrgb,
+                    |u, v| {
+                        let around = (u - FACE_U + 1.5).fract() - 0.5;
+                        let c = human_shade(
+                            Vec2::new(around * 4.0, (0.5 - v) * 2.0),
+                            step_mood(step),
+                            tone,
+                            variant,
+                        );
+                        [byte(c[0]), byte(c[1]), byte(c[2]), 255]
+                    },
+                ));
+                result.faces.push(materials.add(StandardMaterial {
+                    base_color_texture: Some(texture),
+                    perceptual_roughness: 0.62,
+                    reflectance: 0.35,
+                    ..default()
+                }));
+            }
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_mood_level_lands_on_a_painted_expression() {
+        // The painted ladder is shorter than the mood ladder, so the mapping
+        // between them is the one place an off-by-one indexes past the end of
+        // the atlas — or, worse, quietly clamps the whole furious end onto one
+        // step and leaves the city unable to scowl.
+        let steps: Vec<_> = (0..LEVELS).map(step_of).collect();
+        assert_eq!(*steps.first().unwrap(), 0);
+        assert_eq!(*steps.last().unwrap(), HUMAN_STEPS - 1);
+        assert!(steps.windows(2).all(|w| w[1] >= w[0]), "{steps:?}");
+        assert!(
+            (0..HUMAN_STEPS).all(|s| steps.contains(&s)),
+            "a painted expression nothing wears: {steps:?}"
+        );
+        // And the mood each step is drawn at rises with it, from a scowl to
+        // a grin, without either end falling off the range.
+        let moods: Vec<_> = (0..HUMAN_STEPS).map(step_mood).collect();
+        assert!(moods.windows(2).all(|w| w[1] > w[0]), "{moods:?}");
+        assert!(moods[0] < -0.5 && *moods.last().unwrap() > 0.5, "{moods:?}");
+    }
+
+    #[test]
+    fn human_complexions_do_not_change_with_mood() {
+        for (skin, complexion) in SKIN.iter().enumerate() {
+            for mood in [-1.0, 0.0, 1.0] {
+                assert_eq!(human_shade(Vec2::new(1.2, 0.0), mood, skin, 0), *complexion);
+            }
+        }
+    }
 
     /// Mean of `channel` minus the mean green, over the whole face. A crude
     /// reading, which is the point: it cannot be satisfied by one red pixel.

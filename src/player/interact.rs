@@ -27,7 +27,7 @@ pub struct Driving(pub Entity);
 pub struct DrivenBy(pub Entity);
 
 /// How close the player must be to a car to take it.
-const ENTER_RANGE: f32 = 4.0;
+pub const ENTER_RANGE: f32 = 4.0;
 
 /// Where to try putting the player down when they leave a car, in the car's own
 /// frame, best first. High enough that the road and a 28cm kerb are not

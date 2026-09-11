@@ -771,12 +771,39 @@ fn line_up_cast(
     let spacing = 1.6;
     let right = *anchor.right();
     let along = *anchor.forward();
+    // Above the roofline, not on the pavement where the player happens to
+    // stand. Sixteen archetypes at 1.6m is a row twenty-four metres wide, and
+    // photographing a row that wide needs twenty metres of clear standoff — a
+    // thing an old town does not have anywhere. Every lineup ever shot here
+    // was therefore a photograph of the inside of a wall, including the ones
+    // used to sign off costume work. The fixture is not part of the world, so
+    // it can stand where there is room: the town's own light and sky, a
+    // guaranteed sight line, and nothing in the frame that is not the cast.
+    // Well clear of the height cap (23m in Landshüpf) and of the gables on
+    // top of it, though not of a cathedral spire — which is why it also steps
+    // sideways, away from whatever the player was standing next to.
+    let stage = anchor.translation + Vec3::Y * 42.0 + right * 30.0;
 
-    // Centred on however many the cast holds today, not on the thirteen it
-    // held when this was written — a new archetype must land in frame.
-    let middle_index = (Archetype::ALL.len() as f32 - 1.0) * 0.5;
+    // Six to a row rather than all sixteen in one. A frame wide enough to hold
+    // a twenty-four metre line puts every face under a hundred pixels, which
+    // photographs a crowd and not a costume. Three shorter rows, each staggered
+    // half a place so nobody stands directly behind anybody, cost a little
+    // depth and return about two and a half times the figure. The arithmetic
+    // is written off `ALL.len()` throughout so a seventeenth archetype lands
+    // in frame rather than off the end of it.
+    const PER_ROW: usize = 6;
+    const ROW_DEPTH: f32 = 3.2;
+    let rows = Archetype::ALL.len().div_ceil(PER_ROW);
     for (i, archetype) in Archetype::ALL.iter().enumerate() {
-        let at = anchor.translation + along * 6.0 + right * ((i as f32 - middle_index) * spacing);
+        let (row, column) = (i / PER_ROW, i % PER_ROW);
+        // The last row is usually short, and centring it on a full row's width
+        // would hang it off one side.
+        let wide = PER_ROW.min(Archetype::ALL.len() - row * PER_ROW);
+        let middle_index = (wide as f32 - 1.0) * 0.5;
+        let stagger = if row % 2 == 1 { spacing * 0.5 } else { 0.0 };
+        let at = stage
+            + along * (6.0 + row as f32 * ROW_DEPTH)
+            + right * ((column as f32 - middle_index) * spacing + stagger);
         let worn = faces.wear(0.0);
         let coat = materials.add(StandardMaterial {
             // The fixed wardrobe where the archetype has one, and one neutral
@@ -806,12 +833,13 @@ fn line_up_cast(
     // none of it can be told apart.
     // Backed off proportionally to the row's actual width, so the frame
     // keeps holding the whole cast as it grows.
-    let span = (Archetype::ALL.len() as f32 - 1.0) * spacing;
-    let middle = anchor.translation + along * 6.0;
-    let eye = middle - along * (span * 0.9) + right * (span * 0.36) + Vec3::Y * 3.0;
+    let span = (PER_ROW as f32 - 1.0) * spacing;
+    let depth = (rows as f32 - 1.0) * ROW_DEPTH;
+    let middle = stage + along * (6.0 + depth * 0.5);
+    let eye = middle - along * (span * 0.65 + depth * 0.5) + right * (span * 0.36) + Vec3::Y * 2.2;
     for (mut transform, mut rig) in &mut cameras {
         rig.mode = CameraMode::Free;
-        *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.6, Vec3::Y);
+        *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.75, Vec3::Y);
         let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
         rig.yaw = yaw;
         rig.pitch = pitch;

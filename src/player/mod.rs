@@ -4,6 +4,7 @@ pub mod camera;
 pub mod input;
 pub mod interact;
 pub mod on_foot;
+pub mod stroll;
 
 use bevy::prelude::*;
 
@@ -16,6 +17,7 @@ impl Plugin for PlayerPlugin {
             camera::CameraPlugin,
             on_foot::OnFootPlugin,
             interact::InteractPlugin,
+            stroll::StrollPlugin,
         ));
     }
 }

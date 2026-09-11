@@ -586,13 +586,14 @@ fn maintain_population(
                     person.insert(Follows(leader));
                 }
             }
-            super::figure::dress(
+            super::figure::dress_person(
                 &mut person,
                 &wardrobe.figures,
                 material,
                 &worn,
                 archetype,
                 &mut rng.0,
+                super::appearance::Appearance::from_seed(config.world_seed ^ u64::from(citizen.0)),
             );
             alive += 1;
         }

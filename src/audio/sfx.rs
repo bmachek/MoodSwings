@@ -870,12 +870,29 @@ pub fn ambience_mix(mood: f32) -> (f32, f32, f32) {
     (traffic, birds, uproar)
 }
 
+/// The mood remains the story; the clock supplies its room tone. A joyful
+/// street at midnight must not sound like a sunny park, and a downpour gives
+/// the existing weather voices space rather than layering new loops on top.
+pub fn weather_ambience(mood: f32, hour: f32, rain: f32) -> (f32, f32, f32) {
+    let (traffic, birds, uproar) = ambience_mix(mood);
+    let light = crate::world::timeofday::daylight(hour.rem_euclid(24.0));
+    let dry = 1.0 - rain.clamp(0.0, 1.0);
+    (
+        traffic * (0.35 + 0.65 * light),
+        birds * light * dry * dry,
+        uproar * (0.65 + 0.35 * light),
+    )
+}
+
 fn update_ambience(
+    time: Res<Time>,
+    clock: Res<crate::world::timeofday::TimeOfDay>,
+    weather: Res<crate::world::weather::Weather>,
     config: Res<GameConfig>,
     city: Res<CityMood>,
     mut beds: Query<(&Ambience, &mut Level, &mut bevy::audio::AudioSink)>,
 ) {
-    let (traffic, birds, uproar) = ambience_mix(city.average);
+    let (traffic, birds, uproar) = weather_ambience(city.average, clock.hours, weather.rain);
     let base = config.audio.master * config.audio.ambience;
     for (bed, mut wants, mut sink) in &mut beds {
         let level = match bed {
@@ -883,10 +900,16 @@ fn update_ambience(
             Ambience::Birdsong => birds * gain::BIRDS_BED,
             Ambience::Uproar => uproar * gain::UPROAR_BED,
         };
-        wants.0 = base * level;
+        // Smooth the environment crossfade, but let a master mute act at once.
+        let blend = 1.0 - (-2.0 * time.delta_secs()).exp();
+        wants.0 = if base <= 0.0 {
+            0.0
+        } else {
+            wants.0 + (base * level - wants.0) * blend
+        };
         // A muted sink remembers its volume, so unmuting lands on the level
         // just set rather than on last week's.
-        if base * level > 0.001 {
+        if wants.0 > 0.001 {
             if sink.is_muted() {
                 sink.unmute();
             }
@@ -899,6 +922,17 @@ fn update_ambience(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_happy_midnight_is_not_a_daytime_bird_chorus() {
+        let day = weather_ambience(0.9, 12.0, 0.0);
+        let night = weather_ambience(0.9, 0.0, 0.0);
+        assert!(day.1 > 0.9);
+        assert_eq!(night.1, 0.0);
+        assert!(night.0 > 0.0 && night.0 < day.0);
+        assert_eq!(weather_ambience(0.9, 12.0, 1.0).1, 0.0);
+        assert_eq!(weather_ambience(0.9, 24.0, 0.0), night);
+    }
 
     #[test]
     fn revs_climb_through_a_gear_and_drop_at_the_change() {

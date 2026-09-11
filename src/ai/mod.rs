@@ -2,6 +2,7 @@
 //! pavement, and the animals among their feet.
 
 pub mod animal;
+pub mod appearance;
 pub mod archetype;
 pub mod brolly;
 pub mod busker;

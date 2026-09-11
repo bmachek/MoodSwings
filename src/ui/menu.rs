@@ -150,7 +150,13 @@ fn free_cursor(mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
 /// steals the pointer off whatever the developer was actually doing, holds it
 /// for the length of the warmup, and gives it back somewhere else — and the
 /// run is scripted, so there is no mouse look for it to be protecting.
-fn grab_cursor(mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+fn grab_cursor(
+    mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    tools: Option<Res<crate::ui::debug::DebugTools>>,
+) {
+    if tools.is_some_and(|tools| tools.0) {
+        return;
+    }
     if crate::core::capture::is_capture_mode() {
         return;
     }
@@ -475,6 +481,20 @@ fn settings_screen(
                 ui.selectable_value(&mut config.city, style, style.label());
             }
         });
+    // Shown in minutes because that is the unit the answer comes in — "an
+    // hour" or "ten minutes", never "three thousand six hundred seconds" —
+    // and held in seconds because that is what the clock integrates. Zero
+    // stops the sun where it stands, which is also what a screenshot wants.
+    let mut minutes = config.world.day_length_seconds / 60.0;
+    if ui
+        .add(
+            egui::Slider::new(&mut minutes, 0.0..=120.0)
+                .text("Tageslänge in Minuten (0 = Zeit anhalten)"),
+        )
+        .changed()
+    {
+        config.world.day_length_seconds = minutes * 60.0;
+    }
 
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Steuerung").strong());
@@ -482,7 +502,28 @@ fn settings_screen(
         egui::Slider::new(&mut config.camera.mouse_sensitivity, 0.0005..=0.01)
             .text("Mausempfindlichkeit"),
     );
-    ui.checkbox(&mut config.camera.invert_look_y, "Maus Y invertieren");
+    ui.checkbox(
+        &mut config.camera.invert_look_y,
+        "Blickrichtung Y invertieren",
+    );
+    ui.add(
+        egui::Slider::new(&mut config.camera.stick_sensitivity, 0.5..=5.0)
+            .text("Controller-Kamera"),
+    );
+    ui.add(egui::Slider::new(&mut config.camera.stick_deadzone, 0.0..=0.4).text("Stick-Totzone"));
+    ui.add(
+        egui::Slider::new(&mut config.camera.fov_degrees, 40.0..=100.0)
+            .text("Sichtfeld (vertikal)"),
+    );
+    ui.add(
+        egui::Slider::new(&mut config.camera.speed_fov, 0.0..=15.0)
+            .text("Tempo-Sichtfeld (0 = aus)"),
+    );
+    ui.checkbox(
+        &mut config.stroll.enabled,
+        "Stadtmomente anzeigen und sammeln",
+    );
+    ui.label("F3: Entwicklerfenster ein-/ausblenden");
 
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Audio").strong());

@@ -57,6 +57,12 @@ impl Default for CameraRig {
 const SHOULDER_HEIGHT: f32 = 1.5;
 /// Keeps the camera off the surface it collides with.
 const WALL_MARGIN: f32 = 0.35;
+/// And off the player. A ray fired with `solid` from inside a collider — which
+/// is what the four corner rays do the moment the player stands within
+/// `WALL_MARGIN` of a wall, a parked car or a lamp post — reports a hit at zero
+/// distance, and without a floor here the boom collapses to nothing and the
+/// shot cuts to the inside of the player's own head.
+const MIN_BOOM: f32 = 0.6;
 
 /// Mouse movement below this many pixels in one frame is jitter, not a look.
 /// Testing for exactly zero would let a single drifting pixel switch the
@@ -81,11 +87,15 @@ impl Plugin for CameraPlugin {
                 // the window even with nobody at the keyboard, which during a
                 // capture silently rotates the rig into the ground and makes
                 // screenshots non-reproducible.
-                orbit.run_if(|| !crate::core::capture::is_capture_mode()),
+                orbit
+                    .run_if(|| !crate::core::capture::is_capture_mode())
+                    .run_if(crate::ui::debug::tools_closed),
                 // Same reasoning as `orbit`, and one more: a capture asks for
                 // an exact pose with `--eye`, and a camera that steers itself
                 // would quietly walk away from it between warm-up frames.
-                auto_follow.run_if(|| !crate::core::capture::is_capture_mode()),
+                auto_follow
+                    .run_if(|| !crate::core::capture::is_capture_mode())
+                    .run_if(crate::ui::debug::tools_closed),
                 free_fly,
                 follow_player,
             )
@@ -123,15 +133,24 @@ const SIGHT: f32 = 20_000.0;
 /// `distance² × 2⁻²³ / near` and `world::layer` does arithmetic with that
 /// number.
 const NEAR: f32 = 0.1;
+/// The lens the camera opens with, before the config has been read. Kept in
+/// step with `CameraConfig::fov_degrees` by a test.
+const DEFAULT_FOV: f32 = 60.0;
 
 fn spawn_camera(mut commands: Commands) {
     let rig = CameraRig::default();
     commands.spawn((
         Name::new("Camera"),
         Camera3d::default(),
+        // Bevy's default is 45°, and until the lens started easing towards
+        // `fov_degrees` nothing ever wrote it — so every session opened by
+        // zooming from 45° to 60° over its first second, and every capture,
+        // which does not ease, stayed at 45° for good. Start where the camera
+        // is going to end up.
         Projection::Perspective(PerspectiveProjection {
             near: NEAR,
             far: SIGHT,
+            fov: DEFAULT_FOV.to_radians(),
             ..default()
         }),
         // With a minimap camera in the world too, UI needs to be told which
@@ -168,12 +187,21 @@ fn orbit(
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     config: Res<GameConfig>,
+    time: Res<Time>,
+    actions: Query<&ActionState<Action>>,
     mut rigs: Query<&mut CameraRig>,
 ) {
-    if motion.delta == Vec2::ZERO {
+    let stick = actions.single().map_or(Vec2::ZERO, |a| {
+        stick_look(
+            a.axis_pair(&Action::LookStick),
+            config.camera.stick_deadzone,
+        )
+    });
+    let delta = motion.delta * config.camera.mouse_sensitivity
+        + Vec2::new(stick.x, -stick.y) * config.camera.stick_sensitivity * time.delta_secs();
+    if delta == Vec2::ZERO {
         return;
     }
-    let sensitivity = config.camera.mouse_sensitivity;
     let y_dir: f32 = if config.camera.invert_look_y {
         -1.0
     } else {
@@ -183,9 +211,8 @@ fn orbit(
         if rig.mode == CameraMode::Free && !buttons.pressed(MouseButton::Right) {
             continue;
         }
-        rig.yaw -= motion.delta.x * sensitivity;
-        rig.pitch = (rig.pitch - motion.delta.y * sensitivity * y_dir)
-            .clamp(-FRAC_PI_2 + 0.05, FRAC_PI_2 - 0.05);
+        rig.yaw -= delta.x;
+        rig.pitch = (rig.pitch - delta.y * y_dir).clamp(-FRAC_PI_2 + 0.05, FRAC_PI_2 - 0.05);
     }
 }
 
@@ -222,11 +249,11 @@ fn auto_follow(
     time: Res<Time>,
     config: Res<GameConfig>,
     motion: Res<AccumulatedMouseMotion>,
-    players: Query<(&LinearVelocity, Option<&Driving>), With<Player>>,
+    players: Query<(&LinearVelocity, Option<&Driving>, &ActionState<Action>), With<Player>>,
     vehicles: Query<(&Transform, &LinearVelocity), (With<Vehicle>, Without<Player>)>,
     mut rigs: Query<&mut CameraRig>,
 ) {
-    let Ok((velocity, driving)) = players.single() else {
+    let Ok((velocity, driving, actions)) = players.single() else {
         return;
     };
 
@@ -236,7 +263,11 @@ fn auto_follow(
     // stranger is no reason to stop the view following where you are going, and
     // a camera that froze every time you were friendly would be a strange thing
     // to live with. So the mouse is the only thing that counts as looking now.
-    let handled = motion.delta.length() > LOOK_DEADZONE;
+    let handled = motion.delta.length() > LOOK_DEADZONE
+        || stick_look(
+            actions.axis_pair(&Action::LookStick),
+            config.camera.stick_deadzone,
+        ) != Vec2::ZERO;
 
     // What "behind" means. A car points where its nose points even while it is
     // reversing, so backing off a kerb does not whip the view round the boot
@@ -251,8 +282,8 @@ fn auto_follow(
         Some((car, car_velocity)) => (
             car.forward().as_vec3(),
             car_velocity.0.with_y(0.0).length(),
-            3.0,
-            0.15,
+            config.camera.driving_follow,
+            config.camera.driving_look_delay,
         ),
         None => {
             let flat = velocity.0.with_y(0.0);
@@ -330,68 +361,175 @@ fn free_fly(
     }
 }
 
-/// Orbits the player, pulling in when a wall would otherwise be between them.
+/// Radial deadzone with a continuous response, so the stick neither drifts
+/// at rest nor jumps straight to fifteen percent speed on leaving the centre.
+fn stick_look(input: Vec2, deadzone: f32) -> Vec2 {
+    let deadzone = deadzone.clamp(0.0, 0.95);
+    let magnitude = input.length();
+    if magnitude <= deadzone {
+        return Vec2::ZERO;
+    }
+    input.normalize_or_zero() * ((magnitude.min(1.0) - deadzone) / (1.0 - deadzone))
+}
+
+fn speed_fraction(speed: f32) -> f32 {
+    let t = (speed / 32.0).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Cast the camera centre and four near-plane corners. A single centre ray
+/// misses the wall occupying the edge of the lens on a tight street corner.
+/// This is a conservative five-ray approximation, not a swept collision shape.
+fn clear_camera_distance(
+    spatial: &SpatialQuery,
+    target: Vec3,
+    offset: Vec3,
+    wanted: f32,
+    rotation: Quat,
+    filter: &SpatialQueryFilter,
+) -> f32 {
+    let Ok(direction) = Dir3::new(offset) else {
+        return 0.0;
+    };
+    let mut distance = wanted;
+    for corner in [
+        Vec3::ZERO,
+        Vec3::new(-WALL_MARGIN, -WALL_MARGIN, 0.0),
+        Vec3::new(WALL_MARGIN, -WALL_MARGIN, 0.0),
+        Vec3::new(-WALL_MARGIN, WALL_MARGIN, 0.0),
+        Vec3::new(WALL_MARGIN, WALL_MARGIN, 0.0),
+    ] {
+        if let Some(hit) =
+            spatial.cast_ray(target + rotation * corner, direction, wanted, true, filter)
+        {
+            distance = distance.min((hit.distance - WALL_MARGIN).max(MIN_BOOM));
+        }
+    }
+    distance
+}
+
+/// Collision is the last word, even after smoothing. Easing a safe desired
+/// position from last frame's position can otherwise cut straight through a
+/// corner. The player and their car must not obstruct their own camera.
 fn follow_player(
     time: Res<Time>,
+    config: Res<GameConfig>,
     spatial: SpatialQuery,
-    // `Transform`, not `GlobalTransform`: both targets are root entities so
-    // the two agree — except that `GlobalTransform` is only propagated in
-    // `PostUpdate`, i.e. it is last frame's pose by the time this runs, and it
-    // never sees the physics interpolation easing. Reading the stale one put
-    // the camera a frame behind the car it was aimed at.
-    players: Query<(&Transform, Option<&Driving>), (With<Player>, Without<CameraRig>)>,
-    vehicles: Query<&Transform, (Without<Player>, Without<CameraRig>)>,
-    mut rigs: Query<(&mut Transform, &CameraRig, Entity)>,
+    players: Query<(Entity, &Transform, Option<&Driving>), (With<Player>, Without<CameraRig>)>,
+    vehicles: Query<
+        (&Transform, &LinearVelocity),
+        (With<Vehicle>, Without<Player>, Without<CameraRig>),
+    >,
+    mut rigs: Query<(Entity, &mut Transform, &CameraRig, &mut Projection)>,
 ) {
-    let Ok((player, driving)) = players.single() else {
+    let Ok((player_entity, player, driving)) = players.single() else {
         return;
     };
-
-    // Sit further back and higher behind a car; the same framing that works for
-    // a person on foot is uselessly tight at 100km/h.
-    let (focus, pull_back) = match driving.and_then(|d| vehicles.get(d.0).ok()) {
-        Some(vehicle) => (vehicle.translation + Vec3::Y * 1.1, 1.9),
-        None => (player.translation, 1.0),
+    let tune = &config.camera;
+    let car = driving.and_then(|d| vehicles.get(d.0).ok());
+    let (focus, pull_back, speed) = match car {
+        Some((vehicle, velocity)) => {
+            let flat = velocity.0.with_y(0.0);
+            let lead = (flat * tune.driving_look_ahead.max(0.0)).clamp_length_max(5.0);
+            (
+                vehicle.translation + Vec3::Y * 1.1 + lead,
+                tune.driving_distance,
+                flat.length(),
+            )
+        }
+        None => (player.translation, 1.0, 0.0),
     };
     let target = focus + Vec3::Y * SHOULDER_HEIGHT;
-
-    for (mut transform, rig, camera_entity) in &mut rigs {
+    for (camera_entity, mut transform, rig, mut projection) in &mut rigs {
         if rig.mode != CameraMode::Follow {
             continue;
         }
-
         let rotation = Quat::from_euler(EulerRot::YXZ, rig.yaw, rig.pitch, 0.0);
         let offset = rotation * Vec3::Z;
-
-        // Cast from the player outwards; if something is in the way, sit just
-        // in front of it rather than letting the wall swallow the view.
-        let filter = SpatialQueryFilter::default().with_excluded_entities([camera_entity]);
-        let wanted = rig.distance * pull_back;
-        let mut distance = wanted;
-        if let Ok(direction) = Dir3::new(offset)
-            && let Some(hit) = spatial.cast_ray(target, direction, wanted, true, &filter)
-        {
-            distance = (hit.distance - WALL_MARGIN).max(0.6);
-        }
-
+        let filter = SpatialQueryFilter::from_excluded_entities([
+            camera_entity,
+            player_entity,
+            driving.map_or(player_entity, |d| d.0),
+        ]);
+        let wanted = (rig.distance * pull_back).max(0.0);
+        let distance = clear_camera_distance(&spatial, target, offset, wanted, rotation, &filter);
         let desired = target + offset * distance;
-        // Exponential smoothing, framerate independent. The vertical axis is
-        // deliberately lazier: at 18/s the camera rode the player's hop
-        // nearly 1:1, and a viewport that bobs with every step is most of
-        // what made the player feel "too bouncy" — the citizens hop just as
-        // much and read as charming, because nobody's view is glued to them.
-        let blend = 1.0 - (-18.0 * time.delta_secs()).exp();
-        let vertical = 1.0 - (-6.0 * time.delta_secs()).exp();
-        let eased = transform.translation.lerp(desired, blend);
-        let height = transform.translation.y + (desired.y - transform.translation.y) * vertical;
-        transform.translation = Vec3::new(eased.x, height, eased.z);
+        let blend = 1.0 - (-tune.position_ease.max(0.0) * time.delta_secs()).exp();
+        let vertical = 1.0 - (-tune.vertical_ease.max(0.0) * time.delta_secs()).exp();
+        let mut eased = transform.translation.lerp(desired, blend);
+        eased.y = transform.translation.y + (desired.y - transform.translation.y) * vertical;
+        // Teleports and free-camera returns should settle immediately rather
+        // than fly the player through several blocks of unstreamed geometry.
+        if transform.translation.distance(target) > wanted + 20.0 {
+            eased = desired;
+        }
+        let boom = eased - target;
+        let safe = clear_camera_distance(&spatial, target, boom, boom.length(), rotation, &filter);
+        transform.translation = target + boom.normalize_or_zero() * safe;
         transform.rotation = rotation;
+        // A capture gets the same lens, arrived at instantly and without the
+        // speed term. Easing it would photograph whatever the lens happened to
+        // reach by the last warmup frame, and widening it with speed would put
+        // a `--drive` shot on a different lens from a standing one — but
+        // *skipping* it, which is what this did at first, shot the whole
+        // `tools/shoot.sh` battery through a 45° lens the player never sees.
+        if let Projection::Perspective(lens) = &mut *projection {
+            let capturing = crate::core::capture::is_capture_mode();
+            let degrees = tune.fov_degrees.clamp(40.0, 100.0)
+                + if capturing {
+                    0.0
+                } else {
+                    tune.speed_fov.clamp(0.0, 15.0) * speed_fraction(speed)
+                };
+            let blend = if capturing {
+                1.0
+            } else {
+                1.0 - (-tune.lens_ease.max(0.0) * time.delta_secs()).exp()
+            };
+            lens.fov += (degrees.to_radians() - lens.fov) * blend;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_camera_opens_on_the_lens_it_settles_at() {
+        // Bevy's `PerspectiveProjection` defaults to 45°, and a capture never
+        // runs the easing that would take it to 60°. If these two drift apart
+        // again, every session opens by zooming and every `--screenshot` is
+        // framed through a lens the player has never looked through.
+        assert_eq!(
+            DEFAULT_FOV,
+            crate::core::config::GameConfig::default()
+                .camera
+                .fov_degrees
+        );
+    }
+
+    #[test]
+    fn the_stick_has_no_drift_and_reaches_full_deflection_smoothly() {
+        assert_eq!(stick_look(Vec2::new(0.1, 0.0), 0.15), Vec2::ZERO);
+        assert_eq!(stick_look(Vec2::X, 0.15), Vec2::X);
+        assert!(stick_look(Vec2::new(0.151, 0.0), 0.15).length() < 0.002);
+        assert!((stick_look(Vec2::ONE, 0.15).length() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn camera_easing_agrees_at_thirty_and_one_hundred_twenty_frames() {
+        let run = |fps: u32| {
+            let mut yaw = 0.0;
+            for _ in 0..fps {
+                yaw = swing_towards(yaw, 1.0, 3.0, 1.0 / fps as f32);
+            }
+            yaw
+        };
+        assert!((run(30) - run(120)).abs() < 1e-5);
+        assert_eq!(speed_fraction(0.0), 0.0);
+        assert_eq!(speed_fraction(100.0), 1.0);
+    }
 
     #[test]
     fn the_swing_takes_the_short_way_round() {

@@ -66,11 +66,7 @@ impl Limb {
 #[derive(Component)]
 pub struct Head;
 
-/// Skin, of which a flummi has exactly two patches: its hands.
-///
-/// Marked for the same reason the head is. A flummi's complexion is its mood —
-/// it goes red with the face — and skin-toned hands under an emoji head read as
-/// a bug rather than as a person.
+/// Uncovered skin. The complexion stays the same as expressions change.
 #[derive(Component)]
 pub struct Bare;
 
@@ -279,18 +275,21 @@ pub fn seated_angle(limb: Limb) -> f32 {
 
 /// Where a figure stops being worth its trimmings, in metres.
 ///
-/// A citizen is nineteen meshes: torso, head, hair, four limb joints with a
-/// limb and a hand or a shoe hanging off each, and whatever the archetype is
-/// carrying. At a hundred and sixty of them that is three thousand entities,
-/// and most of them are somewhere down the street where a hand is under two
-/// pixels across.
+/// A citizen is around twenty-five meshes: torso, neck, head, a nose and two
+/// ears, hair, a collar, four limb joints with a limb and a hand or a shoe
+/// hanging off each, whatever the wardrobe drew — a zip, two pockets, a hood,
+/// a coat, spectacles — and whatever the archetype is carrying. At a hundred
+/// and sixty of them that is four thousand entities, and most of them are
+/// somewhere down the street where a hand is under two pixels across.
 ///
 /// So the trimmings carry a range and the silhouette does not — the same trade
 /// `vehicle::spawn` makes with a car's fittings, and for the same reason: what
 /// survives to any distance is the shape, and the shape is all that is left of
-/// a person at forty metres anyway. Hands, shoes, hair and the archetype's
-/// props go; the torso, the head and the four limbs stay, because a figure
-/// without them is not a figure.
+/// a person at forty metres anyway. Hands, shoes, the face's own furniture,
+/// the wardrobe's fastenings and the archetype's props go; the torso, the
+/// head, the hair and the four limbs stay, because a figure without them is
+/// not a figure — and so does anything that changes the *outline*, which is
+/// why a hood and a long coat are not trimmings and a 6cm neck is.
 const TRIMMINGS: f32 = 42.0;
 
 /// The range every trimming carries.
@@ -318,6 +317,8 @@ pub struct WalkCycle {
 
 #[derive(Resource)]
 pub struct FigureAssets {
+    pub humans: crate::mood::face::HumanFaces,
+    detail: Handle<Mesh>,
     torso: Handle<Mesh>,
     head: Handle<Mesh>,
     arm: Handle<Mesh>,
@@ -674,6 +675,25 @@ fn prop_mesh(radius: f32, height: f32, sides: u32) -> Mesh {
 /// this is a count rather than a size — and the garments are all within a
 /// factor of two of each other, which is what lets one number serve. At
 /// fourteen a torso's threads come out around two millimetres, which is cloth.
+fn human_head() -> Mesh {
+    let mut mesh = crate::mood::face::head_mesh(body::HEAD_RADIUS);
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for p in positions {
+            // Keep the UVs: the eyes are authored on the original meridians.
+            // Narrow the jaw under the cheekbones, flatten the face slightly.
+            let lower = (-p[1] / body::HEAD_RADIUS).clamp(0.0, 1.0);
+            p[0] *= 1.0 - lower * 0.20;
+            if p[2] < 0.0 {
+                p[2] *= 0.95;
+            }
+        }
+    }
+    mesh.compute_smooth_normals();
+    mesh
+}
+
 pub const WEAVE_TILE: f32 = 14.0;
 
 pub fn build_assets(
@@ -695,18 +715,17 @@ pub fn build_assets(
         perceptual_roughness: 0.88,
         ..default()
     };
-    // Skin is not cloth — at a wool coat's roughness a face takes no highlight
-    // at all and reads as a mannequin — but no skin is mixed here any more.
-    // Every uncovered part of a flummi is its complexion, which is its mood,
-    // and both the head and the hands take their material from
-    // `crate::mood::face` for that reason.
+    // A bounded complexion/expression palette is built alongside the cloth.
+    // Shared handles keep streaming from allocating another wardrobe each time.
 
     FigureAssets {
+        humans: crate::mood::face::build_humans(images, materials),
+        detail: meshes.add(rounded_box(Vec3::ONE)),
         torso: meshes.add(rounded_box(Vec3::new(0.36, body::TORSO_HEIGHT, 0.22))),
         // A UV sphere rather than the default icosphere: the face is painted
         // into a texture, and an icosphere's seams run wherever they like.
         // See `crate::mood::face::head_mesh` for why it is turned on its side.
-        head: meshes.add(crate::mood::face::head_mesh(body::HEAD_RADIUS)),
+        head: meshes.add(human_head()),
         arm: meshes.add(limb_mesh(0.058, body::ARM_LENGTH)),
         leg: meshes.add(limb_mesh(0.078, body::LEG_LENGTH)),
         hand: meshes.add(blob_mesh(body::HAND_RADIUS)),
@@ -721,6 +740,8 @@ pub fn build_assets(
             Color::srgb(0.19, 0.13, 0.09),
             Color::srgb(0.35, 0.26, 0.16),
             Color::srgb(0.52, 0.49, 0.47),
+            Color::srgb(0.68, 0.49, 0.23),
+            Color::srgb(0.40, 0.15, 0.07),
         ]
         .into_iter()
         // Hair is matte and dark, and it is the darkness that does the work:
@@ -801,7 +822,7 @@ pub fn build_assets(
 ///
 /// The face and the complexion arrive already chosen, because which ones they
 /// are depends on how the figure feels — see [`crate::mood::face::Worn`].
-/// Nobody in this city has a skin tone; every head is an emoji.
+/// Human complexions are stable; mood still changes the expression.
 ///
 /// The archetype decides the extras — a crest, a pompadour, headphones, a
 /// paper cup — and every one of them is a child with a [`Rest`], because a
@@ -815,16 +836,47 @@ pub fn dress(
     archetype: crate::ai::archetype::Archetype,
     rng: &mut ChaCha8Rng,
 ) {
+    // Clone before sampling: adding appearance must not advance the legacy
+    // wardrobe stream, which also decides who appears next on the street.
+    let seed = rng.clone().random::<u64>();
+    dress_person(
+        entity,
+        assets,
+        coat,
+        worn,
+        archetype,
+        rng,
+        crate::ai::appearance::Appearance::from_seed(seed),
+    );
+}
+
+pub fn dress_person(
+    entity: &mut EntityCommands,
+    assets: &FigureAssets,
+    coat: Handle<StandardMaterial>,
+    worn: &crate::mood::face::Worn,
+    archetype: crate::ai::archetype::Archetype,
+    rng: &mut ChaCha8Rng,
+    appearance: crate::ai::appearance::Appearance,
+) {
     use crate::ai::archetype::Archetype;
 
-    let trousers = assets.trousers[rng.random_range(0..assets.trousers.len())].clone();
+    let _legacy_trousers = rng.random_range(0..assets.trousers.len());
+    let trousers = assets.trousers[appearance.trousers].clone();
     // Always drawn, even for the bald and the crested: the wardrobe stream
     // must consume the same draws whoever is being dressed, or retuning the
     // cast would reshuffle every trouser leg after it.
-    let hair = assets.hair_colours[rng.random_range(0..assets.hair_colours.len())].clone();
+    // Four was the original palette length. Retain its draw distribution;
+    // new colours are chosen on the independent appearance stream.
+    let _legacy_hair = rng.random_range(0..4usize);
+    let hair = assets.hair_colours[appearance.hair].clone();
     let crest = assets.crest_colours[rng.random_range(0..assets.crest_colours.len())].clone();
 
-    entity.insert(WalkCycle::default());
+    let skin = assets.humans.skin(appearance.skin);
+    let face = assets
+        .humans
+        .face(appearance.skin, appearance.face, worn.level);
+    entity.insert((WalkCycle::default(), appearance));
     // Nobody in a wheelchair is taking a step. Without this the stride runs
     // anyway — the walk cycle is paced by ground covered, and a chair covers
     // ground — and a seated figure that keeps striding reads as somebody
@@ -836,48 +888,185 @@ pub fn dress(
     entity.with_children(|parent| {
         let torso = Vec3::new(0.0, body::TORSO_CENTRE, 0.0);
         parent.spawn((
-            Rest::at(torso),
+            Rest::posed(
+                torso,
+                Vec3::new(appearance.shoulders, 1.0, appearance.depth),
+            ),
             Mesh3d(assets.torso.clone()),
             MeshMaterial3d(coat.clone()),
-            Transform::from_translation(torso),
+            Transform::from_translation(torso).with_scale(Vec3::new(
+                appearance.shoulders,
+                1.0,
+                appearance.depth,
+            )),
+        ));
+        // Neck, then an oval head with a jaw. The ears, nose and hair are
+        // children of Head, so an attentive glance cannot leave them behind.
+        let neck = Vec3::new(0.0, 0.465, 0.0);
+        parent.spawn((
+            Bare,
+            Rest::posed(neck, Vec3::new(0.065, 0.10, 0.065)),
+            Mesh3d(assets.detail.clone()),
+            MeshMaterial3d(skin.clone()),
+            Transform::from_translation(neck).with_scale(Vec3::new(0.065, 0.10, 0.065)),
+            trimmings_range(),
         ));
         let head = Vec3::new(0.0, body::HEAD_CENTRE, 0.0);
+        let head_scale = Vec3::new(0.90 + appearance.face as f32 * 0.035, 1.10, 0.96);
+        parent
+            .spawn((
+                Head,
+                Rest::posed(head, head_scale),
+                Mesh3d(assets.head.clone()),
+                MeshMaterial3d(face),
+                Transform::from_translation(head).with_scale(head_scale),
+            ))
+            .with_children(|head| {
+                for (at, scale) in [
+                    (Vec3::new(0.0, -0.005, -0.125), Vec3::new(0.24, 0.42, 0.40)),
+                    (Vec3::new(-0.127, 0.0, 0.0), Vec3::new(0.24, 0.51, 0.24)),
+                    (Vec3::new(0.127, 0.0, 0.0), Vec3::new(0.24, 0.51, 0.24)),
+                ] {
+                    head.spawn((
+                        Mesh3d(assets.hand.clone()),
+                        MeshMaterial3d(skin.clone()),
+                        Transform::from_translation(at).with_scale(scale),
+                        trimmings_range(),
+                    ));
+                }
+                if !archetype.bald() {
+                    // The pompadour is a costume, not a draw. Overriding only
+                    // the *scale* of whichever haircut the appearance stream
+                    // handed out left Elvis wearing it pushed five centimetres
+                    // backwards, in grey or ginger, with a bun on the back of
+                    // his head — which is three ways of not being Elvis. The
+                    // whole style is replaced, including the colour, and the
+                    // extras below are suppressed with it.
+                    let quiff = archetype == Archetype::Elvis;
+                    let (at, scale) = match appearance.hairstyle {
+                        _ if quiff => (
+                            Vec3::new(0.0, body::HAIR_RISE, -0.016),
+                            Vec3::new(0.96, body::HAIR_FLATTEN * 1.28, 1.08),
+                        ),
+                        0 => (Vec3::new(0.0, 0.048, 0.020), Vec3::new(1.01, 0.68, 1.02)),
+                        1 => (Vec3::new(-0.018, 0.055, 0.015), Vec3::new(1.06, 0.70, 1.03)),
+                        2 => (Vec3::new(0.0, 0.025, 0.052), Vec3::new(1.07, 0.87, 0.86)),
+                        3 => (Vec3::new(0.0, 0.045, 0.024), Vec3::new(1.01, 0.70, 1.04)),
+                        _ => (Vec3::new(0.0, 0.039, 0.019), Vec3::new(0.99, 0.66, 1.01)),
+                    };
+                    let hair = if quiff {
+                        assets.hair_colours[0].clone()
+                    } else {
+                        hair.clone()
+                    };
+                    head.spawn((
+                        Mesh3d(assets.hair.clone()),
+                        MeshMaterial3d(hair.clone()),
+                        Transform::from_translation(at).with_scale(scale),
+                    ));
+                    if quiff {
+                        // Nothing else goes on that head.
+                    } else if appearance.hairstyle == 2 {
+                        // A bob frames the sides while leaving eyes and mouth open.
+                        for side in [-1.0, 1.0] {
+                            head.spawn((
+                                Mesh3d(assets.hair.clone()),
+                                MeshMaterial3d(hair.clone()),
+                                Transform::from_xyz(side * 0.105, -0.025, 0.045)
+                                    .with_scale(Vec3::new(0.31, 0.90, 0.63)),
+                            ));
+                        }
+                    } else if appearance.hairstyle == 3 {
+                        head.spawn((
+                            Mesh3d(assets.hair.clone()),
+                            MeshMaterial3d(hair.clone()),
+                            Transform::from_xyz(0.0, 0.050, 0.143).with_scale(Vec3::splat(0.42)),
+                        ));
+                    }
+                }
+                if appearance.glasses && archetype != Archetype::Photographer {
+                    // Thin frames, not opaque sunglasses hiding the expression.
+                    for side in [-1.0, 1.0] {
+                        for y in [0.013, 0.050] {
+                            head.spawn((
+                                Mesh3d(assets.detail.clone()),
+                                MeshMaterial3d(assets.leather.clone()),
+                                Transform::from_xyz(side * 0.050, y, -0.122)
+                                    .with_scale(Vec3::new(0.076, 0.005, 0.008)),
+                                trimmings_range(),
+                            ));
+                        }
+                    }
+                    head.spawn((
+                        Mesh3d(assets.detail.clone()),
+                        MeshMaterial3d(assets.leather.clone()),
+                        Transform::from_xyz(0.0, 0.032, -0.136)
+                            .with_scale(Vec3::new(0.029, 0.005, 0.008)),
+                        trimmings_range(),
+                    ));
+                }
+            });
+        // Four silhouettes: casual jacket, short sleeves, hoodie, long coat.
+        // All are available with every build and complexion.
+        let trim = if appearance.outfit == 1 {
+            hair.clone()
+        } else {
+            trousers.clone()
+        };
+        let collar = Vec3::new(0.0, 0.39, -0.105 * appearance.depth);
+        let collar_scale = Vec3::new(0.15, 0.035, 0.07);
         parent.spawn((
-            Head,
-            Rest::at(head),
-            Mesh3d(assets.head.clone()),
-            MeshMaterial3d(worn.face.clone()),
-            Transform::from_translation(head),
+            Rest::posed(collar, collar_scale),
+            Mesh3d(assets.detail.clone()),
+            MeshMaterial3d(trim.clone()),
+            Transform::from_translation(collar).with_scale(collar_scale),
+            trimmings_range(),
         ));
-        // A shade wider than the head and sat a little high and a little back,
-        // so the crown is covered and the face below it is not. The hairline
-        // this puts on a figure is low — the cap cannot rise much further and
-        // still fit inside the collider — but at the distance a pedestrian is
-        // seen it is the dark top to the silhouette that does the work, not
-        // where exactly it starts.
-        //
-        // A missionary goes without: the shaved head is most of the costume.
-        if !archetype.bald() {
-            let (cap, cap_scale, cap_hair) = if archetype == Archetype::Elvis {
-                // The pompadour: the same cap, always black, worn taller and
-                // pushed forward until it is a hairstyle rather than a hat.
-                (
-                    Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, -0.016),
-                    Vec3::new(0.96, body::HAIR_FLATTEN * 1.28, 1.08),
-                    assets.hair_colours[0].clone(),
-                )
-            } else {
-                (
-                    Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, 0.018),
-                    Vec3::new(1.0, body::HAIR_FLATTEN, 1.0),
-                    hair.clone(),
-                )
-            };
+        if appearance.outfit != 1 {
+            let zip = Vec3::new(0.0, 0.15, -0.116 * appearance.depth);
+            let scale = Vec3::new(0.012, 0.43, 0.012);
             parent.spawn((
-                Rest::posed(cap, cap_scale),
+                Rest::posed(zip, scale),
+                Mesh3d(assets.detail.clone()),
+                MeshMaterial3d(trim.clone()),
+                Transform::from_translation(zip).with_scale(scale),
+                trimmings_range(),
+            ));
+            for side in [-1.0, 1.0] {
+                let at = Vec3::new(side * 0.105, -0.012, -0.115 * appearance.depth);
+                let scale = Vec3::new(0.10, 0.065, 0.012);
+                parent.spawn((
+                    Rest::posed(at, scale),
+                    Mesh3d(assets.detail.clone()),
+                    MeshMaterial3d(trim.clone()),
+                    Transform::from_translation(at).with_scale(scale),
+                    trimmings_range(),
+                ));
+            }
+        }
+        if appearance.outfit == 2 {
+            let at = Vec3::new(0.0, 0.375, 0.11);
+            let scale = Vec3::new(1.02, 0.65, 0.62);
+            parent.spawn((
+                Rest::posed(at, scale),
                 Mesh3d(assets.hair.clone()),
-                MeshMaterial3d(cap_hair),
-                Transform::from_translation(cap).with_scale(cap_scale),
+                MeshMaterial3d(coat.clone()),
+                Transform::from_translation(at).with_scale(scale),
+            ));
+        } else if appearance.outfit == 3 && archetype != Archetype::Wheelchair {
+            // Deep, not just wide. The legs pivot at the hip and swing to
+            // `SWING`, which puts a thigh's front surface some six centimetres
+            // ahead of where a torso-depth skirt ends — so at 1.05 every
+            // long-coated citizen walked with their leg coming out through the
+            // front of their own coat twice a stride, and a cyclist, whose
+            // legs swing much further, pedalled through it continuously.
+            let at = Vec3::new(0.0, -0.16, 0.0);
+            let scale = Vec3::new(appearance.hips * 1.08, 0.53, appearance.depth * 1.75);
+            parent.spawn((
+                Rest::posed(at, scale),
+                Mesh3d(assets.torso.clone()),
+                MeshMaterial3d(coat.clone()),
+                Transform::from_translation(at).with_scale(scale),
             ));
         }
 
@@ -1050,7 +1239,11 @@ pub fn dress(
         }
 
         for (limb, side) in [(Limb::LeftArm, -1.0f32), (Limb::RightArm, 1.0)] {
-            let joint = Vec3::new(side * body::SHOULDER_X, body::SHOULDER, 0.0);
+            let joint = Vec3::new(
+                side * body::SHOULDER_X * appearance.shoulders,
+                body::SHOULDER,
+                0.0,
+            );
             parent
                 .spawn((
                     limb,
@@ -1061,11 +1254,37 @@ pub fn dress(
                 // Hung below the joint, so the parent's rotation swings it from
                 // the shoulder rather than spinning it about its own middle.
                 .with_children(|joint| {
+                    let short = appearance.outfit == 1;
                     joint.spawn((
                         Mesh3d(assets.arm.clone()),
                         MeshMaterial3d(coat.clone()),
-                        Transform::from_xyz(0.0, -body::ARM_LENGTH * 0.5, 0.0),
+                        Transform::from_xyz(
+                            0.0,
+                            -body::ARM_LENGTH * if short { 0.24 } else { 0.5 },
+                            0.0,
+                        )
+                        .with_scale(Vec3::new(
+                            appearance.shoulders,
+                            if short { 0.48 } else { 1.0 },
+                            appearance.depth,
+                        )),
                     ));
+                    if short {
+                        // Overlapping the sleeve, not meeting it. `limb_mesh`
+                        // is a capsule whose caps close to a point, so two of
+                        // them placed end to end pinch the arm to nothing at
+                        // the elbow; the forearm starts inside the cuff and is
+                        // narrower than it, which is what a rolled sleeve over
+                        // a forearm actually looks like.
+                        joint.spawn((
+                            Bare,
+                            Mesh3d(assets.arm.clone()),
+                            MeshMaterial3d(skin.clone()),
+                            Transform::from_xyz(0.0, -body::ARM_LENGTH * 0.69, 0.0)
+                                .with_scale(Vec3::new(0.70, 0.62, 0.76)),
+                            trimmings_range(),
+                        ));
+                    }
                     // A sleeve that ends in nothing is the other half of why
                     // a figure reads as a shop dummy. The hand is one sphere
                     // and it swings with the arm because it hangs off the
@@ -1073,15 +1292,16 @@ pub fn dress(
                     joint.spawn((
                         Bare,
                         Mesh3d(assets.hand.clone()),
-                        MeshMaterial3d(worn.bare.clone()),
-                        Transform::from_xyz(0.0, -body::ARM_LENGTH, 0.0),
+                        MeshMaterial3d(skin.clone()),
+                        Transform::from_xyz(0.0, -body::ARM_LENGTH, 0.0)
+                            .with_scale(Vec3::new(0.72, 0.90, 0.50)),
                         trimmings_range(),
                     ));
                 });
         }
 
         for (limb, side) in [(Limb::LeftLeg, -1.0f32), (Limb::RightLeg, 1.0)] {
-            let joint = Vec3::new(side * 0.10, body::HIP, 0.0);
+            let joint = Vec3::new(side * 0.10 * appearance.hips, body::HIP, 0.0);
             parent
                 .spawn((
                     limb,
@@ -1389,7 +1609,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_citizen_costs_a_quarter_of_what_it_used_to() {
+    fn a_citizen_is_still_worth_what_it_costs() {
         // 8400 triangles, of which 4096 were four limbs at `Capsule3d`'s
         // default 32x16 meshing, 1440 two hands at `Sphere`'s default
         // icosphere, and 1088 one head at Bevy's default UV sphere. The
@@ -1397,6 +1617,12 @@ mod tests {
         // the city read as angular: nearly everything round in the frame was
         // a person, and the budget had gone into smoothing four featureless
         // tubes that are 40 pixels tall on screen.
+        //
+        // That bought a quarter-cost figure. The human-character pass has
+        // since spent half of it back — a neck, a nose, ears, a collar and a
+        // wardrobe — which is the trade that made a flummi read as a person,
+        // and is worth it. What is not worth it is spending the rest without
+        // noticing, so both numbers below are pinned.
         //
         // Pinned rather than bounded, so that a part added at a primitive's
         // default resolution shows up here as a failing test instead of
@@ -1420,8 +1646,77 @@ mod tests {
         assert_eq!((head, hair, hand), (440, 180, 180));
         assert_eq!((arm, leg), (120, 120));
 
-        let citizen = torso + head + hair + 2 * (arm + leg + hand + shoe);
-        assert_eq!(citizen, 2516, "the cast has put weight back on");
+        // Every part `dress_person` hangs on a citizen, named, so that adding
+        // one to the spawner and not to this list is a visible omission rather
+        // than an invisible one. It was a bare sum of seven parts, and the
+        // human-character pass then trebled the figure underneath it without
+        // moving the number — a tripwire that no longer touches the thing it
+        // was strung across is worse than none, because it reads as a budget
+        // that is still being kept.
+        let detail = triangles(&rounded_box(Vec3::ONE));
+        let body = [
+            ("torso", torso),
+            ("neck", detail),
+            ("head", head),
+            ("nose and ears", 3 * hand),
+            ("hair", hair),
+            ("collar", detail),
+            ("arms", 2 * arm),
+            ("hands", 2 * hand),
+            ("legs", 2 * leg),
+            ("shoes", 2 * shoe),
+        ];
+        let plain: usize = body.iter().map(|(_, n)| n).sum();
+        // And the extras, which are draws from the appearance stream rather
+        // than parts everybody has. The worst citizen is a long coat (outfit
+        // 3, which also carries the zip and pockets) with a bob and glasses;
+        // short sleeves (outfit 1) swap the zip for two bare forearms and come
+        // out lighter, so they are not what the ceiling is measured on.
+        let extras = [
+            ("zip and pockets", 3 * detail),
+            ("glasses", 5 * detail),
+            ("bob", 2 * hair),
+            ("coat skirt", torso),
+        ];
+        let heaviest = plain + extras.iter().map(|(_, n)| n).sum::<usize>();
+
+        assert_eq!(
+            plain, 3760,
+            "a plain citizen has put weight back on: {body:?}"
+        );
+        assert_eq!(
+            heaviest, 7288,
+            "the most expensive citizen has put weight back on: {extras:?}"
+        );
+    }
+
+    #[test]
+    fn no_haircut_pokes_out_of_the_head_it_is_on() {
+        // `body`'s compile-time block asserts this for `HAIR_RISE` and
+        // `HAIR_FLATTEN`, and stopped measuring anything the moment the five
+        // hairstyles below were written as literals beside the spawner: a
+        // figure that pokes out of its own collider can be hit in a hat that
+        // is not there. These are the same literals `dress_person` places,
+        // in head-local space, scaled by the tallest head the face variants
+        // build — so a sixth hairstyle has to be added here to be believed.
+        const HAIRSTYLES: [(f32, f32); 6] = [
+            (0.048, 0.68),
+            (0.055, 0.70),
+            (0.025, 0.87),
+            (0.045, 0.70),
+            (0.039, 0.66),
+            (body::HAIR_RISE, body::HAIR_FLATTEN * 1.28), // the pompadour
+        ];
+        // `head_scale` is (0.90 + face * 0.035, 1.10, 0.96); only y matters.
+        let head_y = 1.10;
+        for (rise, flatten) in HAIRSTYLES {
+            let crown = body::HEAD_CENTRE + (rise + body::HAIR_RADIUS * flatten) * head_y;
+            assert!(
+                crown <= CAPSULE_HALF,
+                "a haircut reaches {crown:.3} against a capsule of {:.3}",
+                CAPSULE_HALF
+            );
+        }
     }
 
     #[test]

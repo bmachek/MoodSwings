@@ -106,7 +106,7 @@ struct Notice {
     foot: &'static str,
 }
 
-const NOTICES: [Notice; 6] = [
+const NOTICES: [Notice; 20] = [
     Notice {
         head: "TIEFBAUAMT",
         title: "BAUSTELLE",
@@ -136,6 +136,76 @@ const NOTICES: [Notice; 6] = [
         head: "UMLEITUNG",
         title: "DEM SCHILD FOLGEN",
         foot: "WELCHEM SCHILD?",
+    },
+    Notice {
+        head: "BAUAMT",
+        title: "ENDE IN SICHT",
+        foot: "SICHT DERZEIT GESPERRT",
+    },
+    Notice {
+        head: "STADT",
+        title: "HIER WIRD GEDACHT",
+        foot: "BITTE NICHT STÖREN",
+    },
+    Notice {
+        head: "VERKEHRSAMT",
+        title: "AB HIER UMWEG",
+        foot: "SIE SCHAFFEN DAS",
+    },
+    Notice {
+        head: "TIEFBAUAMT",
+        title: "FORTSCHRITT: JA",
+        foot: "RICHTUNG: OFFEN",
+    },
+    Notice {
+        head: "STADT",
+        title: "BITTE GEDULD",
+        foot: "NACHLIEFERUNG LÄUFT",
+    },
+    Notice {
+        head: "BAULEITUNG",
+        title: "WIR SIND IM PLAN",
+        foot: "DER PLAN IST WEG",
+    },
+    Notice {
+        head: "AMT FÜR RUHE",
+        title: "LÄRM MACHT PAUSE",
+        foot: "PAUSE MACHT LÄRM",
+    },
+    Notice {
+        head: "BAUAMT",
+        title: "ERÖFFNUNG BALD",
+        foot: "BALD WIRD VERLÄNGERT",
+    },
+    Notice {
+        head: "STADTWERKE",
+        title: "LEITUNG GESUCHT",
+        foot: "IHRE AUCH?",
+    },
+    Notice {
+        head: "TIEFBAUAMT",
+        title: "ISARUFER GESPERRT",
+        foot: "DIE ISAR NICHT",
+    },
+    Notice {
+        head: "BAUAMT",
+        title: "GEPLANT SEIT 1475",
+        foot: "FERTIG AB 1476",
+    },
+    Notice {
+        head: "STADT",
+        title: "ALTSTADT ODER NEUSTADT",
+        foot: "HEUTE KEINS VON BEIDEN",
+    },
+    Notice {
+        head: "VERKEHRSAMT",
+        title: "HOFBERG BERGAUF",
+        foot: "ABWÄRTS AUCH GESPERRT",
+    },
+    Notice {
+        head: "BAULEITUNG",
+        title: "ZWEI BRÜCKEN",
+        foot: "EINE REICHT HEUTE",
     },
 ];
 
