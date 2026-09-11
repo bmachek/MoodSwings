@@ -364,7 +364,8 @@ fn drive_traffic(
 
         // Ease off through corners.
         let cornering = 1.0 - input.steer.abs() * 0.55;
-        let mut desired = driver.cruise_speed * cornering;
+        let approach = turn_approach_factor(driver.turn, (end - position).length());
+        let mut desired = driver.cruise_speed * cornering * approach;
 
         // And keep a gap to whatever is in front. The ray used to be a yes/no
         // question — anything within five metres plus a second and a bit of
@@ -446,6 +447,25 @@ const HEADWAY: f32 = 1.6;
 /// given up on entirely.
 const HONK_AFTER: f32 = 5.0;
 const GIVE_UP: f32 = 26.0;
+
+/// Slow before the junction, where steering alone is too late to make a
+/// narrow street turn believable. The factor reaches one outside the
+/// approach window so an intended turn never permanently reduces cruising
+/// speed on the preceding road.
+fn turn_approach_factor(turn: TurnKind, distance: f32) -> f32 {
+    let window = 16.0;
+    if distance >= window {
+        return 1.0;
+    }
+    let near = 1.0 - (distance / window).clamp(0.0, 1.0);
+    let target = match turn {
+        TurnKind::Straight => 1.0,
+        TurnKind::Left => 0.84,
+        TurnKind::Right => 0.76,
+        TurnKind::UTurn => 0.55,
+    };
+    1.0 - near * (1.0 - target)
+}
 
 fn same_queue(alignment: f32, own_up: f32, leader_up: f32) -> bool {
     alignment > 0.5 && own_up > 0.5 && leader_up > 0.5
@@ -559,5 +579,16 @@ mod tests {
         assert!(!same_queue(0.0, 1.0, 1.0));
         assert!(!same_queue(1.0, -1.0, 1.0));
         assert!(!same_queue(1.0, 1.0, -1.0));
+    }
+
+    #[test]
+    fn turns_brake_only_inside_the_approach_window() {
+        assert_eq!(turn_approach_factor(TurnKind::Right, 20.0), 1.0);
+        assert!(
+            turn_approach_factor(TurnKind::Right, 2.0) < turn_approach_factor(TurnKind::Left, 2.0)
+        );
+        assert!(
+            turn_approach_factor(TurnKind::UTurn, 2.0) < turn_approach_factor(TurnKind::Right, 2.0)
+        );
     }
 }

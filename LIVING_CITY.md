@@ -67,6 +67,9 @@ the game's verbs. Everyday routines must work before interruptions become funny.
    nodes from intersections. Extend the atlas bake for direction/access/speed
    metadata, with explicit defaults where absent. Rendering and routing consume
    the same road rules. Preserve ODbL attribution and deterministic generation.
+   The current seed of this work is the shared `TurnKind` classification and
+   distance based approach braking; signals and conflict reservations build on
+   that intent instead of guessing from steering after the fact.
 3. **Driving and intersections.** Route-aware leader detection and predictive
    following adapted to the existing Avian controller, stop lines, conflicting
    movements, right of way, traffic lights, downstream space and pedestrian/
