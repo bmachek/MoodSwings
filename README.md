@@ -1542,12 +1542,26 @@ standing in it. Gutenbergweg managed two segments of nineteen (15.2 m and
 are now held to `WIDEST`, the 22 m the bake already refuses to believe past
 for any width at all, and everything the buildings do confirm is untouched.
 
-This is in `tools/bake-city.py` and takes effect on the next bake; the
-committed `assets/cities/landshut.ron` still has the old widths. A machine
-that can reach the Overture and Copernicus buckets can redo it from the
-committed file alone — `tools/bake-city.py --from-ron assets/cities/landshut.ron
-<out.ron> ...` — without going near Overpass, and the bake prints every band it
-moves.
+The atlas has been rebaked for it, which is the first time that path has been
+exercised since the file was committed, and it is worth writing down what it
+costs. `--from-ron` reads the committed file, keeps its streets, water and open
+ground, and regenerates the buildings and the relief from the Overture and
+Copernicus buckets — no Overpass. It converges: the second run over its own
+output is byte-identical, and so is the third. But the *first* run is not a
+no-op, because the buildings it reads today decompose into 4672 parts where the
+committed file had 4739, and `cap_widths` measures against those. Forty-three
+streets narrow again on that first pass, 108 m of carriageway in all, of which
+the sharpest are Nikolastraße 11.1 → 4.4 and Papiererstraße 10.4 → 4.0. Both
+are improvements — a 10 m street through that quarter was dropping the houses
+standing on it as buildings in the road, and at 4 m they stand.
+
+So a rebake is a real change to the town and not a formality. Run it, look at
+it, and keep the shots:
+
+    tools/bake-city.py --from-ron assets/cities/landshut.ron out.ron \
+        --buildings-parquet <overture.parquet> --dem <copernicus.tif>
+
+with the bbox `tools/fetch-city.sh` names. It prints every band it moves.
 
 A Gasse is flush. A lane no wider than one car, not arterial, and paved in
 setts or slabs is not a carriageway with kerbs down it — it is a lane, and an
