@@ -26,9 +26,16 @@ use crate::world::texture::{glyph, painted_rect};
 /// The registrations in circulation.
 ///
 /// Invented, and deliberately in no real jurisdiction's format — a plate that
-/// happens to be somebody's is a plate on a car committing crimes.
-pub const REGISTRATIONS: [&str; 8] = [
+/// happens to be somebody's is a plate on a car committing crimes. The last
+/// two are the exception that keeps the rule: a personalised plate is nobody's
+/// registration anywhere, it is a joke somebody paid for, and a city where one
+/// car in seven has bought one is a city with people in it. They stay in the
+/// same seven-cell strip as the rest, so nothing about the plate painter
+/// changes — only what it says.
+pub const REGISTRATIONS: [&str; 14] = [
     "4ZQK719", "8TFM244", "2HRV865", "6XDN037", "9BLP512", "3WGC680", "7KJS391", "5NMD428",
+    "1QPX846", "6VKT295", "8DRN063", "4LMB571", // And the two that were chosen.
+    "ABPRALL", "BOING01",
 ];
 
 /// Characters across a plate, including the blanks either end.
@@ -129,6 +136,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_vanity_plates_stay_a_find_and_not_a_fleet() {
+        // A personalised plate is funny once a street and tiresome once a
+        // car. It is a share of the run rather than a rule in the picker,
+        // so the only thing keeping it rare is how many of them there are.
+        let vanity = REGISTRATIONS
+            .iter()
+            .filter(|plate| !plate.bytes().any(|c| c.is_ascii_digit()) || plate.ends_with("01"))
+            .count();
+        assert!(vanity >= 1, "nobody in this city has a sense of humour");
+        assert!(
+            vanity * 5 <= REGISTRATIONS.len(),
+            "{vanity} of {} plates are jokes",
+            REGISTRATIONS.len()
+        );
     }
 
     #[test]

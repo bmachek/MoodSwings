@@ -33,6 +33,7 @@ use rand_chacha::ChaCha8Rng;
 
 use super::buildings::{ChunkOf, SIDEWALK_HEIGHT};
 use super::roadgraph::RoadEdge;
+use super::texture::{encode, painted_rect, text_band};
 use crate::core::schedule::GameSet;
 
 /// How far a site is drawn. Further than the small stuff: a red-and-white
@@ -82,6 +83,136 @@ const _: () = assert!(BARRIER_MASS * 10.0 < PIPE_MASS);
 // cannot silently leave this the wrong way round.
 const _: () = assert!(PIPE_SHEARS_AT > super::props::HYDRANT_SHEARS_AT);
 
+// --------------------------------------------------------------- notice ----
+
+/// The board the city puts up to explain itself.
+///
+/// Every hole in every German pavement has one of these beside it, and it is
+/// the single most reliably deadpan object in municipal life: a department
+/// nobody can name, a completion date nobody believes, and a line at the
+/// bottom disclaiming the whole thing. The site was already the best joke on
+/// the street — a barriered square of nothing with a lamp blinking at it —
+/// and it has been standing there for a year without a caption.
+///
+/// Written in the register of the institution telling it, which is the rule
+/// every painted word in this town is held to: the sign is never in on the
+/// joke, and that is the joke.
+struct Notice {
+    /// The authority line, small, in the blue band across the top.
+    head: &'static str,
+    /// What is happening here. Or what is not.
+    title: &'static str,
+    /// The small print, which is where the sign gives itself away.
+    foot: &'static str,
+}
+
+const NOTICES: [Notice; 6] = [
+    Notice {
+        head: "TIEFBAUAMT",
+        title: "BAUSTELLE",
+        foot: "FERTIGSTELLUNG: 2031",
+    },
+    Notice {
+        head: "STADT",
+        title: "WIR BAUEN FÜR SIE",
+        foot: "SIE WARTEN FÜR UNS",
+    },
+    Notice {
+        head: "AMT FÜR ORDNUNG",
+        title: "BETRETEN VERBOTEN",
+        foot: "HÜPFEN ERST RECHT",
+    },
+    Notice {
+        head: "TIEFBAUAMT",
+        title: "ARBEITEN RUHEN",
+        foot: "SEIT MÄRZ",
+    },
+    Notice {
+        head: "STADT",
+        title: "HIER ENTSTEHT ETWAS",
+        foot: "DETAILS FOLGEN",
+    },
+    Notice {
+        head: "UMLEITUNG",
+        title: "DEM SCHILD FOLGEN",
+        foot: "WELCHEM SCHILD?",
+    },
+];
+
+/// The board, in metres, and how high its middle rides. Chest-to-eye height
+/// on two legs, which is where a notice nobody reads is always put.
+const NOTICE: Vec2 = Vec2::new(0.95, 0.68);
+const NOTICE_HEIGHT: f32 = 1.24;
+/// How far along the street from the middle of the site it stands, in the
+/// site's own frame: past the end of the hoardings, clear of the trench,
+/// and nowhere near the gutter the cones are in.
+const NOTICE_ALONG: f32 = 2.95;
+const NOTICE_ACROSS: f32 = 0.9;
+/// How far apart the legs stand and how thick they are.
+const NOTICE_LEGS: f32 = 0.34;
+const NOTICE_LEG: f32 = 0.035;
+/// Two faces, back to back: a site is walked past from both ends of a street
+/// and a sign that is only there from one of them is half a sign.
+const NOTICE_LEAF: f32 = 0.014;
+/// How deep the blue authority band runs down the top of the sheet.
+const NOTICE_BAND: f32 = 0.26;
+
+// It is read from the pavement, so it must stand clear of the trench and
+// outside the pen, and it must be a sign at eye level rather than a gantry.
+const _: () = assert!(NOTICE_ALONG > PIT.x * 0.5 + 0.6);
+const _: () = assert!(NOTICE_HEIGHT - NOTICE.y * 0.5 > 0.8);
+const _: () = assert!(NOTICE_HEIGHT + NOTICE.y * 0.5 < 1.9);
+const _: () = assert!(NOTICE_LEGS * 2.0 < NOTICE.x);
+
+/// Width of one glyph cell relative to the height of its letters — the same
+/// proportion as every other painted word in this city.
+const CELL_ASPECT: f32 = 0.95;
+
+/// One line of notice text: where its band sits, how tall its letters are
+/// and how wide it comes out, clamped so the longest line stays on the sheet.
+fn notice_line(text: &str, centre_v: f32, tallest_v: f32) -> (Vec3, Vec<u8>) {
+    let cells = (text.chars().count() + 2) as f32;
+    let letter_v = tallest_v.min(0.90 / (cells * CELL_ASPECT * (NOTICE.y / NOTICE.x)));
+    let width_u = cells * letter_v * CELL_ASPECT * (NOTICE.y / NOTICE.x);
+    (Vec3::new(centre_v, letter_v, width_u), encode(text))
+}
+
+/// Paints one board: white sheet, blue authority band, dark print.
+fn notice_texture(notice: &Notice) -> Image {
+    let head = notice_line(notice.head, NOTICE_BAND * 0.5, 0.11);
+    let lines = [
+        notice_line(notice.title, 0.52, 0.20),
+        notice_line(notice.foot, 0.81, 0.11),
+    ];
+    const SHEET: [u8; 4] = [238, 238, 234, 255];
+    const BAND: [u8; 4] = [26, 62, 124, 255];
+    const PRINT: [u8; 4] = [30, 32, 36, 255];
+    const PAPER: [u8; 4] = [206, 206, 200, 255];
+
+    painted_rect(384, 274, TextureFormat::Rgba8UnormSrgb, move |u, v| {
+        let band = v < NOTICE_BAND;
+        let field = if band { BAND } else { SHEET };
+        // A pressed steel rim, which is what is left of this sign at the
+        // distance where the print has stopped resolving.
+        if !(0.015..=0.985).contains(&u) || !(0.02..=0.98).contains(&v) {
+            return PAPER;
+        }
+        let paint = |(geometry, text): &(Vec3, Vec<u8>)| {
+            let (centre_v, letter_v, width_u) = (geometry.x, geometry.y, geometry.z);
+            let band_u = (u - (0.5 - width_u * 0.5)) / width_u;
+            let band_v = (v - (centre_v - letter_v * 0.5)) / letter_v;
+            (0.0..1.0).contains(&band_u) && text_band(text, band_u, band_v)
+        };
+        if band {
+            return if paint(&head) { SHEET } else { BAND };
+        }
+        if lines.iter().any(paint) {
+            return PRINT;
+        }
+        field
+    })
+}
+
 #[derive(Resource)]
 pub struct WorksiteKit {
     cube: Handle<Mesh>,
@@ -100,6 +231,11 @@ pub struct WorksiteKit {
     band: Handle<StandardMaterial>,
     concrete: Handle<StandardMaterial>,
     spoil: Handle<StandardMaterial>,
+    /// The sheet the city explains itself on, and the run of things it has
+    /// to say. One quad shared by every site in the town; only the paint
+    /// differs, the same economy the shop signs run on.
+    sheet: Handle<Mesh>,
+    notices: Vec<Handle<StandardMaterial>>,
     /// The paving slabs, stacked on edge round the dug patch.
     slab: Handle<StandardMaterial>,
     /// The bare earth under the lifted slabs. Not black — a dark patch painted
@@ -221,6 +357,17 @@ pub fn build_assets(
             perceptual_roughness: 1.0,
             ..default()
         }),
+        sheet: meshes.add(Rectangle::new(NOTICE.x, NOTICE.y)),
+        notices: NOTICES
+            .iter()
+            .map(|notice| {
+                materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(notice_texture(notice))),
+                    perceptual_roughness: 0.72,
+                    ..default()
+                })
+            })
+            .collect(),
         slab: materials.add(StandardMaterial {
             base_color: Color::srgb(0.52, 0.51, 0.49),
             perceptual_roughness: 0.97,
@@ -411,6 +558,47 @@ pub fn spawn_edge(
         );
     }
 
+    // The notice, standing past the end of the pen and turned across the
+    // pavement, so somebody walking down the footway meets it face on rather
+    // than edge on. The one thing on a site that is meant to be read, and
+    // therefore the only thing not painted red and white.
+    //
+    // Static and unbreakable: a sign a flummi can put across the street is a
+    // sign nobody ever finishes reading, and this one has a punchline.
+    let notice = &kit.notices[rng.random_range(0..kit.notices.len())];
+    // Turned a quarter from the hoardings, so its width runs across the
+    // pavement — which is to say along `depth`, which is why both legs are
+    // written in the site's own frame rather than back out of the yaw.
+    let notice_yaw = facing + std::f32::consts::FRAC_PI_2;
+    let post = at(NOTICE_ALONG, NOTICE_ACROSS);
+    for side in [-1.0f32, 1.0] {
+        let leg = at(NOTICE_ALONG, NOTICE_ACROSS + side * NOTICE_LEGS);
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.cube.clone()),
+            MeshMaterial3d(kit.steel.clone()),
+            Transform::from_xyz(leg.x, ground + NOTICE_HEIGHT * 0.5, leg.y)
+                .with_rotation(Quat::from_rotation_y(notice_yaw))
+                .with_scale(Vec3::new(NOTICE_LEG, NOTICE_HEIGHT, NOTICE_LEG)),
+            visibility.clone(),
+        ));
+    }
+    // Both faces carry the same print: a `Rectangle` looks down its own +Z,
+    // so the second leaf is the first turned half a turn and nudged back
+    // along the sheet's own normal.
+    for turn in [0.0f32, std::f32::consts::PI] {
+        let spin = Quat::from_rotation_y(notice_yaw + turn);
+        let out = (spin * Vec3::Z * NOTICE_LEAF).xz();
+        commands.spawn((
+            ChunkOf(chunk),
+            Mesh3d(kit.sheet.clone()),
+            MeshMaterial3d(notice.clone()),
+            Transform::from_xyz(post.x + out.x, ground + NOTICE_HEIGHT, post.y + out.y)
+                .with_rotation(spin),
+            visibility.clone(),
+        ));
+    }
+
     // And two cones out in the gutter, which is both what actually happens and
     // the half of the site the traffic gets to knock about.
     for i in 0..2 {
@@ -541,6 +729,56 @@ mod tests {
     use super::*;
 
     /// The site fits on the pavement it is standing on.
+    #[test]
+    fn every_notice_fits_the_font_and_the_sheet() {
+        use crate::world::texture::glyph;
+        for notice in &NOTICES {
+            for (band, text) in [
+                (0.11f32, notice.head),
+                (0.20, notice.title),
+                (0.11, notice.foot),
+            ] {
+                for code in encode(text) {
+                    assert!(
+                        code == b' ' || glyph(code) != [0; 7],
+                        "a site notice says {text:?} and the font cannot draw {:?}",
+                        code as char
+                    );
+                }
+                let (geometry, _) = notice_line(text, 0.5, band);
+                assert!(
+                    geometry.z <= 0.901,
+                    "{text:?} runs {:.2} of the sheet wide",
+                    geometry.z
+                );
+                assert!(geometry.y > 0.02, "{text:?} is printed too small to read");
+            }
+        }
+    }
+
+    #[test]
+    fn a_notice_is_a_sheet_with_print_on_it() {
+        // The same band-arithmetic slip the plaques and the posters can
+        // hide: a sign painted all print or no print still stands beside
+        // the hole, it just stops saying anything.
+        for notice in &NOTICES {
+            let image = notice_texture(notice);
+            let data = image.data.as_ref().expect("the notice was not painted");
+            let dark = data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[0] < 80 && pixel[1] < 90)
+                .count() as f32
+                / (data.len() / 4) as f32;
+            assert!(
+                (0.03..0.55).contains(&dark),
+                "{:?}: {dark:.3} of the sheet is ink and band",
+                notice.title
+            );
+        }
+    }
+
     #[test]
     fn a_worksite_stays_on_its_own_pavement() {
         // The pavement is `citygen::SIDEWALK_WIDTH` deep, the site is centred

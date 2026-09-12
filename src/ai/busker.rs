@@ -186,7 +186,15 @@ fn take_a_pitch(
     mut rng: ResMut<BuskerRng>,
     focus: Res<super::focus::SimFocus>,
     playing: Query<(Entity, &Transform), With<Busker>>,
-    idle: Query<(Entity, &Transform), (With<Pedestrian>, Without<Busker>, Without<Listening>)>,
+    idle: Query<
+        (Entity, &Transform),
+        (
+            With<Pedestrian>,
+            Without<Busker>,
+            Without<Listening>,
+            Without<super::queue::Queueing>,
+        ),
+    >,
     guitars: Query<(Entity, &ChildOf), With<Guitar>>,
 ) {
     if !timer.0.tick(time.delta()).just_finished() {
@@ -283,7 +291,19 @@ fn gather(
     city: Res<CityMood>,
     mut rng: ResMut<BuskerRng>,
     buskers: Query<(Entity, &Busker)>,
-    passing: Query<(Entity, &Transform), (With<Pedestrian>, Without<Busker>, Without<Listening>)>,
+    // A queue does not dissolve for a guitar. Somebody who has been standing
+    // outside a bakery for half a minute is not about to give up their place
+    // to stand in a ring instead, and letting them means two systems walking
+    // the same body to two different spots on the same pavement.
+    passing: Query<
+        (Entity, &Transform),
+        (
+            With<Pedestrian>,
+            Without<Busker>,
+            Without<Listening>,
+            Without<super::queue::Queueing>,
+        ),
+    >,
     listeners: Query<(Entity, &Listening)>,
 ) {
     // Piggybacks on the pitch timer rather than keeping a second one: both

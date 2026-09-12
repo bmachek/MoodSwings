@@ -366,6 +366,7 @@ fn keep_watch(
     mut watch: ResMut<Watch>,
     agents: Res<crate::ai::observe::AgentObservations>,
     giveway: Res<crate::ai::giveway::GiveWay>,
+    queues: Res<crate::ai::queue::Queues>,
     entities: Query<()>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -423,12 +424,16 @@ fn keep_watch(
             .count();
         info!(
             "patrol agents: {} observed, {blocked} blocked, {} blocked episodes, \
-             {} waiting at a mouth over {} runs, {} given way so far",
+             {} waiting at a mouth over {} runs, {} given way so far, \
+             {} standing in {} queues ({:?})",
             agents.agents.len(),
             agents.blocked_episodes,
             giveway.waiting,
             giveway.occupied_runs(),
             giveway.stood_aside,
+            queues.standing(),
+            queues.lines(),
+            queues.tally(),
         );
     }
     let at = patrol.elapsed;
@@ -572,6 +577,23 @@ fn keep_watch(
         complain(format!(
             "a car has given way for {:.0}s, with {} waiting",
             giveway.longest_wait, giveway.waiting
+        ));
+    }
+
+    // A queue is the one thing the crowd does that has no symptom anywhere
+    // else: somebody standing in a line is not blocked, is not waiting on a
+    // give-way, is not off its route and is not going anywhere. A line whose
+    // head cannot reach the door never advances and never complains, and one
+    // wedged queue outside one shop in a town of several hundred is exactly
+    // the failure a human would walk past. Well past the longest honest
+    // service — see `ai::queue::SERVICE` — and past the patience that empties
+    // a line that is merely slow.
+    if queues.longest_stall() > 75.0 {
+        complain(format!(
+            "a queue has not moved for {:.0}s, with {} standing in {} lines",
+            queues.longest_stall(),
+            queues.standing(),
+            queues.lines()
         ));
     }
 

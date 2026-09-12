@@ -124,6 +124,7 @@ fn decide_to_cross(
             Without<Launched>,
             Without<super::errands::Errand>,
             Without<super::errands::Browsing>,
+            Without<super::queue::Queueing>,
             Without<super::busker::Listening>,
         ),
     >,

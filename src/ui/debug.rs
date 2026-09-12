@@ -41,6 +41,7 @@ fn agent_panel(
     observations: Res<crate::ai::observe::AgentObservations>,
     residents: Res<crate::ai::resident::Residents>,
     giveway: Res<crate::ai::giveway::GiveWay>,
+    queues: Res<crate::ai::queue::Queues>,
     focus: Res<crate::ai::focus::SimFocus>,
     mut config: ResMut<GameConfig>,
     mut selected: Local<Option<Entity>>,
@@ -66,6 +67,18 @@ fn agent_panel(
                 "residents: {}/{} visible",
                 residents.active_count(),
                 residents.total_count()
+            ));
+            // Standing in a line is the one thing the crowd does that has no
+            // symptom in any other reading here: a queued citizen is not
+            // blocked, not waiting on a give-way and not going anywhere, so
+            // without this the panel would report a healthy street with a
+            // fifth of it stuck outside a bakery. The stall is the one
+            // number to look at — see `ai::queue::Queues::longest_stall`.
+            ui.label(format!(
+                "queues: {} standing in {} · longest stall {:.0}s",
+                queues.standing(),
+                queues.lines(),
+                queues.longest_stall()
             ));
             // A yielding car is not blocked and never will be, so the counts
             // above cannot show one. This is the only readout that does.

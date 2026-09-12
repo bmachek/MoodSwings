@@ -106,10 +106,42 @@ fn pitch_texture() -> Image {
     })
 }
 
+/// The fixtures this league has, and how each of them is going.
+///
+/// Every one of them is unfinished, and that is the whole joke: nothing in
+/// this city can be decided, because nothing in it can be stopped. The five
+/// clubs are named after what happens to a rubber ball — Wumms, Boing, Dotz,
+/// Abprall, Delle — which is also how half the real ones got their names,
+/// one abstraction further back.
+///
+/// One derby per city rather than one per league: the board is built once at
+/// startup from the world seed, so a given town has a fixture the way it has
+/// a street plan, and coming back to it finds the same match still level.
+const FIXTURES: [(&str, &str); 6] = [
+    ("FC WUMMS - SV BOING", "0 : 0 - VERLÄNGERUNG: EWIG"),
+    ("SV DOTZ - FC ABPRALL", "2 : 2 - SEIT DIENSTAG"),
+    ("TSV GUMMI 04 - SC DELLE", "1 : 1 - TORLINIE STRITTIG"),
+    ("FC WUMMS - TSV GUMMI 04", "3 : 3 - NIEMAND ZÄHLT MEHR"),
+    ("SV BOING - SC DELLE", "0 : 0 - BALL IST WEG"),
+    ("FC ABPRALL - SV DOTZ", "5 : 5 - WIR SPIELEN WEITER"),
+];
+
+/// Which fixture this city's stadium is showing.
+fn fixture_for(seed: u64) -> &'static (&'static str, &'static str) {
+    // The seed's own bits, mixed once so that two neighbouring seeds do not
+    // get neighbouring fixtures — the same avalanche the calendar needed.
+    let mut h = seed ^ 0x9E37_79B9_7F4A_7C15;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    &FIXTURES[(h % FIXTURES.len() as u64) as usize]
+}
+
 /// The scoreboard: the fixture, and the eternal result.
-fn score_texture() -> Image {
-    let title = encode("FC WUMMS - SV BOING");
-    let score = encode("0 : 0 - VERLÄNGERUNG: EWIG");
+fn score_texture(seed: u64) -> Image {
+    let (fixture, result) = fixture_for(seed);
+    let title = encode(fixture);
+    let score = encode(result);
     painted_rect(512, 128, TextureFormat::Rgba8UnormSrgb, move |u, v| {
         if !(0.015..=0.985).contains(&u) || !(0.06..=0.94).contains(&v) {
             return [18, 20, 24, 255];
@@ -128,6 +160,7 @@ pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
+    seed: u64,
 ) -> StadiumKit {
     StadiumKit {
         body: meshes.add(Cuboid::new(0.42, 0.62, 0.34)),
@@ -157,7 +190,7 @@ pub fn build_assets(
         }),
         board: meshes.add(Rectangle::new(7.0, 1.75)),
         score: materials.add(StandardMaterial {
-            base_color_texture: Some(images.add(score_texture())),
+            base_color_texture: Some(images.add(score_texture(seed))),
             perceptual_roughness: 0.7,
             ..default()
         }),
@@ -364,14 +397,51 @@ mod tests {
     #[test]
     fn the_scoreboard_fits_the_font() {
         use super::super::texture::glyph;
-        for text in ["FC WUMMS - SV BOING", "0 : 0 - VERLÄNGERUNG: EWIG"] {
-            for code in encode(text) {
+        for (fixture, result) in FIXTURES {
+            for text in [fixture, result] {
+                for code in encode(text) {
+                    assert!(
+                        code == b' ' || glyph(code) != [0; 7],
+                        "the scoreboard needs {:?} and the font has none",
+                        code as char
+                    );
+                }
+                // The board is 512 texels across and a name written wider
+                // than about thirty cells stops resolving into letters.
                 assert!(
-                    code == b' ' || glyph(code) != [0; 7],
-                    "the scoreboard needs {:?} and the font has none",
-                    code as char
+                    text.chars().count() <= 28,
+                    "{text:?} is too long to read from the stands"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_town_has_a_derby_and_not_always_the_same_one() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..400u64 {
+            seen.insert(fixture_for(seed).0);
+        }
+        assert_eq!(seen.len(), FIXTURES.len(), "only {seen:?} are ever played");
+        // And a town's fixture is a fact about the town: the stadium is
+        // respawned with its chunk and must not re-draw the match.
+        assert_eq!(fixture_for(0xA17E_5EED), fixture_for(0xA17E_5EED));
+    }
+
+    #[test]
+    fn nobody_in_this_league_has_ever_won_anything() {
+        // The league table is the joke and the joke is that it is empty.
+        // A fixture that had been decided would be the one thing in this
+        // city that finished.
+        for (fixture, result) in FIXTURES {
+            let goals: Vec<&str> = result
+                .split(" - ")
+                .next()
+                .expect("a result starts with a score")
+                .split(" : ")
+                .collect();
+            assert_eq!(goals.len(), 2, "{fixture}: {result:?} is not a score");
+            assert_eq!(goals[0], goals[1], "{fixture} has been decided");
         }
     }
 
@@ -398,11 +468,24 @@ mod tests {
     }
 
     #[test]
-    fn nobody_has_ever_scored() {
-        let image = score_texture();
-        assert!(image.data.is_some(), "the scoreboard was not painted");
-        // The joke is in the fixture: the board must carry the eternal nil-nil.
-        // (The text itself is checked against the font above; this pins the
-        // texture actually being built.)
+    fn the_board_is_lit_letters_on_a_dark_panel() {
+        // Every fixture actually gets painted, and gets painted as a
+        // scoreboard: a band slip that lights the whole panel or none of it
+        // builds, hangs over the stand, and says nothing from the terraces.
+        for seed in 0..FIXTURES.len() as u64 * 7 {
+            let image = score_texture(seed);
+            let data = image.data.as_ref().expect("the scoreboard was not painted");
+            let lit = data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[..3] == [244, 214, 74])
+                .count() as f32
+                / (data.len() / 4) as f32;
+            assert!(
+                (0.02..0.40).contains(&lit),
+                "seed {seed}: {lit:.3} of the board is lit"
+            );
+        }
     }
 }

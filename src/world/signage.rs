@@ -77,6 +77,27 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 field: [14, 92, 84, 255],
                 letter: 0.55,
             },
+            Plaque {
+                title: "LADEN OHNE NAMEN",
+                subline: Some("DER NAME WAR ZU TEUER"),
+                ink: [36, 38, 40, 255],
+                field: [214, 212, 204, 255],
+                letter: 0.52,
+            },
+            Plaque {
+                title: "TANTE EMMA & SÖHNE",
+                subline: Some("EMMA IST IM URLAUB"),
+                ink: [250, 244, 228, 255],
+                field: [122, 44, 60, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "KAUFHALLE RUND",
+                subline: Some("ALLES DA. FAST ALLES."),
+                ink: [28, 34, 46, 255],
+                field: [232, 196, 60, 255],
+                letter: 0.54,
+            },
         ],
         Restaurant => &[
             Plaque {
@@ -101,13 +122,36 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 letter: 0.50,
             },
             // Index three, and the Fernost-Viertel forces it — see the
-            // sign-variant override in `buildings::spawn_building`.
+            // sign-variant override in `buildings::spawn_building`. Anything
+            // new goes on the end: a plaque inserted above this line moves
+            // the Wok, and every dining room in the quarter changes cuisine.
             Plaque {
                 title: "WOK & WEG",
                 subline: Some("GLÜCKSKEKS SAGT: KOMMEN SIE WIEDER"),
                 ink: [250, 226, 160, 255],
                 field: [122, 24, 20, 255],
                 letter: 0.50,
+            },
+            Plaque {
+                title: "WIRTSHAUS ZUM ABPRALL",
+                subline: Some("KÜCHE BIS ES REICHT"),
+                ink: [238, 224, 198, 255],
+                field: [58, 72, 44, 255],
+                letter: 0.48,
+            },
+            Plaque {
+                title: "IMBISS HALT",
+                subline: Some("ESSEN IM STEHEN, FALLEN IM SITZEN"),
+                ink: [32, 30, 28, 255],
+                field: [226, 176, 46, 255],
+                letter: 0.52,
+            },
+            Plaque {
+                title: "KAFFEEHAUS ZUR UNRUHE",
+                subline: Some("EINMAL UMRÜHREN, BITTE"),
+                ink: [244, 236, 222, 255],
+                field: [84, 52, 34, 255],
+                letter: 0.48,
             },
         ],
         Hotel => &[
@@ -124,6 +168,20 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 ink: [236, 226, 240, 255],
                 field: [86, 60, 92, 255],
                 letter: 0.55,
+            },
+            Plaque {
+                title: "HOTEL WEICHE LANDUNG",
+                subline: Some("FRÜHSTÜCK AB SIEBEN, AUFSTEHEN NIE"),
+                ink: [246, 240, 226, 255],
+                field: [26, 78, 74, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "ZIMMER FREI",
+                subline: Some("MEISTENS"),
+                ink: [32, 30, 34, 255],
+                field: [224, 206, 150, 255],
+                letter: 0.58,
             },
         ],
         TownHall => &[Plaque {
@@ -452,30 +510,60 @@ const FRONTED: [BuildingKind; 6] = [
     BuildingKind::School,
 ];
 
-/// The filling station's board. Not a [`BuildingKind`] — a Tankstelle is a
+/// The filling station's boards. Not a [`BuildingKind`] — a Tankstelle is a
 /// vacant-lot occupant with a canopy rather than a building — but it hangs
-/// the same kind of painted sign, so it lives in the same kit.
-fn tankstelle_plaque() -> Plaque {
+/// the same kind of painted sign, so it lives in the same kit, and it gets
+/// competitors for the same reason the supermarkets do: one brand on every
+/// forecourt in the town is a monopoly, and a monopoly is not a joke.
+const TANKSTELLEN: [Plaque; 3] = [
     Plaque {
         title: "TANKSTELLE",
         subline: Some("BENZIN, BRAUSE & BEULENSPRAY"),
         ink: [252, 250, 244, 255],
         field: [206, 96, 22, 255],
         letter: 0.58,
-    }
-}
+    },
+    Plaque {
+        title: "SPRIT & SPASS",
+        subline: Some("SCHLAUCH BITTE ZURÜCKHÄNGEN"),
+        ink: [36, 40, 46, 255],
+        field: [238, 214, 66, 255],
+        letter: 0.56,
+    },
+    Plaque {
+        title: "TANKHOF ROLLE",
+        subline: Some("LUFT KOSTET NICHTS. NOCH."),
+        ink: [244, 246, 248, 255],
+        field: [30, 70, 132, 255],
+        letter: 0.56,
+    },
+];
 
-/// The market's board, over the stalls on a market lot. Same arrangement as
+/// The market's boards, over the stalls on a market lot. Same arrangement as
 /// the Tankstelle: a lot occupant, not a [`BuildingKind`], same kit.
-fn markt_plaque() -> Plaque {
+const MAERKTE: [Plaque; 3] = [
     Plaque {
         title: "MARKT",
         subline: Some("HEUTE: ALLES MUSS WEG"),
         ink: [250, 246, 236, 255],
         field: [44, 108, 52, 255],
         letter: 0.60,
-    }
-}
+    },
+    Plaque {
+        title: "WOCHENMARKT",
+        subline: Some("REGIONAL, SAISONAL, EGAL"),
+        ink: [40, 36, 30, 255],
+        field: [216, 186, 118, 255],
+        letter: 0.58,
+    },
+    Plaque {
+        title: "BAUERNMARKT",
+        subline: Some("DIREKT VOM BAUERN, ANGEBLICH"),
+        ink: [246, 242, 232, 255],
+        field: [110, 58, 44, 255],
+        letter: 0.58,
+    },
+];
 
 // -------------------------------------------------------------- adverts ----
 
@@ -497,7 +585,7 @@ struct Advert {
 /// The poster run. One texture and one material each, shared city-wide, the
 /// same economy as the plaques — a city with eight adverts on rotation is
 /// still truer than a city with none.
-const ADVERTS: [Advert; 8] = [
+const ADVERTS: [Advert; 16] = [
     Advert {
         title: "LAUNENBRAUSE",
         lines: &["JETZT MIT NOCH MEHR GEFÜHL", "OHNE ALLES, DAFÜR VIEL"],
@@ -562,6 +650,73 @@ const ADVERTS: [Advert; 8] = [
         accent: [196, 148, 92, 255],
         disc: false,
     },
+    Advert {
+        title: "BEULENSPRAY PLUS",
+        lines: &["WIRKT. ANGEBLICH.", "FRAGEN SIE IHRE DELLE"],
+        ink: [250, 250, 246, 255],
+        field: [16, 118, 128, 255],
+        accent: [238, 226, 96, 255],
+        disc: true,
+    },
+    Advert {
+        title: "GUMMIWERK OST",
+        lines: &["SEIT 1902 ELASTISCH"],
+        ink: [232, 228, 216, 255],
+        field: [52, 56, 62, 255],
+        accent: [198, 92, 38, 255],
+        disc: false,
+    },
+    Advert {
+        title: "BRAUSE OHNE ZUCKER",
+        lines: &["UND OHNE BRAUSE"],
+        ink: [28, 30, 34, 255],
+        field: [196, 232, 240, 255],
+        accent: [246, 250, 252, 255],
+        disc: true,
+    },
+    Advert {
+        title: "ABO FÜR ALLES",
+        lines: &["MONATLICH KÜNDBAR", "AB DEM ZWEITEN JAHR"],
+        ink: [248, 246, 250, 255],
+        field: [72, 40, 106, 255],
+        accent: [172, 132, 226, 255],
+        disc: false,
+    },
+    Advert {
+        title: "MATRATZEN SANFT",
+        lines: &["HÄRTEGRAD: EGAL", "SIE FEDERN JA SELBST"],
+        ink: [36, 34, 30, 255],
+        field: [234, 220, 196, 255],
+        accent: [140, 184, 206, 255],
+        disc: true,
+    },
+    // The one poster in the city with a candidate on it, and the candidate
+    // is a list number with no face, no name and no position — which is the
+    // only way to parody an election poster without parodying anybody.
+    Advert {
+        title: "LISTE 7: DIE MITTE",
+        lines: &["WIR SIND DAFÜR", "UND NATÜRLICH DAGEGEN"],
+        ink: [250, 250, 252, 255],
+        field: [38, 76, 54, 255],
+        accent: [226, 214, 96, 255],
+        disc: false,
+    },
+    Advert {
+        title: "STADTWERKE",
+        lines: &["STROM KOMMT AUS DER WAND", "DAS WAR UNSER BEITRAG"],
+        ink: [30, 40, 52, 255],
+        field: [212, 226, 236, 255],
+        accent: [64, 148, 196, 255],
+        disc: false,
+    },
+    Advert {
+        title: "DER NEUE HÜPFER",
+        lines: &["14 PROZENT MEHR", "MEHR WOVON? MEHR."],
+        ink: [246, 244, 240, 255],
+        field: [156, 30, 66, 255],
+        accent: [246, 244, 240, 255],
+        disc: true,
+    },
 ];
 
 /// Poster size in metres. One size for the whole run: posters are printed
@@ -622,8 +777,8 @@ pub struct SignKit {
         BuildingKind,
         Vec<(Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
     )>,
-    tankstelle: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
-    markt: (Handle<Mesh>, Handle<StandardMaterial>, Vec2),
+    tankstelle: Vec<(Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
+    markt: Vec<(Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
     /// A shared unit quad, scaled per building to its ground storey.
     strip: Handle<Mesh>,
     frontages: Vec<(BuildingKind, Handle<StandardMaterial>)>,
@@ -654,13 +809,16 @@ impl SignKit {
         (&self.poster, material, POSTER)
     }
 
-    pub fn tankstelle(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
-        let (mesh, material, size) = &self.tankstelle;
+    /// One forecourt's board, off the run. The variant arrives as raw hash
+    /// bits from wherever the lot is, so it wraps, exactly as [`Self::get`]
+    /// does.
+    pub fn tankstelle(&self, variant: u32) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
+        let (mesh, material, size) = &self.tankstelle[variant as usize % self.tankstelle.len()];
         (mesh, material, *size)
     }
 
-    pub fn markt(&self) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
-        let (mesh, material, size) = &self.markt;
+    pub fn markt(&self, variant: u32) -> (&Handle<Mesh>, &Handle<StandardMaterial>, Vec2) {
+        let (mesh, material, size) = &self.markt[variant as usize % self.markt.len()];
         (mesh, material, *size)
     }
 
@@ -714,8 +872,8 @@ pub fn build_assets(
             size,
         )
     };
-    let tankstelle = lot_board(&tankstelle_plaque());
-    let markt = lot_board(&markt_plaque());
+    let tankstelle = TANKSTELLEN.iter().map(&mut lot_board).collect();
+    let markt = MAERKTE.iter().map(&mut lot_board).collect();
 
     let frontages = FRONTED
         .iter()
@@ -769,7 +927,7 @@ mod tests {
                 }
             }
         }
-        for plaque in [tankstelle_plaque(), markt_plaque()] {
+        for plaque in TANKSTELLEN.iter().chain(&MAERKTE) {
             texts.push(("lot board", plaque.title.to_string()));
             if let Some(sub) = plaque.subline {
                 texts.push(("lot board", sub.to_string()));
@@ -915,6 +1073,80 @@ mod tests {
             panic!("the police station hangs exactly one sign");
         };
         assert!(plaque.subline.unwrap().contains("FREUNDLICHKEIT"));
+    }
+
+    #[test]
+    fn the_quarters_still_get_the_cuisine_they_were_promised() {
+        // `buildings::spawn_building` forces the restaurant sign by index in
+        // Klein-Neapel and the Fernost-Viertel. Adding a plaque *above*
+        // either of them compiles, passes every other test here, and
+        // silently re-cuisines two whole quarters — so the indices are
+        // pinned where the names are, rather than where the override is.
+        let run = plaques_for(BuildingKind::Restaurant);
+        assert_eq!(run[1].title, "PIZZERIA LUIGI LUIGI", "Klein-Neapel");
+        assert_eq!(run[3].title, "WOK & WEG", "the Fernost-Viertel");
+    }
+
+    #[test]
+    fn the_chains_have_real_competition() {
+        // Three of anything is a chain; two is a duopoly and one is a
+        // monopoly wearing a sign. The kinds a street is actually made of
+        // have to carry enough plaques that two neighbouring shops of the
+        // same kind are usually different shops.
+        for kind in [
+            BuildingKind::Supermarket,
+            BuildingKind::Restaurant,
+            BuildingKind::Hotel,
+        ] {
+            assert!(
+                plaques_for(kind).len() >= 4,
+                "{kind:?} has only {} shopfronts in the whole city",
+                plaques_for(kind).len()
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_signs_in_the_city_say_the_same_thing() {
+        // Two plaques with the same title are one plaque and a typo, and a
+        // poster run with a duplicate in it wastes a texture on saying
+        // something the wall already says.
+        let mut seen = std::collections::HashSet::new();
+        for kind in SIGNED {
+            for plaque in plaques_for(kind) {
+                assert!(seen.insert(plaque.title), "{:?} hangs twice", plaque.title);
+            }
+        }
+        for advert in &ADVERTS {
+            assert!(
+                seen.insert(advert.title),
+                "{:?} is pasted twice",
+                advert.title
+            );
+        }
+        for plaque in TANKSTELLEN.iter().chain(&MAERKTE) {
+            assert!(seen.insert(plaque.title), "{:?} hangs twice", plaque.title);
+        }
+    }
+
+    #[test]
+    fn any_variant_number_lands_on_a_lot_board() {
+        // Same trap as the building boards, and the same wrap: the variant
+        // is raw hash bits from wherever the lot is, and an unwrapped index
+        // panics on the first forecourt past the end of the run.
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let kit = build_assets(&mut images, &mut materials, &mut meshes);
+        for variant in [0u32, 1, 2, 3, u32::MAX, 3_185_463_605] {
+            kit.tankstelle(variant);
+            kit.markt(variant);
+        }
+        assert_ne!(
+            kit.markt(0).1.clone(),
+            kit.markt(1).1.clone(),
+            "every market in the city has the same name over it"
+        );
     }
 
     #[test]

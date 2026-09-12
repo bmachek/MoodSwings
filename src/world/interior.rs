@@ -182,7 +182,18 @@ pub const SPILL_HEIGHT: f32 = 2.3;
 /// shopfront is a thing every building above house height has and a walk-in
 /// interior is a thing about one in twenty of them has.
 #[derive(Component)]
-pub struct Shopfront;
+pub struct Shopfront {
+    /// The way the front faces on the ground plane: out through the door,
+    /// across the pavement, towards the road.
+    ///
+    /// A position alone was enough while the only thing anybody did with a
+    /// front was walk at it. A queue has to know which way is *along* the
+    /// wall — a line that runs out from the door stands in the carriageway —
+    /// and the only honest source for that is the yaw the building was
+    /// stamped at, so the spawner hands it over rather than letting the
+    /// crowd guess from which side the first customer arrived.
+    pub outward: Vec2,
+}
 
 /// Stable destination identity for a front. The mesh is streamed, this value
 /// is not: errands can remember a shop while its chunk is out of range.

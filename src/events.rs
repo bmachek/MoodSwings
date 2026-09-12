@@ -20,6 +20,7 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 
 use crate::ai::archetype::Archetype;
 use crate::bounce::controller::{Bouncer, Launched};
@@ -33,7 +34,225 @@ use crate::mood::voice::Voicebox;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
 use crate::world::roadgraph::NodeId;
+use crate::world::texture::{encode, painted_rect, text_band};
 use crate::world::timeofday::TimeOfDay;
+
+// ------------------------------------------------------------- placards ----
+
+/// One sign somebody is carrying.
+///
+/// A parade with no signs on it is a queue that happens to be in the road,
+/// and the signs are where a march says what it is *about* — which in this
+/// city is the joke, twice over. The CSD column means every word of its
+/// placards and the words are about being round, soft and several colours,
+/// which is what everybody here already is. The Demo column is furious about
+/// municipal street furniture, because in a town with no weapons, no police
+/// and no way to come to harm, the bollard is the last remaining oppressor
+/// and it has never lost an argument.
+///
+/// The rule for writing one is the police station's, and it is the rule for
+/// every painted word in this game: deadpan, plausible, and told entirely in
+/// the register of whoever is holding it. Nothing here punches at a person.
+struct Placard {
+    head: &'static str,
+    /// The small print underneath, where a real placard puts the bit that
+    /// undercuts the big print.
+    foot: Option<&'static str>,
+    ink: [u8; 4],
+    field: [u8; 4],
+}
+
+/// What the rainbow column is carrying.
+const CSD_PLACARDS: [Placard; 7] = [
+    Placard {
+        head: "JEDER HÜPFT ANDERS",
+        foot: Some("UND ALLE GLEICH HOCH"),
+        ink: [30, 26, 34, 255],
+        field: [246, 214, 72, 255],
+    },
+    Placard {
+        head: "LIEBE FEDERT MIT",
+        foot: None,
+        ink: [252, 248, 252, 255],
+        field: [206, 54, 120, 255],
+    },
+    Placard {
+        head: "BUNT PRALLT",
+        foot: Some("BESSER AB"),
+        ink: [252, 250, 244, 255],
+        field: [68, 132, 206, 255],
+    },
+    Placard {
+        head: "KEINE ANGST",
+        foot: Some("VOR RUNDUNGEN"),
+        ink: [36, 30, 26, 255],
+        field: [140, 206, 108, 255],
+    },
+    Placard {
+        head: "WIR SIND WEICH",
+        foot: Some("UND WIR SIND VIELE"),
+        ink: [250, 246, 240, 255],
+        field: [128, 62, 172, 255],
+    },
+    Placard {
+        head: "MEHR GLITZER",
+        foot: Some("WENIGER KANTE"),
+        ink: [40, 34, 30, 255],
+        field: [244, 158, 48, 255],
+    },
+    Placard {
+        head: "GLEICHE HÖHE",
+        foot: Some("FÜR ALLE"),
+        ink: [248, 250, 252, 255],
+        field: [44, 154, 150, 255],
+    },
+];
+
+/// And what the other one is. Brown card and a marker pen, which is what a
+/// demonstration about a bollard is actually written on.
+const DEMO_PLACARDS: [Placard; 8] = [
+    Placard {
+        head: "POLLER RAUS!",
+        foot: Some("ER HAT ANGEFANGEN"),
+        ink: [28, 26, 24, 255],
+        field: [214, 190, 148, 255],
+    },
+    Placard {
+        head: "WIR FORDERN",
+        foot: Some("WENIGER"),
+        ink: [26, 24, 22, 255],
+        field: [226, 220, 206, 255],
+    },
+    Placard {
+        head: "NIEDER MIT DEM",
+        foot: Some("BORDSTEIN"),
+        ink: [30, 26, 22, 255],
+        field: [208, 182, 140, 255],
+    },
+    Placard {
+        head: "WIR SIND HIER",
+        foot: Some("WIR SIND RUND"),
+        ink: [24, 22, 26, 255],
+        field: [230, 224, 210, 255],
+    },
+    Placard {
+        head: "HÄRTE IST",
+        foot: Some("KEINE HALTUNG"),
+        ink: [138, 26, 22, 255],
+        field: [232, 226, 212, 255],
+    },
+    Placard {
+        head: "DIE BAUSTELLE",
+        foot: Some("MUSS WEG, SEIT 1874"),
+        ink: [28, 26, 24, 255],
+        field: [212, 186, 144, 255],
+    },
+    Placard {
+        head: "GEGEN ALLES",
+        foot: Some("AUSSER GUMMI"),
+        ink: [26, 30, 24, 255],
+        field: [222, 216, 198, 255],
+    },
+    Placard {
+        head: "SCHLUSS MIT",
+        foot: Some("KANTEN"),
+        ink: [130, 30, 26, 255],
+        field: [216, 192, 152, 255],
+    },
+];
+
+/// The board, in metres. One format for the whole march: they were made at
+/// the same kitchen table.
+const PLACARD: Vec2 = Vec2::new(0.62, 0.46);
+/// How thick the two back-to-back faces sit apart. A placard is printed on
+/// both sides because a parade is watched from in front and from behind, and
+/// a sign that vanishes when it goes past is a sign nobody carried.
+const PLACARD_LEAF: f32 = 0.011;
+/// Where the stick is gripped in the marcher's own frame, how long it is,
+/// and how far up it the board is nailed.
+///
+/// The figure's origin is the middle of its capsule and its feet are at
+/// `body::FEET`, so a board centred `PLACARD_RISE` up a stick held at
+/// `POLE_CENTRE` rides about a metre and nine tenths above the pavement —
+/// which is a sign held up rather than a sign being carried home.
+///
+/// Everything is measured *along the stick* rather than in the marcher's
+/// axes, so the lean stays one number: nail the board to a tilted pole by
+/// writing its height and its offset separately and the two part company
+/// the first time anybody retunes the tilt.
+const POLE_CENTRE: f32 = 0.55;
+const POLE_HALF: f32 = 0.42;
+const POLE_RADIUS: f32 = 0.018;
+const PLACARD_RISE: f32 = 0.50;
+/// How far the whole thing stands off the chest, and how far it leans back.
+const PLACARD_AHEAD: f32 = -0.15;
+const PLACARD_TILT: f32 = 0.22;
+
+// The board has to actually be on the stick: nailed above the grip and no
+// higher than the stick reaches, or the marcher is carrying a plank with a
+// sign hovering over it.
+const _: () = assert!(PLACARD_RISE > 0.0 && PLACARD_RISE < POLE_HALF + PLACARD.y * 0.5);
+
+/// Width of one glyph cell relative to the height of its letters, the same
+/// proportion every other painted word in the city is set at — the plates,
+/// the plaques and the posters all run on `signage::CELL_ASPECT` and a
+/// placard that disagreed would read as a different town's lettering.
+const CELL_ASPECT: f32 = 0.95;
+
+/// The smallest a slogan's big line may come out and still be a slogan.
+///
+/// The clamp in [`placard_line`] keeps every line *on* the card by shrinking
+/// it, which means a placard can never be wrong — it can only be quiet, and a
+/// slogan whispered is a slogan nobody reads from the pavement. Roughly
+/// fifteen characters at this format. The fix is never to raise this number;
+/// it is to break the line in two, which is what a person with a marker pen
+/// and a piece of card does anyway.
+const SHOUTING: f32 = 0.060;
+
+/// One line of placard text: where its band sits, how tall its letters are
+/// and how wide the line comes out, clamped so the longest slogan still fits
+/// inside the card rather than running off the side of the punchline.
+fn placard_line(text: &str, centre_v: f32, tallest_v: f32) -> (Vec3, Vec<u8>) {
+    let cells = (text.chars().count() + 2) as f32;
+    let letter_v = tallest_v.min(0.88 / (cells * CELL_ASPECT * (PLACARD.y / PLACARD.x)));
+    let width_u = cells * letter_v * CELL_ASPECT * (PLACARD.y / PLACARD.x);
+    (Vec3::new(centre_v, letter_v, width_u), encode(text))
+}
+
+/// Paints one board: a card, a hand-inked border, and the slogan.
+fn placard_texture(sign: &Placard) -> Image {
+    let lines = match sign.foot {
+        // One line, large, in the middle of the card.
+        None => vec![placard_line(sign.head, 0.50, 0.26)],
+        Some(foot) => vec![
+            placard_line(sign.head, 0.40, 0.22),
+            placard_line(foot, 0.68, 0.14),
+        ],
+    };
+    let (ink, field) = (sign.ink, sign.field);
+
+    painted_rect(320, 238, TextureFormat::Rgba8UnormSrgb, move |u, v| {
+        // The border is drawn *by hand*, which is to say it wobbles: a
+        // ruled rectangle reads as a printed sign, and nobody prints these.
+        let wobble = 0.012 + 0.006 * (v * 23.0).sin() * (u * 17.0).cos();
+        let edge = u.min(1.0 - u).min(v.min(1.0 - v));
+        if edge < 0.02 {
+            return field;
+        }
+        if edge < 0.02 + wobble {
+            return ink;
+        }
+        for (band, text) in &lines {
+            let (centre_v, letter_v, width_u) = (band.x, band.y, band.z);
+            let band_u = (u - (0.5 - width_u * 0.5)) / width_u;
+            let band_v = (v - (centre_v - letter_v * 0.5)) / letter_v;
+            if (0.0..1.0).contains(&band_u) && text_band(text, band_u, band_v) {
+                return ink;
+            }
+        }
+        field
+    })
+}
 
 /// How long a parade stays on the streets, in game hours.
 const DURATION: f32 = 1.6;
@@ -181,11 +400,44 @@ pub fn forced() -> Option<EventKind> {
     }
 }
 
-/// The column's wardrobe, built once.
+/// The column's wardrobe and its signwriting, built once.
 #[derive(Resource)]
 struct MarchAssets {
     rainbow: Vec<Handle<StandardMaterial>>,
     banner_grey: Handle<StandardMaterial>,
+    /// One quad for every board in the city and one stick under it: the
+    /// parade's whole placard budget is two meshes and fifteen materials,
+    /// which is the same economy the shop signs run on.
+    board: Handle<Mesh>,
+    pole: Handle<Mesh>,
+    stick: Handle<StandardMaterial>,
+    csd: Vec<Handle<StandardMaterial>>,
+    demo: Vec<Handle<StandardMaterial>>,
+}
+
+impl MarchAssets {
+    fn placard(&self, kind: EventKind, index: usize) -> Option<&Handle<StandardMaterial>> {
+        let run = match kind {
+            EventKind::Csd => &self.csd,
+            EventKind::Demo => &self.demo,
+        };
+        placard_for(index, run.len()).map(|pick| &run[pick])
+    }
+}
+
+/// Which board the marcher in a given slot carries, as an index into a run of
+/// `len` boards, or nothing at all.
+///
+/// Every third marcher has their hands in their pockets, because a column in
+/// which literally everybody brought a sign reads as a stock photo. The rest
+/// walk down the index rather than repeating one slogan, so the column says
+/// several things at once — which is the difference between a demonstration
+/// and a chorus line, and it is free.
+fn placard_for(index: usize, len: usize) -> Option<usize> {
+    if len == 0 || index % 3 == 1 {
+        return None;
+    }
+    Some(index % len)
 }
 
 pub struct EventsPlugin;
@@ -209,7 +461,12 @@ impl Plugin for EventsPlugin {
     }
 }
 
-fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn setup(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+) {
     let cloth = |materials: &mut Assets<StandardMaterial>, color: Color| {
         materials.add(StandardMaterial {
             base_color: color,
@@ -217,7 +474,29 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>
             ..default()
         })
     };
+    let printed = |materials: &mut Assets<StandardMaterial>,
+                   images: &mut Assets<Image>,
+                   run: &'static [Placard]| {
+        run.iter()
+            .map(|sign| {
+                materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(placard_texture(sign))),
+                    perceptual_roughness: 0.94,
+                    ..default()
+                })
+            })
+            .collect::<Vec<_>>()
+    };
     commands.insert_resource(MarchAssets {
+        board: meshes.add(Rectangle::new(PLACARD.x, PLACARD.y)),
+        pole: meshes.add(Cylinder::new(POLE_RADIUS, POLE_HALF * 2.0)),
+        stick: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.55, 0.42, 0.26),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
+        csd: printed(&mut materials, &mut images, &CSD_PLACARDS),
+        demo: printed(&mut materials, &mut images, &DEMO_PLACARDS),
         rainbow: [
             Color::srgb(0.86, 0.18, 0.18),
             Color::srgb(0.92, 0.55, 0.12),
@@ -383,7 +662,56 @@ fn form_the_column(
             Archetype::Everyday,
             &mut wardrobe,
         );
+        if let Some(board) = assets.placard(happening.kind, index) {
+            carry_a_placard(&mut marcher, &assets, board);
+        }
     }
+}
+
+/// Puts a sign in somebody's hands.
+///
+/// Children with a [`Rest`](crate::ai::figure::Rest) pose, like every other
+/// thing the cast carries: a child with no rest is skipped by
+/// `figure::animate`, so a placard without one would hang in the air at the
+/// marcher's average height while the marcher underneath it squashed and
+/// stretched. Two faces back to back rather than one double-sided quad,
+/// because a double-sided one shows the slogan mirrored from behind and a
+/// parade is watched from both ends of a street.
+fn carry_a_placard(
+    marcher: &mut EntityCommands,
+    assets: &MarchAssets,
+    board: &Handle<StandardMaterial>,
+) {
+    use crate::ai::figure::Rest;
+
+    let lean = Quat::from_rotation_x(PLACARD_TILT);
+    let grip = Vec3::new(0.0, POLE_CENTRE, PLACARD_AHEAD);
+    // Up the stick, and out of the face of the board: both taken off the
+    // lean so the whole assembly tilts as one object.
+    let along = lean * Vec3::Y;
+    let normal = lean * Vec3::Z;
+
+    marcher.with_children(|parent| {
+        parent.spawn((
+            Rest::at(grip),
+            Mesh3d(assets.pole.clone()),
+            MeshMaterial3d(assets.stick.clone()),
+            Transform::from_translation(grip).with_rotation(lean),
+        ));
+        // The figure faces -Z and a `Rectangle`'s own normal is +Z, so the
+        // face somebody standing in front of the marcher reads is the one
+        // turned half a turn about Y. The lean is applied *outside* that
+        // turn, or the two leaves splay apart like an open book.
+        for (leaf, turn) in [(-1.0f32, std::f32::consts::PI), (1.0, 0.0)] {
+            let at = grip + along * PLACARD_RISE + normal * (leaf * PLACARD_LEAF);
+            parent.spawn((
+                Rest::at(at),
+                Mesh3d(assets.board.clone()),
+                MeshMaterial3d(board.clone()),
+                Transform::from_translation(at).with_rotation(lean * Quat::from_rotation_y(turn)),
+            ));
+        }
+    });
 }
 
 /// Keeps the column marching down its route.
@@ -432,6 +760,100 @@ fn march(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_placard_fits_the_font() {
+        use crate::world::texture::glyph;
+        for sign in CSD_PLACARDS.iter().chain(&DEMO_PLACARDS) {
+            for text in std::iter::once(sign.head).chain(sign.foot) {
+                for code in encode(text) {
+                    assert!(
+                        code == b' ' || glyph(code) != [0; 7],
+                        "a placard says {text:?} and the font cannot draw {:?}",
+                        code as char
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_slogan_fits_on_the_card_and_still_shouts() {
+        // Two failures, and the second is the one that hides. A slogan
+        // painted off the edge of the card has its punchline cropped off,
+        // and the clamp exists to stop that — but the clamp stops it by
+        // shrinking the line, so a head written long enough comes out
+        // perfectly correct and completely inaudible. Both ends, then.
+        for sign in CSD_PLACARDS.iter().chain(&DEMO_PLACARDS) {
+            let tallest = if sign.foot.is_some() { 0.22 } else { 0.26 };
+            let (head, _) = placard_line(sign.head, 0.5, tallest);
+            assert!(
+                head.z <= 0.881,
+                "{:?} runs {:.2} of the card wide",
+                sign.head,
+                head.z
+            );
+            assert!(
+                head.y >= SHOUTING,
+                "{:?} is set at {:.3} and wants breaking in two",
+                sign.head,
+                head.y
+            );
+            if let Some(foot) = sign.foot {
+                let (band, _) = placard_line(foot, 0.68, 0.14);
+                assert!(band.z <= 0.881, "{foot:?} runs {:.2} wide", band.z);
+                assert!(band.y > 0.03, "{foot:?} is written too small to read");
+            }
+        }
+    }
+
+    #[test]
+    fn a_placard_is_mostly_card_with_ink_on_it() {
+        // The same disguise the posters wear: a band-arithmetic slip that
+        // paints the whole card in ink, or none of it, still builds and
+        // still gets carried down the street.
+        for sign in CSD_PLACARDS.iter().chain(&DEMO_PLACARDS) {
+            let image = placard_texture(sign);
+            let data = image.data.as_ref().expect("the placard was not painted");
+            let ink = data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[..3] == sign.ink[..3])
+                .count() as f32
+                / (data.len() / 4) as f32;
+            assert!(
+                (0.02..0.45).contains(&ink),
+                "{:?}: {ink:.3} of the card is ink",
+                sign.head
+            );
+        }
+    }
+
+    #[test]
+    fn the_column_says_several_things_at_once() {
+        for run in [CSD_PLACARDS.len(), DEMO_PLACARDS.len()] {
+            let carried: Vec<usize> = (0..MARCHERS).filter_map(|i| placard_for(i, run)).collect();
+            assert!(
+                carried.len() >= MARCHERS / 2,
+                "only {} of {MARCHERS} marchers brought a sign",
+                carried.len()
+            );
+            assert!(
+                carried.len() < MARCHERS,
+                "every single marcher brought a sign"
+            );
+            let distinct: std::collections::HashSet<_> = carried.iter().collect();
+            assert!(
+                distinct.len() >= 4,
+                "the whole column is carrying {} slogan(s)",
+                distinct.len()
+            );
+        }
+        // A column with no boards built is a column with no boards carried,
+        // not a panic on an empty run.
+        assert_eq!(placard_for(0, 0), None);
+    }
 
     #[test]
     fn the_same_seed_schedules_the_same_week() {

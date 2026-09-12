@@ -502,6 +502,160 @@ go up. Two contagions running in opposite directions out of one contact, and
 the five dispositions are sliders on the dev panel so the balance between them
 can be found by pushing rather than by arguing.
 
+## Queues
+
+A city where nobody ever has to wait for anything is not a city, it is a lobby.
+Citizens had somewhere to go — every building above house height puts a
+shopfront out on the pavement, and a share of the crowd walks over and goes in
+— and the door was the end of it. They arrived, they vanished, and the shop
+served an unlimited number of people at once.
+
+Now they queue, and a queue turns out to be the cheapest social structure there
+is and the one that carries the most legible intelligence per line of code. It
+is **ordered**, so it can be jumped. It is **shared**, so somebody at the back
+is being made to wait by somebody at the front they cannot see. It has a
+**rate**, so it can be too slow. And everybody in it is standing perfectly
+still facing the same way, which is the single most recognisable shape a crowd
+ever makes — you read *there is something in there* from across a junction with
+no UI at all.
+
+Four rules make it a queue rather than a huddle.
+
+**It runs along the wall.** The direction comes from the shopfront's outward
+normal, which is why a front carries one; a line that runs out from the door
+stands in the carriageway. Which way *along* is derived from the door's own
+identity, so both pavements do not all lean the same way and a queue survives
+its chunk streaming out and coming back leaning the way it did before.
+
+**It only advances at the front.** The head is served, goes in — the same
+despawn that walking through a door always was, because a body parked inside a
+streamed room is a body standing in a field — and everybody shuffles up one.
+Nobody in the line decides anything. They follow the person ahead, which is the
+whole of what standing in a queue is, and it is why the slow concertina reads so
+strongly from a distance. The head faces the door and everybody else faces the
+back of the person in front, and that one branch is the entire difference
+between a crowd and a queue.
+
+**It can be lost.** Patience is the temperament's fuse crossed with what the
+archetype came for, so it runs from about seventeen seconds to about a hundred:
+the Wutbürger gives up first and reddest, the flying trader is still there when
+the shop shuts. Somebody peeling off the back of a line is the most human thing
+the crowd does. The waiting itself is a drain rather than a jolt, and a drain
+does not accumulate — it finds a level, at `baseline − sting / recovery` — so
+the five dispositions come out of the same queue five different colours without
+this module choosing any of them. A serene flummi leaves fractionally less
+delighted; a Wutbürger leaves flat on the floor of the scale, at which point the
+contagion, the reddened face and the rage wave all happen on their own.
+
+**It can be jumped.** Standing in front of the head is the only thing the player
+can do to this city that involves no launching, no taunting and no vehicle, and
+it gets a bigger reaction than most of the things that do: the whole line turns
+round, the moods drop by the second, and the queue *stops*, because an outrage
+that can simply be waited out is not an outrage. There is a grace period first
+— a pavement runs past every door in town and walking down it is not a
+provocation. The offence is standing there, which is a decision.
+
+The city also does it to itself, which is the half that matters, because it
+happens whether or not anybody is watching. Somebody arriving at a door decides
+once, on the way over, whether to walk to the back or to the front, and it takes
+an archetype with the cheek *and* a mood bad enough to use it — the hooligan,
+the Wutbürger, the punk, and Elvis, who is not being rude, he simply does not
+believe the queue is about him. The same flummi waits its turn on a good day,
+which is what makes it read as a mood rather than as a personality, and most of
+the cast never does it at all, because a city where anybody might push in is a
+city with no queues in it. They go in at second, never displacing the head —
+nobody has ever had the nerve, and it is the real move anyway — and everybody
+*behind* them takes the hit and turns to look at them, while the head neither
+loses anything nor notices. Which is exactly how it goes.
+
+And one rule that makes it funny rather than merely correct: **a queue
+recruits**. One person outside a door is the most persuasive advertisement any
+city has ever printed, and passers-by attach themselves to the back of it at a
+rate set by how nosy their archetype is, with no idea what is being sold.
+
+Getting that to happen at all took three patrols and an instrument. The
+threshold started at *two*, on the sound-sounding ground that one person
+outside a shop is not a queue yet, and a patrol killed it. A hundred and fifty
+seconds of city never once got two people to the same door at the same moment —
+every reading was one person standing in one line — so the threshold was never
+crossed and the recruiting never ran at all. Reaching two *is* the coincidence
+the lure exists to manufacture, so gating the lure on it gates it on itself. The
+failure is invisible from inside the game, which is the whole argument for the
+patrol: a city where every door has exactly one customer looks like a city that
+is working.
+
+Fixing the threshold changed nothing, because it was not the binding
+constraint, and one number could not say what was. So the queues learned to
+count what they do — errands handed out, places taken, turns served, people who
+gave up — and the patrol prints it. The tally said the city produces about a
+sixth of a door-arrival per second across every shopfront in the streamed ring;
+by Little's law, at seven seconds a turn, that is one person standing at one
+door, which is precisely what every reading had shown. The constants were
+working exactly as written.
+
+The fatal number was a ratio nobody had looked at. A recruit eleven to
+seventeen metres away walks in at just over a metre a second, so arriving takes
+fifteen seconds — and the head was served and gone in four to eleven. *Every*
+recruit arrived at an empty door, became a lone head, and was served alone.
+Recruiting could never compound, no matter how hard it was tuned. A turn at the
+counter now outlasts the walk in, the reach is shorter, and the relationship is
+a compile-time assertion rather than two numbers that happen to be compatible
+this week. The
+headphone-wearer never notices there is a queue at all, which is what headphones
+are for and the same joke as their immunity to taunts. The Wutbürger is the
+most likely person in the city to join one and the least likely to stay: he does
+not want it, he wants to know what he is being kept out of.
+
+A queue is also the one thing the crowd does that has no symptom anywhere else
+— somebody standing in a line is not blocked, is not waiting on a give-way, is
+not off its route and is not going anywhere — so the dev panel and the patrol
+both read the queues directly, and the patrol complains about any line that has
+not moved in seventy-five seconds. A single wedged queue outside one shop in a
+town of several hundred is exactly the failure a human walks past.
+
+## Signs
+
+Nearly everything this city says, it says on a painted rectangle, and all of
+them are drawn with the same hand-made 5×7 alphabet: the shop plaques, the
+advertising posters on the blind gable walls, the enamel street-name plates,
+the bronze on the park monuments, the scoreboard over the stadium, the number
+plates on the cars, the notice beside the hole in the pavement, and the
+placards in the parade. One alphabet, one cell geometry, one clamp that shrinks
+a long line until it fits — so a town reads as a town rather than as a
+collection of modules that each found their own font.
+
+The rule for writing one is the police station's, and it has not changed:
+deadpan, plausible, and told entirely in the register of whoever is saying it.
+The sign is never in on the joke. `POLIZEI — wegen anhaltender Freundlichkeit
+geschlossen` works because a police station would put exactly that notice up,
+in exactly that typeface, and mean it.
+
+The shop chains get competitors — three or four plaques a kind, picked by the
+building's own seed, so a street reads as several businesses rather than one
+monopolist — while the civic kinds stay singular, because there is one Rathaus
+and it has exactly one sense of humour. Two quarters override the choice
+entirely: every dining room in Klein-Neapel is the Pizzeria and every one in the
+Fernost-Viertel is the Wok, which is how real quarters advertise themselves, one
+cuisine repeated until it is a neighbourhood.
+
+The posters are where the register does the most work. Every one of them speaks
+fluent advertising and says nothing, which is only a slight exaggeration of the
+medium, and they are kept gentle on purpose: the city laughs at products, not at
+people. The one election poster has a list number and no candidate, because a
+list number is nobody.
+
+The parade carries the rest. A march with no signs on it is a queue that
+happens to be in the road, and the placards are where a column says what it is
+about — twice over. The CSD column means every word of its signs and the words
+are about being round, soft and several colours, which is what everybody in this
+city already is. The demonstration is furious about municipal street furniture,
+because in a town with no weapons, no police and no way to come to harm, the
+bollard is the last remaining oppressor and it has never lost an argument.
+Every third marcher walks with their hands in their pockets, because a column in
+which literally everybody brought a sign reads as a stock photo, and the rest
+walk down a run of slogans rather than repeating one — which is the difference
+between a demonstration and a chorus line, and it is free.
+
 ## Roofs
 
 A building was two boxes: a wall and a capping slab. From the pavement that is
