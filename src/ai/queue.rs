@@ -357,6 +357,15 @@ pub struct Tally {
     /// Served, and gave up waiting.
     pub served: u32,
     pub balked: u32,
+    /// Lost from a line without either: panicked by a car, pulled into a
+    /// grudge, launched, or recycled by the population budget while standing
+    /// still with the player walking away.
+    ///
+    /// The counter that stops the next person doing what this pass did —
+    /// inferring attrition from `joined - served - balked` and guessing at
+    /// the cause. It is the largest term of the four by a wide margin, and
+    /// nothing else in the game would ever mention it.
+    pub lost: u32,
 }
 
 impl Queues {
@@ -506,10 +515,14 @@ fn reconcile_lines(
         .map(|(entity, ..)| entity)
         .collect();
 
+    let mut lost = 0u32;
     for line in queues.lines.values_mut() {
+        let before = line.members.len();
         line.members.retain(|member| fit.contains(member));
+        lost += (before - line.members.len()) as u32;
     }
     queues.lines.retain(|_, line| !line.members.is_empty());
+    queues.tally.lost += lost;
 
     // And anybody the lines have let go of stops standing about. Collected
     // first because the release below borrows nothing from the resource.
