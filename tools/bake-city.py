@@ -453,6 +453,11 @@ PAVEMENT = 3.2
 # The narrowest a band may be capped to, in metres: absolute, not a share of
 # the band, so a second bake of the file does not floor it a second time.
 BAND_FLOOR = 8.0
+# How many of a band's segments have to see a wall on both sides before the
+# median of them is a measurement rather than an anecdote, and at least half
+# of the segments inside the square besides. Three, because two clearances
+# have no middle: Gutenbergweg's two were 15.2 m and 70.7 m.
+BAND_SAMPLES = 3
 # How far either side of a band's line its walls are looked for, and how much
 # narrower a measured width has to be than the file's before it counts.
 BAND_REACH = 45.0
@@ -1646,9 +1651,11 @@ def cap_widths(streets, entries, half, quantile=0.0):
         # than the first did and caps the same street again.
         reach = BAND_REACH if band else STREET_REACH
         tights, clearances = [], []
+        spans = 0
         for a, b in zip(points, points[1:]):
             if not (inside(a, half) or inside(b, half)):
                 continue
+            spans += 1
             segment = LineString([a, b])
             minx, miny, maxx, maxy = segment.bounds
             found = tree.query(box(minx - reach, miny - reach, maxx + reach, maxy + reach))
@@ -1669,10 +1676,28 @@ def cap_widths(streets, entries, half, quantile=0.0):
             elif min(nearest) < float("inf"):
                 tights.append(min(nearest))
         if band:
-            if not clearances:
+            # A band is wide because something measured it wide. Where nothing
+            # did -- a band out in the open, whose walls are further off than
+            # `BAND_REACH` or only ever on one side -- the only number left is
+            # `merge_parallel`'s span, and that span is the distance between
+            # the outermost lanes the mappers drew, which at a riverside
+            # junction is a great deal more than a street. Innere Muenchener
+            # Strasse came out at 34 m with none of its eight segments able to
+            # see both walls; 34 m of carriageway, plus the half-width each
+            # ribbon overhangs its nodes by, paints a black field on the grass
+            # with a house standing in it.
+            #
+            # So a band is either measured or held to what the game may
+            # believe about any width at all. Never widened: the `min` below
+            # still holds, so this can only take a band back towards the town,
+            # and a second bake of the file measures the same nothing and
+            # lands on the same number.
+            if len(clearances) >= BAND_SAMPLES and 2 * len(clearances) >= spans:
+                width = max(statistics.median(clearances) - 2.0 * PAVEMENT, BAND_FLOOR)
+            elif street["width"] > WIDEST:
+                width = WIDEST
+            else:
                 continue
-            width = statistics.median(clearances) - 2.0 * PAVEMENT
-            width = max(width, BAND_FLOOR)
         else:
             if not tights:
                 continue

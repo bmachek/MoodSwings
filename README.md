@@ -1529,6 +1529,26 @@ then `--lineup --hour 12`, `--lineup --hour 21.5` and street and rain framings
 before and after, then `--patrol 120`. Look at head turns, short sleeves, long
 coats, wheelchair users and the camera at a corner.
 
+A band nothing measured may not keep a width nothing measured. `cap_widths`
+narrows a band to the median wall-to-wall clearance its own segments can see,
+which is right where they can see one — the Altstadt's thirty-seven segments
+all can, and it lands within three decimetres of the baked width. Where they
+cannot, the old rule kept whatever `merge_parallel` had left, and that is the
+distance between the outermost lanes the mappers drew: Innere Münchener Straße
+came out 34 m wide with *none* of its eight segments able to see both walls,
+which paints a black field of asphalt on the grass by the bridge with a house
+standing in it. Gutenbergweg managed two segments of nineteen (15.2 m and
+70.7 m — two clearances have no middle), Wittstraße one of six. Those three
+are now held to `WIDEST`, the 22 m the bake already refuses to believe past
+for any width at all, and everything the buildings do confirm is untouched.
+
+This is in `tools/bake-city.py` and takes effect on the next bake; the
+committed `assets/cities/landshut.ron` still has the old widths. A machine
+that can reach the Overture and Copernicus buckets can redo it from the
+committed file alone — `tools/bake-city.py --from-ron assets/cities/landshut.ron
+<out.ron> ...` — without going near Overpass, and the bake prints every band it
+moves.
+
 A Gasse is flush. A lane no wider than one car, not arterial, and paved in
 setts or slabs is not a carriageway with kerbs down it — it is a lane, and an
 old town is mostly made of them: 5.7 km of Landshut, the passages off the
@@ -1548,10 +1568,17 @@ vertices in the town that a ribbon of that street's own width cannot turn
 through, the worst a 123° kerb between 5 m segments on a 15 m street — but
 `mitre` and `on_another_carriageway` already handle them: after those, not one
 pavement in the town has its centre more than half a metre inside somebody
-else's tarmac. And the Altstadt is baked at 15.1 m where its own buildings say
-25.8 m wall to wall, because `cap_widths` may only narrow — but setting bands
-to their measured width moves four pavements and blows Wittstraße out to 48 m,
-so that is a real inaccuracy and not this bug.
+else's tarmac.
+
+The second was wrong, and wrong in a way worth keeping written down: that the
+Altstadt is baked too narrow at 15.1 m because `cap_widths` may only narrow.
+The measurement behind that said the buildings stand 25.8 m apart, and it was
+taken from each segment's *midpoint*. `cap_widths` measures from the whole
+segment, which is right — a wall beside either end of a 10 m segment
+constrains it just as much as one beside its middle — and by that measure the
+Altstadt's walls are 21.8 m apart, which is a 15.4 m band. The bake had it
+correct to three decimetres. A measurement that does not reproduce the one it
+is accusing is not evidence, and this one took two goes to notice.
 
 A queue whose head cannot reach the door now walks the door out to meet them.
 `hold_the_line` steers everybody straight at their slot with no path round
