@@ -27,6 +27,7 @@ mod bounce;
 mod core;
 mod events;
 mod mood;
+mod multiplayer;
 mod player;
 mod render;
 mod save;
@@ -45,6 +46,10 @@ use bevy::window::PresentMode;
 pub const GAME_TITLE: &str = "Mood Swings";
 
 fn main() {
+    let multiplayer = crate::multiplayer::Client::requested().unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
     // Writes the sound bank out as WAV files and stops. No app, no window:
     // synthesis does not need one, and hearing a sound is otherwise a matter
     // of finding the thing in the game that makes it.
@@ -111,5 +116,6 @@ fn main() {
             crate::vehicle::VehiclePlugin,
             crate::ui::UiPlugin,
         ))
+        .add_plugins(crate::multiplayer::MultiplayerPlugin(multiplayer))
         .run();
 }

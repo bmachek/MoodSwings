@@ -1,0 +1,8 @@
+**
+!Dockerfile.server
+!crates/
+!crates/multiplayer/
+!crates/multiplayer/Cargo.toml
+!crates/multiplayer/Cargo.lock
+!crates/multiplayer/src/
+!crates/multiplayer/src/**

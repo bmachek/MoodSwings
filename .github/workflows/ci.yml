@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   test:
     name: build + test (${{ matrix.os }})
@@ -57,4 +57,18 @@ jobs:
       # Building the binary is the part that proves the game links on this
       # platform; `cargo test` alone only ever builds the test harness.
       - run: cargo build --locked
-      - run: cargo test --locked
+      - run: cargo test --locked --workspace
+
+  multiplayer-server:
+    name: dedicated server container
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker compose config --quiet
+      - run: docker compose up -d --build --wait --wait-timeout 30
+      - run: docker compose exec -T server mood-server --check 127.0.0.1:7777
+      - if: always()
+        run: docker compose logs server
+      - if: always()
+        run: docker compose down

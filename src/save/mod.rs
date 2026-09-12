@@ -68,6 +68,9 @@ pub fn write_save(
     clock: &TimeOfDay,
     transform: &Transform,
 ) -> Result<(), String> {
+    if crate::multiplayer::active() {
+        return Err("Speichern ist im Multiplayer deaktiviert".into());
+    }
     let save = SaveGame {
         version: SAVE_VERSION,
         world_seed: config.world_seed,
@@ -90,6 +93,9 @@ pub fn write_save(
 /// about a missing file rather than a corrupt one should check
 /// [`save_exists`] first.
 pub fn read_save(clock: &mut TimeOfDay, transform: &mut Transform) -> Result<(), String> {
+    if crate::multiplayer::active() {
+        return Err("Laden ist im Multiplayer deaktiviert".into());
+    }
     let path = save_path();
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let save = SaveGame::from_ron(&text).map_err(|e| e.to_string())?;

@@ -4161,6 +4161,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mood-multiplayer"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "rand_chacha",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "mood_swings"
 version = "0.1.0"
 dependencies = [
@@ -4168,6 +4178,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "leafwing-input-manager",
+ "mood-multiplayer",
  "rand",
  "rand_chacha",
  "rodio",
