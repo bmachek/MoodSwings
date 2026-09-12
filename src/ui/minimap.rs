@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
 use crate::core::schedule::GameSet;
+use crate::core::states::InGameState;
 use crate::player::camera::CameraRig;
 use crate::player::interact::Driving;
 use crate::player::on_foot::Player;
@@ -42,8 +43,10 @@ pub struct MinimapPlugin;
 
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_minimap_camera)
-            .add_systems(Update, track_player.in_set(GameSet::Ui));
+        app.add_systems(Startup, spawn_minimap_camera).add_systems(
+            Update,
+            (track_player, rest_while_paused).in_set(GameSet::Ui),
+        );
     }
 }
 
@@ -100,6 +103,42 @@ fn spawn_minimap_camera(mut commands: Commands, mut images: ResMut<Assets<Image>
     ));
 
     commands.insert_resource(MinimapImage(handle));
+}
+
+/// Stops drawing the map while the world is not moving.
+///
+/// This camera is a second view over the whole resident scene, and Bevy checks
+/// visibility, extracts and batches per view — so every frame it is active
+/// costs a pass over every `Mesh3d` in the city, which at a street framing is
+/// 468k of them. While `Escape` holds `InGameState::Paused` nothing decides,
+/// nothing moves and the camera rig has stopped taking mouse look, so that
+/// pass cannot produce a different picture than the one already in the render
+/// target. The target keeps its last frame, so the HUD still shows the map
+/// behind the menu; it is simply the map of a stopped world, which is what it
+/// was anyway.
+///
+/// Deliberately narrow: paused only, not "anything but playing". A capture
+/// asked for `--map` must still get a drawn map whatever state the harness
+/// leaves the app in, and a black square in a comparison shot would be a
+/// silent failure of exactly the kind `is_capture_mode` exists to avoid.
+///
+/// What this does *not* do is cap the rate while playing, which is the obvious
+/// next question and needs a number nobody has. See the note in README.md
+/// under "Where the frame actually goes" for how to get one.
+fn rest_while_paused(
+    paused: Res<State<InGameState>>,
+    mut cameras: Query<&mut Camera, With<MinimapCamera>>,
+) {
+    let Ok(mut camera) = cameras.single_mut() else {
+        return;
+    };
+    let wanted = *paused.get() != InGameState::Paused;
+    // Only on a change. Writing through the `&mut` marks the camera changed
+    // every frame, and a camera that reports a change is a camera the render
+    // world reconsiders.
+    if camera.is_active != wanted {
+        camera.is_active = wanted;
+    }
 }
 
 fn track_player(

@@ -1566,25 +1566,62 @@ Only ultra and photo cost anything, and nobody plays there.
 **The frame is CPU-bound, not fill-bound.** A binary built at 800×450 instead
 of 1600×900 — a quarter of the pixels — measured 19.98 ms against 20.43 ms for
 the same framing, interleaved back to back. Quartering the pixels is free.
-Neither does resident geometry decide it: 76k mesh entities at
-`--stream-radius 200` and 220k at 900 are within about a millisecond of each
-other, so the frustum cull is doing its job. What is left is per-entity CPU
-work over the ~221,000 `Mesh3d` entities the streamer keeps resident —
-visibility, extraction, batching — plus whatever the per-frame gameplay
-systems scan.
+Neither did resident geometry decide it: 76k mesh entities at
+`--stream-radius 200` and 220k at 900 were within about a millisecond of each
+other, so the frustum cull was doing its job. What is left is per-entity CPU
+work over the `Mesh3d` entities the streamer keeps resident — visibility,
+extraction, batching — plus whatever the per-frame gameplay systems scan.
 
 So the lever is the number of entities and the number of per-frame passes over
 them, not any renderer setting. A future attempt should start by merging static
 per-chunk geometry rather than by turning shadows down.
 
-**`--fps-log` does not measure the minimap.** `ui::mod` does not install
-`MinimapPlugin` under `--screenshot` unless `--map` is passed — deliberately,
-so comparison shots are not covered in instruments — which means every frame
-time in this file was taken without a view that shipping play always has. The
-minimap camera is a second `Camera3d` with a depth and a deferred prepass,
-rendering every frame with no run condition. Its 320² target costs nothing; its
-visibility and batching pass over the same 221k meshes does not. Nobody has
-measured it, and this file should not pretend otherwise.
+**Those entity counts are stale, and by a lot.** The same street framing
+counted again: **377,334** meshes at `--stream-radius 200`, **467,949** at 900,
+**469,853** at the default over a settled 200-frame run. Where this file
+records 76k, 220k and "~221,000", the town now carries five times, twice and
+twice those. The count is a property of the scene rather than of the machine,
+so unlike the millisecond figures above it is worth writing down from anywhere.
+
+It costs the paragraph above its evidence, not its conclusion. "76k at 200 and
+220k at 900 are within a millisecond, so the cull is doing its job" was an
+argument about a threefold difference in resident geometry; 377k against 468k
+is a difference of twenty-four percent, and twenty-four percent of anything
+being within a millisecond says very little. Whatever is keeping 377k meshes
+resident inside a two-hundred-metre radius is the question that replaces it,
+and this file should not guess at the answer. The frame times in the table
+were *not* re-measured — they predate this growth and should be read as a
+floor rather than as a current reading.
+
+**The minimap is still unmeasured, and now it is one command away.** `ui::mod`
+does not install `MinimapPlugin` under `--screenshot` unless `--map` is passed
+— deliberately, so comparison shots are not covered in instruments — which
+means every frame time in this file was taken without a view that shipping play
+always has. That flag is also the A/B, and a cleaner one than it looks: under
+`--screenshot` it installs the minimap *camera* without the HUD that would
+display it, so the two runs differ by the second view and by nothing else.
+Interleave them the way everything else here has to be.
+
+    for i in 1 2; do
+      for m in "" "--map"; do
+        cargo run --release -- --screenshot /tmp/p.png --at-node 300 --eye 1.7 \
+          --hour 16 --frames 200 --fps-log $m | grep "frame times"
+      done
+    done
+
+The minimap camera is a second `Camera3d` with a depth and a deferred prepass,
+and Bevy checks visibility, extracts and batches *per view* — so its 320²
+target costs nothing and its pass over the same 468k meshes is the question.
+It has no `RenderLayers`, so there is no subset of the scene it is excused
+from testing.
+
+It is no longer quite true that it renders every frame with no run condition:
+it stops while `Escape` holds the game paused, where the world is frozen and
+the pass cannot produce a different picture than the one already in the target.
+That is provably free and it is also not the interesting case. Capping its rate
+*while playing* is, and that is a trade of frame time against how smoothly the
+map turns under the heading marker — which is a decision to make with a number
+and not without one. Run the command above first.
 
 **Measuring here is harder than the guidance already says.** On this machine
 the same binary and the same framing, run three times back to back with
