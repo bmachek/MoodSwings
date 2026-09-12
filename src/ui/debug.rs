@@ -4,7 +4,6 @@
 //! the entire vehicle handling model) are impossible to get right by recompiling
 //! between guesses. Anything in `GameConfig` should be editable here.
 
-use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use leafwing_input_manager::prelude::ActionState;
@@ -24,12 +23,58 @@ use crate::world::weather::Weather;
 
 pub struct DebugUiPlugin;
 
+#[derive(Resource, Default)]
+pub struct DebugTools(pub bool);
+
+pub fn tools_closed(tools: Option<Res<DebugTools>>) -> bool {
+    tools.is_none_or(|tools| !tools.0)
+}
+
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(FpsOverlayPlugin::default()).add_systems(
-            EguiPrimaryContextPass,
-            (tuning_panel, vehicle_panel, agent_panel),
-        );
+        app.init_resource::<DebugTools>()
+            .add_systems(
+                Update,
+                toggle_tools.in_set(crate::core::schedule::GameSet::Input),
+            )
+            .add_systems(
+                EguiPrimaryContextPass,
+                (tuning_panel, vehicle_panel, agent_panel).run_if(|tools: Res<DebugTools>| tools.0),
+            );
+    }
+}
+
+fn toggle_tools(
+    mut actions: Query<&mut ActionState<Action>>,
+    mut tools: ResMut<DebugTools>,
+    state: Option<Res<State<crate::core::states::InGameState>>>,
+    mut cursors: Query<&mut bevy::window::CursorOptions, With<bevy::window::PrimaryWindow>>,
+) {
+    let pressed = actions.iter().any(|a| a.just_pressed(&Action::ToggleTools));
+    // Every frame rather than only on the keypress: the panel can also be
+    // opened by a state change or closed by one, and an action left disabled
+    // because a toggle was missed is a game that has stopped taking input.
+    for mut state in &mut actions {
+        for action in Action::IN_PLAY {
+            if tools.0 {
+                state.disable_action(&action);
+            } else {
+                state.enable_action(&action);
+            }
+        }
+    }
+    if pressed {
+        tools.0 = !tools.0;
+        let free = tools.0
+            || state.is_none_or(|state| *state.get() != crate::core::states::InGameState::Playing);
+        for mut cursor in &mut cursors {
+            cursor.visible = free;
+            cursor.grab_mode = if free {
+                bevy::window::CursorGrabMode::None
+            } else {
+                bevy::window::CursorGrabMode::Locked
+            };
+        }
     }
 }
 
@@ -239,6 +284,21 @@ fn tuning_panel(
                     .text("swing delay s"),
             );
 
+            ui.separator();
+            ui.label(egui::RichText::new("camera comfort / street moments").strong());
+            ui.add(egui::Slider::new(&mut config.camera.position_ease, 1.0..=30.0).text("position ease"));
+            ui.add(egui::Slider::new(&mut config.camera.vertical_ease, 1.0..=20.0).text("vertical ease"));
+            ui.add(egui::Slider::new(&mut config.camera.lens_ease, 1.0..=10.0).text("lens ease"));
+            ui.add(egui::Slider::new(&mut config.camera.driving_look_ahead, 0.0..=0.3).text("driving lead"));
+            ui.add(egui::Slider::new(&mut config.camera.driving_distance, 1.0..=2.5).text("driving distance"));
+            ui.add(egui::Slider::new(&mut config.camera.driving_follow, 0.0..=5.0).text("driving follow"));
+            ui.add(egui::Slider::new(&mut config.camera.driving_look_delay, 0.0..=3.0).text("driving look delay"));
+            ui.add(egui::Slider::new(&mut config.stroll.turn_ease, 1.0..=25.0).text("player turn ease"));
+            ui.add(egui::Slider::new(&mut config.stroll.walk_metres, 20.0..=1000.0).text("walk metres"));
+            ui.add(egui::Slider::new(&mut config.stroll.cheer_people, 1..=100).text("cheer people"));
+            ui.add(egui::Slider::new(&mut config.stroll.listeners_seconds, 3.0..=60.0).text("listen seconds"));
+            ui.add(egui::Slider::new(&mut config.stroll.listening_radius, 2.0..=15.0).text("listen radius"));
+            ui.add(egui::Slider::new(&mut config.stroll.notice_seconds, 0.0..=15.0).text("notice seconds"));
             ui.separator();
             ui.label(egui::RichText::new("mixer").strong());
             ui.add(egui::Slider::new(&mut config.audio.master, 0.0..=1.0).text("master"));
@@ -453,7 +513,7 @@ fn weather_section(ui: &mut egui::Ui, weather: &mut Weather, config: &mut GameCo
     // The one control that is not an override: with the clock stopped, nothing
     // above moves on its own, and that is how a screenshot holds still.
     ui.add(
-        egui::Slider::new(&mut config.world.day_length_seconds, 0.0..=1800.0)
+        egui::Slider::new(&mut config.world.day_length_seconds, 0.0..=7200.0)
             .text("day length (s)"),
     );
 }

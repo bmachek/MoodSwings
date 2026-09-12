@@ -177,7 +177,6 @@ pub struct BuildingKits<'w> {
     // same reason the bank is: a chunk streamed before they land simply
     // opens its shops unstaffed, and re-entry fixes it.
     figures: Option<Res<'w, crate::ai::figure::FigureAssets>>,
-    faces: Option<Res<'w, crate::mood::face::FaceAssets>>,
     tempers: Option<Res<'w, crate::mood::feeling::Tempers>>,
 }
 
@@ -244,13 +243,9 @@ pub fn update_streaming(
         plumes: &street.plumes,
         gables: &street.gables,
         bank: kits.bank.as_deref(),
-        cast: match (&kits.figures, &kits.faces, &kits.tempers) {
-            (Some(figures), Some(faces), Some(tempers)) => {
-                Some(crate::world::interior::CastContext {
-                    figures,
-                    faces,
-                    tempers,
-                })
+        cast: match (&kits.figures, &kits.tempers) {
+            (Some(figures), Some(tempers)) => {
+                Some(crate::world::interior::CastContext { figures, tempers })
             }
             _ => None,
         },

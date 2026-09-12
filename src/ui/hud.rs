@@ -54,13 +54,26 @@ struct RageBanner;
 #[derive(Component)]
 struct EventShout;
 
+#[derive(Component)]
+enum StreetReadout {
+    Place,
+    Moments,
+    Controls,
+}
+
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PostStartup, spawn_hud).add_systems(
             Update,
-            (toggle_map, size_map_frame, show_the_mood, show_the_event)
+            (
+                toggle_map,
+                size_map_frame,
+                show_the_mood,
+                show_the_event,
+                show_the_street,
+            )
                 .chain()
                 .in_set(GameSet::Ui),
         );
@@ -122,6 +135,49 @@ fn fill_fraction(mood: f32) -> f32 {
 }
 
 fn spawn_hud(mut commands: Commands, minimap: Res<MinimapImage>, faces: Res<FaceAssets>) {
+    // Separate roots anchor to the viewport rather than to the mood column.
+    // A compact line gives the city a time and a place without a debug panel.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(18.0),
+            left: Val::Px(20.0),
+            max_width: Val::Percent(45.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(PANEL),
+        Pickable::IGNORE,
+        GlobalZIndex(11),
+        children![label("", 16.0, INK, StreetReadout::Place)],
+    ));
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(20.0),
+            bottom: Val::Px(20.0),
+            width: Val::Px(330.0),
+            max_width: Val::Percent(44.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(12.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            border_radius: BorderRadius::all(Val::Px(8.0)),
+            ..default()
+        },
+        BackgroundColor(PANEL),
+        Pickable::IGNORE,
+        GlobalZIndex(11),
+        children![
+            label("", 15.0, INK, StreetReadout::Moments),
+            label(
+                "",
+                13.0,
+                Color::srgb(0.7, 0.82, 0.85),
+                StreetReadout::Controls
+            ),
+        ],
+    ));
     commands.spawn((
         Name::new("HUD"),
         Node {
@@ -343,14 +399,135 @@ fn toggle_map(mut map_open: ResMut<MapOpen>, actions: Query<&ActionState<Action>
 /// Sizes the map panel from the state rather than from the keypress, so
 /// anything that sets `MapOpen` — a menu, a script, the capture tool — gets the
 /// full-size map instead of a zoomed-out city crammed into a minimap frame.
-fn size_map_frame(map_open: Res<MapOpen>, mut frames: Query<&mut Node, With<MinimapFrame>>) {
-    if !map_open.is_changed() {
-        return;
-    }
+fn size_map_frame(
+    map_open: Res<MapOpen>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut frames: Query<&mut Node, With<MinimapFrame>>,
+) {
     // One texture serves both views: the camera zooms out, the frame grows.
-    let size = if map_open.0 { 640.0 } else { 170.0 };
+    let available = windows
+        .single()
+        .map_or(640.0, |w| (w.width().min(w.height()) - 48.0).max(100.0));
+    let size = if map_open.0 {
+        available.min(640.0)
+    } else {
+        available.min(170.0)
+    };
     for mut node in &mut frames {
         node.width = Val::Px(size);
         node.height = Val::Px(size);
+    }
+}
+
+/// Four updates a second is enough for readable instruments. In particular,
+/// do not lay out new text sixty times a second just because the car moved.
+fn show_the_street(
+    time: Res<Time>,
+    mut elapsed: Local<f32>,
+    config: Res<crate::core::config::GameConfig>,
+    clock: Res<crate::world::timeofday::TimeOfDay>,
+    weather: Res<crate::world::weather::Weather>,
+    bindings: Res<crate::core::settings::KeyBindings>,
+    moments: Res<crate::player::stroll::StreetMoments>,
+    map: Res<MapOpen>,
+    players: Query<
+        (&Transform, Option<&crate::player::interact::Driving>),
+        With<crate::player::on_foot::Player>,
+    >,
+    vehicles: Query<
+        (
+            Entity,
+            &Transform,
+            &avian3d::prelude::LinearVelocity,
+            Option<&crate::player::interact::DrivenBy>,
+        ),
+        With<crate::vehicle::spawn::Vehicle>,
+    >,
+    mut readouts: Query<(&StreetReadout, &mut Text)>,
+) {
+    *elapsed -= time.delta_secs();
+    if *elapsed > 0.0 {
+        return;
+    }
+    *elapsed = 0.25;
+    let Ok((player, driving)) = players.single() else {
+        return;
+    };
+    let minutes = (clock.hours.rem_euclid(24.0) * 60.0) as u32;
+    let sky = if weather.rain > 0.15 {
+        "Regen"
+    } else if weather.cover > 0.65 {
+        "Bewölkt"
+    } else if crate::world::timeofday::daylight(clock.hours) < 0.1 {
+        "Nacht"
+    } else {
+        "Heiter"
+    };
+    let place = format!(
+        "{}  ·  {:02}:{:02}  ·  {}",
+        config.city.label(),
+        minutes / 60,
+        minutes % 60,
+        sky
+    );
+    let tune = &config.stroll;
+    let check = |done: bool| if done { "✓" } else { "·" };
+    let invitation = if !tune.enabled || map.0 {
+        String::new()
+    } else if moments.notice_left > 0.0 {
+        moments.notice.clone()
+    } else {
+        format!(
+            "DEINE STADTMOMENTE\nGanz ohne Eile. Für diesen Ausflug.\n\n{} Frische Luft: {:.0}/{:.0} m zu Fuß\n{} Gute Nachbarschaft: {}/{} aufgemuntert\n{} Erste Reihe: {:.0}/{:.0} s Straßenmusik",
+            check(moments.completed[0]),
+            moments.walked,
+            tune.walk_metres.max(1.0),
+            check(moments.completed[1]),
+            moments.cheered.len(),
+            tune.cheer_people.clamp(1, 100),
+            check(moments.completed[2]),
+            moments.listened,
+            tune.listeners_seconds.max(1.0)
+        )
+    };
+    let key = |action| {
+        let raw = format!("{:?}", bindings.key_for(action));
+        raw.strip_prefix("Key").unwrap_or(&raw).to_string()
+    };
+    use crate::core::settings::RebindableAction as Binding;
+    let controls = if let Some(driving) = driving {
+        let speed = vehicles
+            .get(driving.0)
+            .map_or(0.0, |(_, _, v, _)| v.0.xz().length() * 3.6);
+        format!(
+            "{speed:.0} km/h\n{} / B: Handbremse · {} / Y: Aussteigen",
+            key(Binding::Handbrake),
+            key(Binding::Interact)
+        )
+    } else {
+        let car_near = vehicles.iter().any(|(_, car, _, driver)| {
+            driver.is_none()
+                && car.translation.distance(player.translation)
+                    <= crate::player::interact::ENTER_RANGE
+        });
+        let hint = if car_near {
+            format!("{} / Y: Einsteigen", key(Binding::Interact))
+        } else {
+            "Rechtsklick / LT: Aufmuntern".to_string()
+        };
+        format!(
+            "{hint}\nMittelklick / X: Blume verschenken\n{} / Select: Karte · F3: Entwicklerfenster",
+            key(Binding::Map)
+        )
+    };
+    for (kind, mut text) in &mut readouts {
+        let value = match kind {
+            StreetReadout::Place => &place,
+            StreetReadout::Moments => &invitation,
+            StreetReadout::Controls => &controls,
+        };
+        if text.0 != *value {
+            text.0.clone_from(value);
+        }
     }
 }

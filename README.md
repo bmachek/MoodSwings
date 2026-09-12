@@ -1454,3 +1454,211 @@ in the world.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
 
+
+
+## Where the frame actually goes
+
+Written down because two days of guessing at it would otherwise be repeated.
+
+**The renderer preset is not the bottleneck.** At a street framing, `--frames
+200 --fps-log`:
+
+| preset | median |
+|---|---|
+| low | 20.46 ms |
+| medium | 20.49 ms |
+| high | 20.55 ms |
+| ultra | 26.34 ms |
+| photo | 33.91 ms |
+
+Low, medium and high are the same frame. Everything `render::quality` moves
+between them — shadow map size, SSAO level, volumetric steps — is free here.
+Only ultra and photo cost anything, and nobody plays there.
+
+**The frame is CPU-bound, not fill-bound.** A binary built at 800×450 instead
+of 1600×900 — a quarter of the pixels — measured 19.98 ms against 20.43 ms for
+the same framing, interleaved back to back. Quartering the pixels is free.
+Neither does resident geometry decide it: 76k mesh entities at
+`--stream-radius 200` and 220k at 900 are within about a millisecond of each
+other, so the frustum cull is doing its job. What is left is per-entity CPU
+work over the ~221,000 `Mesh3d` entities the streamer keeps resident —
+visibility, extraction, batching — plus whatever the per-frame gameplay
+systems scan.
+
+So the lever is the number of entities and the number of per-frame passes over
+them, not any renderer setting. A future attempt should start by merging static
+per-chunk geometry rather than by turning shadows down.
+
+**`--fps-log` does not measure the minimap.** `ui::mod` does not install
+`MinimapPlugin` under `--screenshot` unless `--map` is passed — deliberately,
+so comparison shots are not covered in instruments — which means every frame
+time in this file was taken without a view that shipping play always has. The
+minimap camera is a second `Camera3d` with a depth and a deferred prepass,
+rendering every frame with no run condition. Its 320² target costs nothing; its
+visibility and batching pass over the same 221k meshes does not. Nobody has
+measured it, and this file should not pretend otherwise.
+
+**Measuring here is harder than the guidance already says.** On this machine
+the same binary and the same framing, run three times back to back with
+nothing else started, gave 41.87, 48.12 and 20.84 ms. That is a factor of 2.3
+with no change of any kind. The interleaved A/B in one shell command — A, B, A,
+B, reading the pairs rather than the absolutes — is the only protocol that has
+survived, and it resolved about half a millisecond when it worked. Anything
+measured across a `cargo build` is measuring the build.
+
+## Street moments and human character pass
+
+The follow-up to PR #26 gives the street more reasons to slow down.
+
+- **Stadtmomente** are three optional, session-local invitations: walk 250 m,
+  cheer five different residents, and spend twelve seconds near street music.
+  There is no countdown, penalty or failure. Disable them in the pause menu.
+  A cheer counts a *resident*, by their stable id, so the same neighbour
+  respawning round the next corner is not somebody new; a ride, a quick load
+  and being punted across a junction by a car are none of them a walk.
+- The right stick steers the camera on its own axis, because a stick is a rate
+  and a mouse is a displacement, and one action carrying both loses the units.
+  A radial deadzone stops the drift. The left stick keeps its magnitude, so a
+  gentle tilt is a stroll — clamped rather than normalised, because the
+  keyboard's WASD pad has no circle bound and the diagonal was forty per cent
+  faster than the straight line.
+- Camera settings hold vertical field of view, optional widening with speed,
+  stick sensitivity and deadzone. Five rays rather than one find the wall,
+  including one from each corner of the near plane, and they are cast again
+  after the smoothing rather than only before it. It is an approximation of a
+  swept sphere, not a swept sphere.
+- The HUD carries the town, the clock, the weather and a speedometer. **F3**
+  opens the developer windows, which are shut on a normal launch; while they
+  are open the game's own input is disabled, so dragging a slider does not
+  also taunt the street. Key hints read the player's own bindings.
+- Daylight and rain shape the ambient beds that are already mixed rather than
+  adding voices to them. Midnight takes the birds out and softens the traffic.
+- Citizens have six complexions, three face variants, five haircuts, six hair
+  colours, four silhouettes, varied builds and, on about a fifth of them,
+  glasses. Presentation is independent of role, mood and clothing. Noses,
+  ears, collars, pockets and hems give a figure an outline; the expression
+  moves and the complexion does not. Appearance is drawn on its own RNG
+  stream, keyed off the resident's id, so a body that streams back in is the
+  same person. Every face is still painted per pixel at startup.
+- A day is an hour of real time rather than ten minutes, and the pause menu
+  sets it. At twenty-five seconds to the in-game hour the light moved faster
+  than the player could cross a street, and no time of day ever settled.
+- Fifty-two more adverts, shopfronts and streetworks notices, including the
+  Amt für Spontanität (by appointment only) and a building site making
+  progress in a direction yet to be agreed. Some are Landshut at one remove:
+  a bridal shop with fittings every four years, a brickworks with the tallest
+  tower in the world and a request not to lean on it, two high streets that
+  are both the middle one.
+
+This is a procedural character pass, not scanned human assets, not facial
+animation capture and not a claim about visual quality. The mood portrait in
+the HUD keeps its exaggerated palette — it is a symbol, not a face. Street
+moment progress belongs to the outing and is not saved.
+
+A face is painted at 256², five expressions to a complexion and variant rather
+than the mood ladder's thirteen. Thirteen steps exist because an *emoji*
+changes colour continuously and bands without them; a human face moves a brow
+and a mouth, and the difference is better spent on texels. The features are
+drawn nearer caricature than anatomy, because a citizen two metres away is
+about sixty pixels of face and life proportions come out as two dots. Ninety
+sheets, about 320 ms of startup, and the log says so.
+
+The emoji head went with them, and it took a while to notice. Every figure in
+the city is dressed through one function, that function takes its head and its
+skin from the human palette, and `FaceAssets` went on painting thirteen
+wrapped 256² faces and thirteen matching complexions that nothing sampled. A
+face was handed round as a `Worn` — a level, a head material and a hand
+material, bundled so the three could not disagree — and two thirds of that
+bundle was dead, so it is a level now, and `FaceAssets` is the one thing still
+on screen: the portrait in the corner of the HUD, which is a symbol and is
+*meant* to go yellow and glow red.
+
+Validating a change to any of this: `cargo fmt --all -- --check`,
+`cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`,
+then `--lineup --hour 12`, `--lineup --hour 21.5` and street and rain framings
+before and after, then `--patrol 120`. Look at head turns, short sleeves, long
+coats, wheelchair users and the camera at a corner.
+
+A band nothing measured may not keep a width nothing measured. `cap_widths`
+narrows a band to the median wall-to-wall clearance its own segments can see,
+which is right where they can see one — the Altstadt's thirty-seven segments
+all can, and it lands within three decimetres of the baked width. Where they
+cannot, the old rule kept whatever `merge_parallel` had left, and that is the
+distance between the outermost lanes the mappers drew: Innere Münchener Straße
+came out 34 m wide with *none* of its eight segments able to see both walls,
+which paints a black field of asphalt on the grass by the bridge with a house
+standing in it. Gutenbergweg managed two segments of nineteen (15.2 m and
+70.7 m — two clearances have no middle), Wittstraße one of six. Those three
+are now held to `WIDEST`, the 22 m the bake already refuses to believe past
+for any width at all, and everything the buildings do confirm is untouched.
+
+The atlas has been rebaked for it, which is the first time that path has been
+exercised since the file was committed, and it is worth writing down what it
+costs. `--from-ron` reads the committed file, keeps its streets, water and open
+ground, and regenerates the buildings and the relief from the Overture and
+Copernicus buckets — no Overpass. It converges: the second run over its own
+output is byte-identical, and so is the third. But the *first* run is not a
+no-op, because the buildings it reads today decompose into 4672 parts where the
+committed file had 4739, and `cap_widths` measures against those. Forty-three
+streets narrow again on that first pass, 108 m of carriageway in all, of which
+the sharpest are Nikolastraße 11.1 → 4.4 and Papiererstraße 10.4 → 4.0. Both
+are improvements — a 10 m street through that quarter was dropping the houses
+standing on it as buildings in the road, and at 4 m they stand.
+
+So a rebake is a real change to the town and not a formality. Run it, look at
+it, and keep the shots:
+
+    tools/bake-city.py --from-ron assets/cities/landshut.ron out.ron \
+        --buildings-parquet <overture.parquet> --dem <copernicus.tif>
+
+with the bbox `tools/fetch-city.sh` names. It prints every band it moves.
+
+A Gasse is flush. A lane no wider than one car, not arterial, and paved in
+setts or slabs is not a carriageway with kerbs down it — it is a lane, and an
+old town is mostly made of them: 5.7 km of Landshut, the passages off the
+market, the churchyard paths, the ways between two courtyards. Every metre was
+being built as a road: four metres of cobble, a 140 mm kerb, 3.2 m of paving
+slab, both sides. Where such a lane wanders, which is what a lane does, those
+kerbs cross the open square at whatever angle the lane arrives at — the
+Martinsfriedhof, the churchyard round St. Martin, laid twenty-one kerbed strips
+across a 45 by 28 metre yard. Now the lane is paved wall to wall in its own
+surface with no kerb and no pavement, and the corridor it reserves is
+unchanged, so the buildings stand exactly where they did. 665 pavement sides
+of 3471 go, and with them 662 meshes.
+
+Two other readings were measured and thrown away first, which is worth writing
+down because both were plausible. The polyline does have hairpins — eleven
+vertices in the town that a ribbon of that street's own width cannot turn
+through, the worst a 123° kerb between 5 m segments on a 15 m street — but
+`mitre` and `on_another_carriageway` already handle them: after those, not one
+pavement in the town has its centre more than half a metre inside somebody
+else's tarmac.
+
+The second was wrong, and wrong in a way worth keeping written down: that the
+Altstadt is baked too narrow at 15.1 m because `cap_widths` may only narrow.
+The measurement behind that said the buildings stand 25.8 m apart, and it was
+taken from each segment's *midpoint*. `cap_widths` measures from the whole
+segment, which is right — a wall beside either end of a 10 m segment
+constrains it just as much as one beside its middle — and by that measure the
+Altstadt's walls are 21.8 m apart, which is a 15.4 m band. The bake had it
+correct to three decimetres. A measurement that does not reproduce the one it
+is accusing is not evidence, and this one took two goes to notice.
+
+A queue whose head cannot reach the door now walks the door out to meet them.
+`hold_the_line` steers everybody straight at their slot with no path round
+anything, which is right — a queue is a straight line, and people in one do
+not navigate — but it means a sandwich board, a bike, a bin, a terrace, a kerb
+or a parked car leaves the head pressed against it and a metre short for good.
+The head is the one person in a line exempt from impatience, their waiting
+being over, so nothing ever timed out a head who had not actually arrived. The
+`stalled` field has measured exactly this since queues were written, and its
+own comment says nothing reads it. `--patrol 120` on the commit before this
+one: thirty-one complaints, twelve people standing in seven wedged lines.
+After: none, and two doors that reported themselves unreachable.
+
+`--lineup` stands the cast on a stage above the rooftops. Sixteen archetypes
+at 1.6 m is a row twenty-four metres wide, and photographing a row that wide
+needs twenty metres of clear standoff — which an old town does not have
+anywhere, so every lineup ever shot in Landshüpf was a photograph of the
+inside of a wall, including the ones used to sign off costume work. The
+fixture is not part of the world and can stand where there is room.

@@ -32,6 +32,8 @@ pub struct GameConfig {
     #[serde(default)]
     pub agent_watch: AgentWatchConfig,
     pub camera: CameraConfig,
+    #[serde(default)]
+    pub stroll: StrollConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
     /// preset and then walked back to what the GPU actually supports; see
@@ -481,6 +483,14 @@ pub struct WorldConfig {
     /// Chunks within this distance of the camera are spawned.
     pub stream_radius: f32,
     /// Real seconds for a full 24h cycle. 0 freezes the clock.
+    ///
+    /// This was ten minutes, which is twenty-five real seconds to the in-game
+    /// hour: walk the length of one street and the sun has moved through a
+    /// quarter of an afternoon. A town whose light changes faster than the
+    /// player can cross it never settles into a time of day at all, and the
+    /// whole point of the weather and the lamps is that they are *somewhere*
+    /// for a while. At an hour to the day a street holds its light for about
+    /// as long as it takes to get bored of it, which is the right length.
     pub day_length_seconds: f32,
     pub start_hour: f32,
     /// How wet the ground is when the world opens, 0 to 1.
@@ -750,6 +760,7 @@ pub struct AudioConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CameraConfig {
     /// Free-fly movement speed.
     pub speed: f32,
@@ -767,6 +778,47 @@ pub struct CameraConfig {
     /// a corner taken two-handed does not lose the car off the side of the
     /// screen.
     pub auto_follow_delay: f32,
+    /// Vertical field of view; independent of graphics quality.
+    pub fov_degrees: f32,
+    /// Extra degrees at road speed. Zero disables the speed effect.
+    pub speed_fov: f32,
+    pub stick_sensitivity: f32,
+    pub stick_deadzone: f32,
+    pub position_ease: f32,
+    pub vertical_ease: f32,
+    pub lens_ease: f32,
+    pub driving_look_ahead: f32,
+    pub driving_distance: f32,
+    pub driving_follow: f32,
+    pub driving_look_delay: f32,
+}
+
+/// Small optional invitations, and the way the player moves between them.
+/// Defaults on the whole block preserve options written before it existed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StrollConfig {
+    pub enabled: bool,
+    pub turn_ease: f32,
+    pub walk_metres: f32,
+    pub listeners_seconds: f32,
+    pub listening_radius: f32,
+    pub cheer_people: usize,
+    pub notice_seconds: f32,
+}
+
+impl Default for StrollConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            turn_ease: 14.0,
+            walk_metres: 250.0,
+            listeners_seconds: 12.0,
+            listening_radius: 9.0,
+            cheer_people: 5,
+            notice_seconds: 7.0,
+        }
+    }
 }
 
 impl Default for GameConfig {
@@ -776,7 +828,7 @@ impl Default for GameConfig {
             world: WorldConfig {
                 half_extent: 1000.0,
                 stream_radius: 900.0,
-                day_length_seconds: 600.0,
+                day_length_seconds: 3600.0,
                 start_hour: 9.5,
                 start_wetness: 0.0,
                 // A fair day with a little cloud in it. Where the weather drifts
@@ -851,7 +903,19 @@ impl Default for GameConfig {
                 invert_look_y: false,
                 auto_follow: 3.0,
                 auto_follow_delay: 0.7,
+                fov_degrees: 60.0,
+                speed_fov: 8.0,
+                stick_sensitivity: 2.4,
+                stick_deadzone: 0.15,
+                position_ease: 18.0,
+                vertical_ease: 6.0,
+                lens_ease: 3.0,
+                driving_look_ahead: 0.16,
+                driving_distance: 1.9,
+                driving_follow: 3.0,
+                driving_look_delay: 0.7,
             },
+            stroll: StrollConfig::default(),
             audio: AudioConfig {
                 master: 0.7,
                 effects: 1.0,
@@ -875,6 +939,22 @@ impl Default for CameraConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_camera_settings_keep_their_values_and_gain_comfort_defaults() {
+        let camera: CameraConfig = ron::from_str("(speed:18.0,boost_multiplier:3.0,mouse_sensitivity:0.004,invert_look_y:true,auto_follow:2.0,auto_follow_delay:1.2)").unwrap();
+        assert_eq!(camera.mouse_sensitivity, 0.004);
+        assert!(camera.invert_look_y);
+        assert_eq!(camera.fov_degrees, 60.0);
+        assert_eq!(camera.driving_look_delay, 0.7);
+        let old = ron::ser::to_string(&GameConfig::default()).unwrap();
+        let start = old.find("stroll:(").unwrap();
+        let end = start + old[start..].find(')').unwrap() + 2;
+        let mut without = old.clone();
+        without.replace_range(start..end, "");
+        let parsed: GameConfig = ron::from_str(&without).unwrap();
+        assert!(parsed.stroll.enabled);
+    }
 
     #[test]
     fn the_default_resolution_is_the_size_main_opens_the_window_with() {

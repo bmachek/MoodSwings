@@ -21,7 +21,7 @@ use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
-use crate::mood::face::{FaceAssets, FaceLevel};
+use crate::mood::face::FaceLevel;
 use crate::mood::feeling::{Mood, MoodRng, Tempers};
 use crate::mood::provoke::Provoker;
 use crate::mood::voice::Voicebox;
@@ -148,7 +148,6 @@ fn maintain_cyclists(
     city: Res<City>,
     kit: Res<BikeKit>,
     figures: Res<super::figure::FigureAssets>,
-    faces: Res<FaceAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<CyclistRng>,
     mut tempers: ResMut<MoodRng>,
@@ -205,7 +204,7 @@ fn maintain_cyclists(
         // wardrobe off this module's own stream.
         let temper = mix.draw(&mut tempers.0);
         let mood = temper.baseline;
-        let worn = faces.wear(mood);
+        let level = crate::mood::face::level_of(mood);
         let pitch = tempers.0.random_range(0.82..1.28);
         let coat = materials.add(StandardMaterial {
             base_color: Color::srgb(
@@ -231,7 +230,7 @@ fn maintain_cyclists(
             Bouncer::new(STAND_HEIGHT),
             temper,
             Mood::new(mood),
-            FaceLevel(worn.level),
+            FaceLevel(level),
             Voicebox::new(pitch),
             Provoker::default(),
             Archetype::Everyday,
@@ -242,7 +241,7 @@ fn maintain_cyclists(
             &mut rider,
             &figures,
             coat,
-            &worn,
+            level,
             Archetype::Everyday,
             &mut rng.0,
         );

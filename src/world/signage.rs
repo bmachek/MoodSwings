@@ -98,6 +98,48 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 field: [232, 196, 60, 255],
                 letter: 0.54,
             },
+            Plaque {
+                title: "GEDULD & SOHN",
+                subline: Some("NUR NOCH EINE KASSE OFFEN"),
+                ink: [244, 240, 220, 255],
+                field: [64, 88, 44, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "NAH & GLEICH",
+                subline: Some("GLEICH IST KEINE UHRZEIT"),
+                ink: [238, 240, 244, 255],
+                field: [54, 62, 78, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "BIO & LOGISCH",
+                subline: Some("AUCH UNSERE SCHLANGE IST REGIONAL"),
+                ink: [44, 34, 24, 255],
+                field: [200, 158, 64, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "ISARFRISCH",
+                subline: Some("TÄGLICH AUS DEM TAL"),
+                ink: [238, 246, 246, 255],
+                field: [38, 88, 96, 255],
+                letter: 0.52,
+            },
+            Plaque {
+                title: "HOFBERGMARKT",
+                subline: Some("ALLES DA, NUR BERGAUF"),
+                ink: [244, 240, 220, 255],
+                field: [64, 88, 44, 255],
+                letter: 0.5,
+            },
+            Plaque {
+                title: "LÄNDTOR-LADEN",
+                subline: Some("DURCHFAHRT VERBOTEN, EINKAUF ERLAUBT"),
+                ink: [246, 238, 224, 255],
+                field: [150, 62, 46, 255],
+                letter: 0.48,
+            },
         ],
         Restaurant => &[
             Plaque {
@@ -153,6 +195,48 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 field: [84, 52, 34, 255],
                 letter: 0.48,
             },
+            Plaque {
+                title: "CAFE VIELLEICHT",
+                subline: Some("RESERVIERUNG UNTER VORBEHALT"),
+                ink: [240, 230, 240, 255],
+                field: [92, 56, 80, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "ZUM LETZTEN KEKS",
+                subline: Some("DER WAR LEIDER RESERVIERT"),
+                ink: [246, 238, 224, 255],
+                field: [150, 62, 46, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "BISTRO BALD",
+                subline: Some("SCHNELL GEHT ANDERS"),
+                ink: [238, 246, 246, 255],
+                field: [38, 88, 96, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "ZUM RINGELSTECHER",
+                subline: Some("WER DANEBENSTICHT, ZAHLT"),
+                ink: [246, 238, 224, 255],
+                field: [150, 62, 46, 255],
+                letter: 0.48,
+            },
+            Plaque {
+                title: "GASTHAUS LANGE GASSE",
+                subline: Some("TISCH FREI, WEG WEIT"),
+                ink: [44, 34, 24, 255],
+                field: [200, 158, 64, 255],
+                letter: 0.46,
+            },
+            Plaque {
+                title: "BRÄU ZWEIBRÜCKEN",
+                subline: Some("EINE BRÜCKE IST IMMER GESPERRT"),
+                ink: [238, 240, 244, 255],
+                field: [54, 62, 78, 255],
+                letter: 0.48,
+            },
         ],
         Hotel => &[
             Plaque {
@@ -182,6 +266,34 @@ fn plaques_for(kind: BuildingKind) -> &'static [Plaque] {
                 ink: [32, 30, 34, 255],
                 field: [224, 206, 150, 255],
                 letter: 0.58,
+            },
+            Plaque {
+                title: "HOTEL AUSSICHT",
+                subline: Some("MIT BLICK AUF IHRE ERWARTUNGEN"),
+                ink: [44, 34, 24, 255],
+                field: [200, 158, 64, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "PENSION PAUSE",
+                subline: Some("HIER PASSIERT ENDLICH NICHTS"),
+                ink: [244, 240, 220, 255],
+                field: [64, 88, 44, 255],
+                letter: 0.50,
+            },
+            Plaque {
+                title: "HOTEL ZUR HOCHZEIT",
+                subline: Some("NÄCHSTER TERMIN IN VIER JAHREN"),
+                ink: [240, 230, 240, 255],
+                field: [92, 56, 80, 255],
+                letter: 0.48,
+            },
+            Plaque {
+                title: "GASTHOF BURGBLICK",
+                subline: Some("BURG AUF DER ANDEREN SEITE"),
+                ink: [238, 246, 246, 255],
+                field: [38, 88, 96, 255],
+                letter: 0.5,
             },
         ],
         TownHall => &[Plaque {
@@ -585,7 +697,7 @@ struct Advert {
 /// The poster run. One texture and one material each, shared city-wide, the
 /// same economy as the plaques — a city with eight adverts on rotation is
 /// still truer than a city with none.
-const ADVERTS: [Advert; 16] = [
+const ADVERTS: [Advert; 36] = [
     Advert {
         title: "LAUNENBRAUSE",
         lines: &["JETZT MIT NOCH MEHR GEFÜHL", "OHNE ALLES, DAFÜR VIEL"],
@@ -716,6 +828,166 @@ const ADVERTS: [Advert; 16] = [
         field: [156, 30, 66, 255],
         accent: [246, 244, 240, 255],
         disc: true,
+    },
+    Advert {
+        title: "WARTEZEIT PLUS",
+        lines: &["JETZT SCHNELLER LANGSAM", "PREMIUM WARTET VORNE"],
+        ink: [246, 242, 230, 255],
+        field: [102, 46, 48, 255],
+        accent: [220, 177, 86, 255],
+        disc: true,
+    },
+    Advert {
+        title: "AMT FÜR SPONTANITÄT",
+        lines: &["BITTE TERMIN VEREINBAREN"],
+        ink: [246, 242, 230, 255],
+        field: [38, 72, 85, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "KAFFEE MIT GEDULD",
+        lines: &["DER KAFFEE IST FERTIG", "WIR NOCH NICHT"],
+        ink: [246, 242, 230, 255],
+        field: [102, 46, 48, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "WETTER AUF ABRUF",
+        lines: &["SIE HABEN REGEN BESTELLT", "WIDERSPRUCH ZWECKLOS"],
+        ink: [246, 242, 230, 255],
+        field: [38, 72, 85, 255],
+        accent: [220, 177, 86, 255],
+        disc: true,
+    },
+    Advert {
+        title: "PARKEN MIT GEFÜHL",
+        lines: &["IHR AUTO STEHT GUT DA", "SIE LEIDER IM WEG"],
+        ink: [246, 242, 230, 255],
+        field: [102, 46, 48, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "FUNDAMT",
+        lines: &["GUTE LAUNE GEFUNDEN", "BITTE WEITERGEBEN"],
+        ink: [246, 242, 230, 255],
+        field: [38, 72, 85, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "STILLE TO GO",
+        lines: &["BITTE LEISE BESTELLEN"],
+        ink: [246, 242, 230, 255],
+        field: [102, 46, 48, 255],
+        accent: [220, 177, 86, 255],
+        disc: true,
+    },
+    Advert {
+        title: "BÜRO FÜR UMWEGE",
+        lines: &["DER WEG IST DAS ZIEL", "WIR VERLÄNGERN BEIDES"],
+        ink: [246, 242, 230, 255],
+        field: [38, 72, 85, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "NACHBARSCHAFT PLUS",
+        lines: &["JETZT MIT ECHTEN NACHBARN", "STUMMSCHALTEN NICHT MÖGLICH"],
+        ink: [246, 242, 230, 255],
+        field: [102, 46, 48, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "ANTI-STRESS-KURS",
+        lines: &["AUSGEBUCHT", "BITTE NICHT AUFREGEN"],
+        ink: [246, 242, 230, 255],
+        field: [38, 72, 85, 255],
+        accent: [220, 177, 86, 255],
+        disc: true,
+    },
+    Advert {
+        title: "SCHUHE MIT ZUKUNFT",
+        lines: &["SIE GEHEN IHREN WEG", "WIR GEHEN MIT"],
+        ink: [246, 242, 230, 255],
+        field: [102, 46, 48, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "MORGEN EXPRESS",
+        lines: &["HEUTE LEIDER ERST MORGEN"],
+        ink: [246, 242, 230, 255],
+        field: [38, 72, 85, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "BRAUTMODEN 1475",
+        lines: &["ANPROBE ALLE VIER JAHRE", "BITTE STILLHALTEN"],
+        ink: [246, 238, 224, 255],
+        field: [150, 62, 46, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "ZIEGELEI HOCHMUT",
+        lines: &["HÖCHSTER TURM DER WELT", "BITTE NICHT ANLEHNEN"],
+        ink: [246, 238, 224, 255],
+        field: [150, 62, 46, 255],
+        accent: [220, 177, 86, 255],
+        disc: true,
+    },
+    Advert {
+        title: "ZWEI HAUPTSTRASSEN",
+        lines: &["ALTSTADT ODER NEUSTADT", "BEIDE SIND DIE MITTE"],
+        ink: [44, 34, 24, 255],
+        field: [200, 158, 64, 255],
+        accent: [102, 46, 48, 255],
+        disc: false,
+    },
+    Advert {
+        title: "HOFBERGBAHN",
+        lines: &["GEPLANT SEIT 1475", "TRASSE IN PRÜFUNG"],
+        ink: [238, 246, 246, 255],
+        field: [38, 88, 96, 255],
+        accent: [214, 196, 128, 255],
+        disc: false,
+    },
+    Advert {
+        title: "SALZSTADEL",
+        lines: &["SALZ IST ALLE", "STADEL STEHT NOCH"],
+        ink: [44, 34, 24, 255],
+        field: [200, 158, 64, 255],
+        accent: [102, 46, 48, 255],
+        disc: true,
+    },
+    Advert {
+        title: "GRIESERWIESE",
+        lines: &["PLATZ FÜR ALLE", "HEUTE LEIDER BELEGT"],
+        ink: [240, 230, 240, 255],
+        field: [92, 56, 80, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
+    },
+    Advert {
+        title: "ISARSCHWIMMBAD",
+        lines: &["HEUTE WIEDER MIT STRÖMUNG", "SCHWIMMEN SIE MIT"],
+        ink: [238, 246, 246, 255],
+        field: [38, 88, 96, 255],
+        accent: [214, 196, 128, 255],
+        disc: true,
+    },
+    Advert {
+        title: "EISHOCKEY LANDSHÜPF",
+        lines: &["WIR STEIGEN AUF", "TERMIN OFFEN"],
+        ink: [240, 230, 240, 255],
+        field: [92, 56, 80, 255],
+        accent: [220, 177, 86, 255],
+        disc: false,
     },
 ];
 
@@ -946,7 +1218,15 @@ mod tests {
     fn every_sign_fits_the_font() {
         use crate::world::texture::glyph;
         for (kind, text) in every_text() {
-            for code in encode(&text) {
+            // Against the *source* characters, not only the encoded ones.
+            // `encode` turns anything it cannot map into a space, so checking
+            // its output alone accepts every unrenderable letter as deliberate
+            // whitespace — which is how a café opened here spelt CAF.
+            for (character, code) in text.chars().zip(encode(&text)) {
+                assert!(
+                    character == ' ' || code != b' ',
+                    "a {kind} says {text:?} and {character:?} is not in the font"
+                );
                 assert!(
                     code == b' ' || glyph(code) != [0; 7],
                     "a {kind} says {text:?} and the font cannot draw {:?}",
