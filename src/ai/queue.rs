@@ -139,13 +139,31 @@ const CRANE: f32 = 1.1;
 /// drains at; a queue's length is the argument between them, and the only
 /// place to settle it is a patrol, because two errands landing on the same
 /// door within a few seconds of each other is not something that can be
-/// reasoned about from a constant. Half a minute of patrolled city gets a
-/// couple of doors to two people on the errands alone, which is where the
-/// recruiting starts — so this is set to roughly double that rate, and the
-/// long stop is [`CROWD_SHARE`] rather than anything here.
+/// reasoned about from a constant.
+///
+/// It was reasoned about from a constant anyway, and the patrol said no.
+/// `LURE_AT` was two, on the sound-sounding ground that one person outside
+/// a shop is not a queue yet. A hundred and fifty seconds of patrolled city
+/// never got two people to one door at one moment — every reading was one
+/// standing in one line — so the threshold was never crossed and the whole
+/// recruiting mechanic did not run once. Reaching two *is* the coincidence
+/// the lure exists to manufacture; gating the lure on it gates it on
+/// itself, and nothing about that failure is visible from inside the game,
+/// because a city where every door has one customer looks like a city that
+/// is working.
+///
+/// One, then — which is the truer reading as well. Somebody standing at a
+/// door is how every queue in the world starts, and „da steht schon einer"
+/// is a better joke than the rule it replaces. The long stop is
+/// [`CROWD_SHARE`] rather than anything here.
 const LURE_RANGE: f32 = 17.0;
-const LURE_AT: usize = 2;
+const LURE_AT: usize = 1;
 const LURE_CHANCE: f32 = 0.05;
+// The guard on a mistake only a patrol could find, because nothing fails
+// when it is wrong: above one, the lure never runs, every door shows one
+// customer, and the city looks like it is working.
+const _: () = assert!(LURE_AT <= 1);
+
 /// And how long a recruit gives the walk over before thinking better of it.
 /// Generous, because they have watched people go over there and stay, so
 /// going over there and staying is the entire plan.
@@ -160,7 +178,14 @@ const LURE_PATIENCE: f32 = 30.0;
 /// everybody is queueing has no street life left, however good each
 /// individual queue is, so the recruiting stops here. The queues that exist
 /// carry on; nothing already standing is sent home.
-const CROWD_SHARE: f32 = 0.18;
+///
+/// A quarter rather than the sixth it was first set to. The same patrol
+/// that found `LURE_AT` unreachable also showed what the cap has to leave
+/// room for: at the default crowd a sixth is nine people, which is one full
+/// line and half of another, and two lines is the fewest a street can show
+/// and still read as a city that queues rather than as one shop having a
+/// moment.
+const CROWD_SHARE: f32 = 0.25;
 
 /// Pushing in, when it is one of the city's own doing it.
 ///
@@ -480,6 +505,14 @@ fn join_the_fun(
             Without<Chatting>,
             Without<Grudge>,
             Without<Launched>,
+            // Somebody who has just walked out of a line is not a candidate
+            // for walking straight back into it. `lose_patience` hands a
+            // balker a long `Composure`, and at a lure threshold of one the
+            // door they just left is still an attractor — so without this
+            // the recruiting does not merely undo the balk, it turns the
+            // most human thing the crowd does into a citizen vibrating on
+            // the spot outside a bakery.
+            Without<Composure>,
             Without<super::busker::Listening>,
         ),
     >,
