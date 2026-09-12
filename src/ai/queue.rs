@@ -309,6 +309,27 @@ pub fn souring(temper: &Temperament) -> f32 {
 #[derive(Resource, Default)]
 pub struct Queues {
     lines: HashMap<PlaceId, Line>,
+    tally: Tally,
+}
+
+/// Running totals since the city started, for `core::patrol`'s report.
+///
+/// A queue is a pipeline — an errand aimed at a door, a walk, a place in the
+/// line, a turn at the counter — and every stage of it can be empty for a
+/// different reason. The standing count alone cannot tell "nobody ever set
+/// out" from "everybody set out and nobody arrived", and those want opposite
+/// fixes. Two patrols were spent guessing between them from one number; this
+/// is the second number, and the one after that.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Tally {
+    /// Errands handed out by the recruiting, and places actually taken.
+    pub lured: u32,
+    pub joined: u32,
+    /// Turned away because the line was already full.
+    pub refused: u32,
+    /// Served, and gave up waiting.
+    pub served: u32,
+    pub balked: u32,
 }
 
 impl Queues {
@@ -324,6 +345,11 @@ impl Queues {
 
     pub fn lines(&self) -> usize {
         self.lines.len()
+    }
+
+    /// What the queues have done since the city started.
+    pub fn tally(&self) -> Tally {
+        self.tally
     }
 
     /// The longest any line in the city has stood without serving anybody.
@@ -495,7 +521,7 @@ fn join_the_fun(
     time: Res<Time>,
     config: Res<crate::core::config::GameConfig>,
     mut rng: ResMut<AudioRng>,
-    queues: Res<Queues>,
+    mut queues: ResMut<Queues>,
     candidates: Query<
         (Entity, &Transform, &Pedestrian, &Archetype),
         (
@@ -522,6 +548,9 @@ fn join_the_fun(
     if queues.standing() as f32 > config.crowd.population as f32 * CROWD_SHARE {
         return;
     }
+    // Counted up first and added at the end: the loop below borrows the
+    // lines out of the very resource the tally lives on.
+    let mut lured = 0u32;
     for (place, line) in &queues.lines {
         if line.members.len() < LURE_AT || line.members.len() >= MAX {
             continue;
@@ -539,6 +568,7 @@ fn join_the_fun(
             if rng.random::<f32>() > LURE_CHANCE * archetype.nosiness() * dt {
                 continue;
             }
+            lured += 1;
             commands.entity(entity).insert(Errand {
                 at: at.with_y(transform.translation.y),
                 place: *place,
@@ -548,6 +578,7 @@ fn join_the_fun(
             });
         }
     }
+    queues.tally.lured += lured;
 }
 
 /// The head is served, goes in, and the line shuffles up.
@@ -564,6 +595,7 @@ fn serve_the_head(
     mut standing: Query<(&Transform, &mut Mood), With<Queueing>>,
 ) {
     let dt = time.delta_secs();
+    let mut served = 0u32;
     for line in queues.lines.values_mut() {
         line.stalled += dt;
         // Nothing moves while somebody is standing in front of the head.
@@ -590,6 +622,7 @@ fn serve_the_head(
         }
 
         commands.entity(head).try_despawn();
+        served += 1;
         line.members.remove(0);
         line.serving = rng.random_range(SERVICE.0..SERVICE.1);
         line.stalled = 0.0;
@@ -601,6 +634,7 @@ fn serve_the_head(
             }
         }
     }
+    queues.tally.served += served;
 }
 
 /// The waiting, what it costs, and giving up.
@@ -613,11 +647,12 @@ fn lose_patience(
     mut commands: Commands,
     time: Res<Time>,
     mut rng: ResMut<AudioRng>,
-    queues: Res<Queues>,
+    mut queues: ResMut<Queues>,
     mut standing: Query<(&mut Mood, &Temperament, &Archetype, &Queueing)>,
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
+    let mut balked = 0u32;
     for line in queues.lines.values() {
         for (slot, member) in line.members.iter().enumerate() {
             let Ok((mut mood, temper, archetype, queueing)) = standing.get_mut(*member) else {
@@ -647,6 +682,7 @@ fn lose_patience(
             // A short fuse and a thin reason for being here both run out
             // early; either one alone is not enough to walk away over.
             if now - queueing.since > patience(temper, *archetype) {
+                balked += 1;
                 mood.value = (mood.value - BALK_STING).clamp(-1.0, 1.0);
                 // Only the component comes off here. Leaving the line itself
                 // to `reconcile_lines` means there is exactly one way out of
@@ -660,6 +696,7 @@ fn lose_patience(
             }
         }
     }
+    queues.tally.balked += balked;
 }
 
 /// Standing in it: the slot, the shuffle and the facing.
@@ -798,8 +835,10 @@ pub fn arrive(
     barge: bool,
 ) -> bool {
     if !queues.join(entity, errand.place, errand.at, errand.outward, barge) {
+        queues.tally.refused += 1;
         return false;
     }
+    queues.tally.joined += 1;
     commands.entity(entity).insert(Queueing {
         place: errand.place,
         since: now,

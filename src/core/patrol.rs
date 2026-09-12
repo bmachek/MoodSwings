@@ -425,7 +425,7 @@ fn keep_watch(
         info!(
             "patrol agents: {} observed, {blocked} blocked, {} blocked episodes, \
              {} waiting at a mouth over {} runs, {} given way so far, \
-             {} standing in {} queues",
+             {} standing in {} queues ({:?})",
             agents.agents.len(),
             agents.blocked_episodes,
             giveway.waiting,
@@ -433,6 +433,7 @@ fn keep_watch(
             giveway.stood_aside,
             queues.standing(),
             queues.lines(),
+            queues.tally(),
         );
     }
     let at = patrol.elapsed;
