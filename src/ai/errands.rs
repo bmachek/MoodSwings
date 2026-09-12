@@ -233,7 +233,12 @@ fn run_errands(
 }
 
 /// The pace of a detour: a shade under a stroll, because it is a few steps.
-const WALK_OVER: f32 = 1.15;
+///
+/// Public because `ai::queue` has to divide by it: how far a queue can
+/// recruit from divided by how fast a recruit walks is how long a line must
+/// last for recruiting to work at all, and that is an assertion rather than
+/// a hope.
+pub const WALK_OVER: f32 = 1.15;
 
 /// Standing at the glass.
 fn hold_browse(

@@ -573,7 +573,8 @@ recruits**. One person outside a door is the most persuasive advertisement any
 city has ever printed, and passers-by attach themselves to the back of it at a
 rate set by how nosy their archetype is, with no idea what is being sold.
 
-That threshold started at *two*, on the sound-sounding ground that one person
+Getting that to happen at all took three patrols and an instrument. The
+threshold started at *two*, on the sound-sounding ground that one person
 outside a shop is not a queue yet, and a patrol killed it. A hundred and fifty
 seconds of city never once got two people to the same door at the same moment —
 every reading was one person standing in one line — so the threshold was never
@@ -581,7 +582,25 @@ crossed and the recruiting never ran at all. Reaching two *is* the coincidence
 the lure exists to manufacture, so gating the lure on it gates it on itself. The
 failure is invisible from inside the game, which is the whole argument for the
 patrol: a city where every door has exactly one customer looks like a city that
-is working. The
+is working.
+
+Fixing the threshold changed nothing, because it was not the binding
+constraint, and one number could not say what was. So the queues learned to
+count what they do — errands handed out, places taken, turns served, people who
+gave up — and the patrol prints it. The tally said the city produces about a
+sixth of a door-arrival per second across every shopfront in the streamed ring;
+by Little's law, at seven seconds a turn, that is one person standing at one
+door, which is precisely what every reading had shown. The constants were
+working exactly as written.
+
+The fatal number was a ratio nobody had looked at. A recruit eleven to
+seventeen metres away walks in at just over a metre a second, so arriving takes
+fifteen seconds — and the head was served and gone in four to eleven. *Every*
+recruit arrived at an empty door, became a lone head, and was served alone.
+Recruiting could never compound, no matter how hard it was tuned. A turn at the
+counter now outlasts the walk in, the reach is shorter, and the relationship is
+a compile-time assertion rather than two numbers that happen to be compatible
+this week. The
 headphone-wearer never notices there is a queue at all, which is what headphones
 are for and the same joke as their immunity to taunts. The Wutbürger is the
 most likely person in the city to join one and the least likely to stay: he does

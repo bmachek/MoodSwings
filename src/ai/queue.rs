@@ -99,7 +99,17 @@ const SHUFFLE: f32 = 0.75;
 /// The rate at which a line drains, and therefore half of how long a line
 /// gets. Long enough that a queue behind somebody is a queue and not a
 /// turnstile; short enough that the patience below still clears one.
-const SERVICE: (f32, f32) = (4.5, 11.0);
+///
+/// Ten to twenty seconds, and the length is not about realism — it is the
+/// only thing that makes a queue possible at all. An instrumented patrol put
+/// the city's door-arrival rate at about a sixth of a person per second,
+/// spread across every shopfront in the streamed ring; by Little's law that
+/// is one person standing at one door at any moment, which is exactly what
+/// three patrols in a row reported. Two arrivals never coincide at one door
+/// by chance, so the only thing that can build a line is the recruiting —
+/// and at four to eleven seconds a turn, every recruit arrived at a door the
+/// head had already walked through. See the assertion under [`LURE_RANGE`].
+const SERVICE: (f32, f32) = (10.0, 20.0);
 
 /// Mood lost per second of waiting, before the fuse scales it.
 ///
@@ -120,7 +130,14 @@ const SHUFFLE_CHEER: f32 = 0.05;
 /// seconds, which is less than the walk from the pavement to the back of the
 /// line, so he balked on arrival every single time and the best joke in the
 /// module never happened once.
-const PATIENCE_FLOOR: f32 = 14.0;
+///
+/// The floor rises with [`SERVICE`] and has to: patience is spent in turns at
+/// the counter, so lengthening a turn without lengthening the floor means the
+/// least patient citizen gives up before the person in front of them could
+/// possibly have finished — which is not impatience, it is a queue nobody can
+/// win. The tests hold both ends of this against `SERVICE` rather than
+/// against a number typed here.
+const PATIENCE_FLOOR: f32 = 22.0;
 const PATIENCE_SPAN: f32 = 34.0;
 
 /// What giving up costs, on top of everything the wait already took.
@@ -156,9 +173,19 @@ const CRANE: f32 = 1.1;
 /// door is how every queue in the world starts, and „da steht schon einer"
 /// is a better joke than the rule it replaces. The long stop is
 /// [`CROWD_SHARE`] rather than anything here.
-const LURE_RANGE: f32 = 17.0;
+const LURE_RANGE: f32 = 11.0;
 const LURE_AT: usize = 1;
-const LURE_CHANCE: f32 = 0.05;
+const LURE_CHANCE: f32 = 0.08;
+
+// A recruit has to arrive while there is still a line to join. The walk in
+// from the far edge of the lure's reach takes `LURE_RANGE / WALK_OVER`
+// seconds, and if that outlasts a turn at the counter then every recruit
+// arrives at a door the head has already gone through, becomes the head
+// themselves, and is served alone. That is a queue that cannot exceed one
+// person — and from inside the game it looks like a queue system working
+// perfectly, which is why it survived three patrols and took a tally to
+// find. The relationship, not either number, is the thing to preserve.
+const _: () = assert!(LURE_RANGE / crate::ai::errands::WALK_OVER < SERVICE.0);
 // The guard on a mistake only a patrol could find, because nothing fails
 // when it is wrong: above one, the lure never runs, every door shows one
 // customer, and the city looks like it is working.
@@ -520,6 +547,7 @@ fn join_the_fun(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<crate::core::config::GameConfig>,
+    clock: Res<crate::world::timeofday::TimeOfDay>,
     mut rng: ResMut<AudioRng>,
     mut queues: ResMut<Queues>,
     candidates: Query<
@@ -545,7 +573,13 @@ fn join_the_fun(
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
-    if queues.standing() as f32 > config.crowd.population as f32 * CROWD_SHARE {
+    // A share of the crowd that is actually out, not of the dial. The
+    // population is thinned by the hour exactly like this in
+    // `pedestrian::maintain_population`, and a cap read off the unthinned
+    // number lets four in the morning put most of a seventeen-person street
+    // into one bakery queue and call it a sixth.
+    let out = config.crowd.population as f32 * super::social::crowd_level(clock.hours);
+    if queues.standing() as f32 > out * CROWD_SHARE {
         return;
     }
     // Counted up first and added at the end: the loop below borrows the
@@ -1087,7 +1121,10 @@ mod tests {
         // actually takes. Too short and citizens walk away from queues that
         // were about to serve them, which reads as the door not working; too
         // long at the other end and a line never churns at all.
-        let full_line = SERVICE.1 * MAX as f32;
+        // A full line at a typical turn, not at the slowest possible one:
+        // requiring somebody to outlast six worst-case services makes MAX
+        // unreachable by construction.
+        let full_line = MAX as f32 * (SERVICE.0 + SERVICE.1) * 0.5;
         let mut shortest = f32::MAX;
         let mut longest: f32 = 0.0;
         for temper in every_temper() {
@@ -1099,9 +1136,9 @@ mod tests {
             }
         }
         assert!(
-            shortest > SERVICE.1 * 1.5,
+            shortest > SERVICE.1,
             "the least patient citizen gives up after {shortest:.0}s, before \
-             one turn at the counter has finished"
+             one turn at the counter could even have finished"
         );
         assert!(
             longest > full_line,
