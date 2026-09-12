@@ -1,4 +1,5 @@
 use crate::*;
+use rand::SeedableRng;
 use std::{
     net::{SocketAddr, TcpListener},
     time::Instant,
@@ -17,12 +18,14 @@ pub struct Server {
     started: Instant,
     peers: Vec<Peer>,
     next_id: u64,
+    actors: Vec<Actor>,
 }
 impl Server {
     pub fn bind(address: &str, world: World) -> io::Result<Self> {
         if !world.valid() {
             return Err(invalid("invalid world configuration"));
         }
+        let seed = world.seed;
         let listener = TcpListener::bind(address)?;
         listener.set_nonblocking(true)?;
         Ok(Self {
@@ -31,6 +34,7 @@ impl Server {
             started: Instant::now(),
             peers: Vec::new(),
             next_id: 1,
+            actors: seed_actors(seed),
         })
     }
     pub fn address(&self) -> io::Result<SocketAddr> {
@@ -55,6 +59,17 @@ impl Server {
             }
         }
         let hour = self.world.hour_after(self.started.elapsed().as_secs_f32());
+        let dt = TICK.as_secs_f32();
+        for actor in &mut self.actors {
+            actor.position[0] += actor.velocity[0] * dt;
+            actor.position[2] += actor.velocity[2] * dt;
+            if actor.position[0].abs() > 900.0 {
+                actor.velocity[0] = -actor.velocity[0];
+            }
+            if actor.position[2].abs() > 900.0 {
+                actor.velocity[2] = -actor.velocity[2];
+            }
+        }
         let mut admitted = self.peers.iter().filter(|p| p.name.is_some()).count();
         self.peers.retain_mut(|peer| {
             let result = (|| -> io::Result<()> {
@@ -87,7 +102,22 @@ impl Server {
                             if pose.as_ref().is_some_and(|p| !p.valid()) {
                                 return Err(invalid("invalid pose"));
                             }
-                            peer.pose = pose;
+                            if let Some(mut pose) = pose {
+                                // The wire position is a report for
+                                // interpolation. Movement is the command: the
+                                // authority advances it and bounds the result.
+                                if pose.input != [0.0, 0.0] {
+                                    pose.position[0] += pose.input[0] * 0.18;
+                                    pose.position[2] += pose.input[1] * 0.18;
+                                    pose.position[0] = pose.position[0].clamp(-1000.0, 1000.0);
+                                    pose.position[2] = pose.position[2].clamp(-1000.0, 1000.0);
+                                } else if let Some(previous) = &peer.pose {
+                                    pose.position = previous.position;
+                                }
+                                peer.pose = Some(pose);
+                            } else {
+                                peer.pose = None;
+                            }
                         }
                         _ => return Err(invalid("invalid handshake")),
                     }
@@ -108,11 +138,59 @@ impl Server {
                 })
             })
             .collect();
-        let snapshot = ServerMessage::Snapshot { hour, players };
+        let snapshot = ServerMessage::Snapshot {
+            hour,
+            players,
+            actors: self.actors.clone(),
+        };
         self.peers
             .retain_mut(|p| p.name.is_none() || p.connection.send(&snapshot).is_ok());
         Ok(())
     }
+}
+
+fn seed_actors(seed: u64) -> Vec<Actor> {
+    // A deterministic, server-owned ambient population. Clients never invent
+    // NPCs or traffic, so reconnects and different GPU frame rates cannot
+    // change who is on the street.
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed ^ 0x4d50_4143_544f_5253);
+    use rand::RngExt;
+    let mut actors = Vec::with_capacity(48);
+    for id in 0..32u64 {
+        actors.push(Actor {
+            id,
+            kind: ActorKind::Pedestrian,
+            position: [
+                rng.random_range(-850.0..850.0),
+                0.9,
+                rng.random_range(-850.0..850.0),
+            ],
+            velocity: [
+                rng.random_range(-1.2..1.2),
+                0.0,
+                rng.random_range(-1.2..1.2),
+            ],
+            mood: rng.random_range(-0.15..0.15),
+        });
+    }
+    for id in 0..16u64 {
+        actors.push(Actor {
+            id: 10_000 + id,
+            kind: ActorKind::Vehicle,
+            position: [
+                rng.random_range(-850.0..850.0),
+                0.5,
+                rng.random_range(-850.0..850.0),
+            ],
+            velocity: [
+                rng.random_range(-8.0..8.0),
+                0.0,
+                rng.random_range(-8.0..8.0),
+            ],
+            mood: 0.0,
+        });
+    }
+    actors
 }
 
 #[cfg(test)]
@@ -151,6 +229,8 @@ mod tests {
             rotation: [0.0, 0.0, 0.0, 1.0],
             character: "Punk".into(),
             mood: -0.5,
+            input: [0.0, 0.0],
+            buttons: 0,
         }
     }
     #[test]

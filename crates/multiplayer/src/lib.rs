@@ -13,6 +13,7 @@ pub const TICK: Duration = Duration::from_millis(50);
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_PLAYERS: usize = 16;
 const MAX_FRAME: usize = 32 * 1024;
+const MAX_QUEUE: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct World {
@@ -63,6 +64,10 @@ pub struct Pose {
     pub rotation: [f32; 4],
     pub character: String,
     pub mood: f32,
+    /// Client input sampled by the authority. The position above is retained
+    /// for interpolation, but is never trusted as the simulation command.
+    pub input: [f32; 2],
+    pub buttons: u16,
 }
 impl Pose {
     pub fn valid(&self) -> bool {
@@ -75,6 +80,7 @@ impl Pose {
             && self.character.chars().all(|c| c.is_ascii_alphanumeric())
             && self.mood.is_finite()
             && (-1.0..=1.0).contains(&self.mood)
+            && self.input.iter().all(|x| x.is_finite() && x.abs() <= 1.01)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,6 +88,20 @@ pub struct Player {
     pub id: u64,
     pub name: String,
     pub pose: Pose,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ActorKind {
+    Pedestrian,
+    Vehicle,
+    Prop,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Actor {
+    pub id: u64,
+    pub kind: ActorKind,
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    pub mood: f32,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -92,8 +112,16 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     Pong,
-    Welcome { version: u32, id: u64, world: World },
-    Snapshot { hour: f32, players: Vec<Player> },
+    Welcome {
+        version: u32,
+        id: u64,
+        world: World,
+    },
+    Snapshot {
+        hour: f32,
+        players: Vec<Player>,
+        actors: Vec<Actor>,
+    },
 }
 pub fn valid_name(name: &str) -> bool {
     !name.trim().is_empty() && name.chars().count() <= 24 && !name.chars().any(char::is_control)
@@ -121,7 +149,7 @@ impl Connection {
     }
     pub fn send(&mut self, value: &impl Serialize) -> io::Result<()> {
         let bytes = ron::to_string(value).map_err(|e| invalid(&e.to_string()))?;
-        if bytes.len() + self.output.len() + 1 > MAX_FRAME * 2 {
+        if bytes.len() + self.output.len() + 1 > MAX_QUEUE {
             return Err(invalid("outgoing queue exceeded"));
         }
         self.output.extend_from_slice(bytes.as_bytes());
@@ -177,6 +205,8 @@ mod tests {
             rotation: [0.0, 0.0, 0.0, 1.0],
             character: "Everyday".into(),
             mood: 0.5,
+            input: [0.0, 0.0],
+            buttons: 0,
         };
         assert!(pose.valid());
         pose.position[0] = f32::NAN;

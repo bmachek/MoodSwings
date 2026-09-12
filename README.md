@@ -72,17 +72,20 @@ server-owned seed, city and time of day; replicated player positions, rotations,
 character choices and faces; smooth remote movement; joining and leaving.
 Remote coats are blue to distinguish players from the local crowd.
 
-NPCs, weather, provocations, traffic and world damage still run locally. Remote
-players have no physical collider or shared interactions. Vehicle entry and
-save/load are disabled in this mode. Escape pauses your local simulation while
-the connection and server clock keep running. Options changed during a session
-are not persisted, so the server's city never overwrites your solo settings.
+The server now owns the replicated ambient actor set (pedestrians and traffic)
+and advances player movement from bounded input samples. Clients interpolate
+the authoritative records and reconcile their local body to the server pose.
+Weather and the presentation of those actors remain local rendering concerns;
+remote players have no client-side collider. Vehicle entry and save/load are
+disabled in this mode. Escape pauses local presentation while the connection
+and server clock keep running. Options changed during a session are not
+persisted, so the server's city never overwrites your solo settings.
 Without `--connect`, the game runs in its normal single-player mode.
 
 A broken connection removes remote figures and displays a German status message;
 restart the client to reconnect. A server restart starts a new session at its
 configured hour. There is no session persistence, authentication, encryption or
-anti-cheat: use this client-authoritative exploration mode on a trusted LAN or
+anti-cheat: use this early authoritative exploration mode on a trusted LAN or
 private VPN, not as a public competitive server.
 
 Configure Compose through environment variables or an untracked `.env` file:

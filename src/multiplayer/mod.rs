@@ -28,6 +28,7 @@ struct Shared {
     players: Vec<mood_multiplayer::Player>,
     hour: f32,
     error: Option<String>,
+    actors: Vec<mood_multiplayer::Actor>,
 }
 #[derive(Resource)]
 pub struct Client {
@@ -114,13 +115,29 @@ impl Client {
                             let local = shared.lock().unwrap().local.clone();
                             connection.send(&ClientMessage::Update(local))?;
                             for message in connection.receive::<ServerMessage>()? {
-                                if let ServerMessage::Snapshot { hour, players } = message {
+                                if let ServerMessage::Snapshot {
+                                    hour,
+                                    players,
+                                    actors,
+                                } = message
+                                {
                                     if !hour.is_finite()
                                         || !(0.0..24.0).contains(&hour)
                                         || players.len() > mood_multiplayer::MAX_PLAYERS
+                                        || actors.len() > 4096
                                         || players.iter().any(|p| {
                                             !p.pose.valid()
                                                 || !mood_multiplayer::valid_name(&p.name)
+                                        })
+                                        || actors.iter().any(|a| {
+                                            !a.position
+                                                .iter()
+                                                .all(|x| x.is_finite() && x.abs() < 100_000.0)
+                                                || !a
+                                                    .velocity
+                                                    .iter()
+                                                    .all(|x| x.is_finite() && x.abs() < 100.0)
+                                                || !a.mood.is_finite()
                                         })
                                     {
                                         return Err(mood_multiplayer::invalid(
@@ -130,6 +147,7 @@ impl Client {
                                     let mut data = shared.lock().unwrap();
                                     data.hour = hour;
                                     data.players = players;
+                                    data.actors = actors;
                                     heard = Instant::now();
                                 }
                             }
@@ -197,6 +215,8 @@ struct Remote {
     character: String,
 }
 #[derive(Component)]
+struct RemoteActor(u64);
+#[derive(Component)]
 struct Status;
 fn status_label(mut commands: Commands) {
     commands.spawn((
@@ -219,17 +239,21 @@ fn receive(
     time: Res<Time>,
     mut commands: Commands,
     mut clock: ResMut<crate::world::timeofday::TimeOfDay>,
+    mut locals: Query<&mut Transform, With<Player>>,
     mut remotes: Query<(
         Entity,
         &Remote,
         &mut Transform,
         &mut crate::ai::figure::WalkCycle,
     )>,
+    mut remotes_actor: Query<(Entity, &RemoteActor, &mut Transform)>,
     mut status: Query<&mut Text, With<Status>>,
     figures: Res<crate::ai::figure::FigureAssets>,
-    faces: Res<crate::mood::face::FaceAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut coat: Local<Option<Handle<StandardMaterial>>>,
+    mut actor_mesh: Local<Option<Handle<Mesh>>>,
+    mut actor_materials: Local<Option<(Handle<StandardMaterial>, Handle<StandardMaterial>)>>,
 ) {
     let data = client.shared.lock().unwrap();
     clock.hours = data.hour;
@@ -238,9 +262,9 @@ fn receive(
             "Verbindung getrennt - Zum Verbinden neu starten".to_string()
         } else {
             format!(
-                "Multiplayer: {} / {} Spieler | Du bist #{}",
+                "Multiplayer: {} Spieler, {} NPC/Fahrzeuge | Du bist #{}",
                 data.players.len(),
-                mood_multiplayer::MAX_PLAYERS,
+                data.actors.len(),
                 client.id
             )
         };
@@ -266,6 +290,18 @@ fn receive(
         transform.rotation = transform
             .rotation
             .slerp(Quat::from_array(player.pose.rotation).normalize(), blend);
+    }
+    // Reconcile the local body against the authoritative pose. A small blend
+    // hides packet jitter; a large correction prevents a client from drifting
+    // indefinitely when its local frame rate differs from the server tick.
+    if let Some(player) = data.players.iter().find(|p| p.id == client.id)
+        && let Ok(mut local) = locals.single_mut()
+    {
+        let target = Vec3::from_array(player.pose.position);
+        let error = local.translation.distance(target);
+        local.translation = local
+            .translation
+            .lerp(target, (error * 0.15).clamp(0.05, 1.0));
     }
     for player in data.players.iter().filter(|p| p.id != client.id) {
         if remotes
@@ -305,18 +341,67 @@ fn receive(
             &mut entity,
             &figures,
             coat,
-            &faces.wear(player.pose.mood),
+            crate::mood::face::level_of(player.pose.mood),
             character,
             &mut rng,
         );
+    }
+    let mesh = actor_mesh
+        .get_or_insert_with(|| meshes.add(Sphere::new(0.38)))
+        .clone();
+    let mats = actor_materials
+        .get_or_insert_with(|| {
+            (
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.95, 0.65, 0.12),
+                    ..default()
+                }),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.18, 0.20, 0.24),
+                    ..default()
+                }),
+            )
+        })
+        .clone();
+    let actors = data.actors.clone();
+    drop(data);
+    for (entity, remote, mut transform) in &mut remotes_actor {
+        let Some(actor) = actors.iter().find(|a| a.id == remote.0) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        transform.translation = Vec3::from_array(actor.position);
+        transform.rotation = Quat::from_rotation_y(actor.velocity[0].atan2(actor.velocity[2]));
+    }
+    for actor in &actors {
+        if remotes_actor.iter().any(|(_, r, _)| r.0 == actor.id) {
+            continue;
+        }
+        commands.spawn((
+            RemoteActor(actor.id),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(match actor.kind {
+                mood_multiplayer::ActorKind::Vehicle => mats.1.clone(),
+                _ => mats.0.clone(),
+            }),
+            Transform::from_translation(Vec3::from_array(actor.position)),
+            Visibility::default(),
+        ));
     }
 }
 fn publish(
     client: Res<Client>,
     config: Res<GameConfig>,
-    players: Query<(&Transform, &crate::mood::feeling::Mood), With<Player>>,
+    players: Query<
+        (
+            &Transform,
+            &crate::mood::feeling::Mood,
+            &leafwing_input_manager::prelude::ActionState<crate::player::input::Action>,
+        ),
+        With<Player>,
+    >,
 ) {
-    let Ok((transform, mood)) = players.single() else {
+    let Ok((transform, mood, actions)) = players.single() else {
         return;
     };
     client.shared.lock().unwrap().local = Some(Pose {
@@ -324,13 +409,27 @@ fn publish(
         rotation: transform.rotation.to_array(),
         character: format!("{:?}", config.character),
         mood: mood.value.clamp(-1.0, 1.0),
+        input: actions
+            .clamped_axis_pair(&crate::player::input::Action::Move)
+            .to_array(),
+        buttons: [
+            crate::player::input::Action::Jump,
+            crate::player::input::Action::Sprint,
+            crate::player::input::Action::Handbrake,
+            crate::player::input::Action::Interact,
+        ]
+        .into_iter()
+        .enumerate()
+        .fold(0u16, |bits, (i, action)| {
+            bits | (u16::from(actions.pressed(&action)) << i)
+        }),
     });
 }
 
 fn paint_remote_faces(
     client: Res<Client>,
-    faces: Res<crate::mood::face::FaceAssets>,
-    remotes: Query<(Entity, &Remote)>,
+    figures: Res<crate::ai::figure::FigureAssets>,
+    remotes: Query<(Entity, &Remote, Option<&crate::ai::appearance::Appearance>)>,
     joints: Query<&Children>,
     mut parts: Query<(
         &mut MeshMaterial3d<StandardMaterial>,
@@ -341,7 +440,7 @@ fn paint_remote_faces(
     // Do not add Mood to replicas: local contagion and provocation would then
     // mutate a remote player's face independently of its owner's simulation.
     let data = client.shared.lock().unwrap();
-    for (entity, remote) in &remotes {
+    for (entity, remote, appearance) in &remotes {
         let Some(player) = data.players.iter().find(|p| p.id == remote.id) else {
             continue;
         };
@@ -349,9 +448,13 @@ fn paint_remote_faces(
         for child in joints.iter_descendants(entity) {
             if let Ok((mut material, head, bare)) = parts.get_mut(child) {
                 if head.is_some() {
-                    material.0 = faces.material(level);
-                } else if bare.is_some() {
-                    material.0 = faces.bare(level);
+                    if let Some(appearance) = appearance {
+                        material.0 = figures.humans.face(appearance.skin, appearance.face, level);
+                    }
+                } else if bare.is_some()
+                    && let Some(appearance) = appearance
+                {
+                    material.0 = figures.humans.skin(appearance.skin);
                 }
             }
         }
