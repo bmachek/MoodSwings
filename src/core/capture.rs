@@ -301,7 +301,7 @@ impl Plugin for CapturePlugin {
     }
 }
 
-fn apply_capture_overrides(
+pub(crate) fn apply_capture_overrides(
     request: Res<CaptureRequest>,
     mut config: ResMut<crate::core::config::GameConfig>,
     mut map_open: ResMut<crate::ui::minimap::MapOpen>,

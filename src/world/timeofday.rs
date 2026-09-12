@@ -355,6 +355,9 @@ fn attach_fog(
 }
 
 fn advance_clock(time: Res<Time>, config: Res<GameConfig>, mut clock: ResMut<TimeOfDay>) {
+    if crate::multiplayer::active() {
+        return;
+    }
     if clock.paused || config.world.day_length_seconds <= 0.0 {
         return;
     }

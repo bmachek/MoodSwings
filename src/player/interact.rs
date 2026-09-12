@@ -110,6 +110,11 @@ fn enter_or_exit_vehicle(
     parked: Query<(Entity, &Transform), (With<Vehicle>, Without<DrivenBy>)>,
     vehicles: Query<&Transform, With<Vehicle>>,
 ) {
+    // Exploration replicas have no shared vehicle ownership yet. Keep peers
+    // on foot instead of showing a driver hovering over an unrelated local car.
+    if crate::multiplayer::active() {
+        return;
+    }
     let Ok((player, action_state, player_transform, driving)) = players.single() else {
         return;
     };

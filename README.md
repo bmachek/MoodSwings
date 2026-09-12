@@ -49,6 +49,71 @@ The material download is optional. Without it every surface falls back to the
 procedural texture it shipped with, and the game runs exactly the same — it
 just looks worse. Nothing is checked in and nothing is required to build.
 
+## Multiplayer (shared exploration)
+
+Start the dedicated server with Docker Compose v2:
+
+```sh
+docker compose up -d --build
+docker compose logs -f server
+```
+
+Join from each player's computer (use the server's IP or hostname for LAN play):
+
+```sh
+cargo run --release -- --connect 127.0.0.1:7777 --name Anna
+cargo run --release -- --connect 192.168.1.20:7777 --name Ben
+```
+
+The server needs no GPU, display, sound bank or city assets. Clients need the
+usual game setup and **the same game revision**. Port **7777/TCP** must be
+reachable. This first mode supports up to 16 players exploring **on foot**:
+server-owned seed, city and time of day; replicated player positions, rotations,
+character choices and faces; smooth remote movement; joining and leaving.
+Remote coats are blue to distinguish players from the local crowd.
+
+NPCs, weather, provocations, traffic and world damage still run locally. Remote
+players have no physical collider or shared interactions. Vehicle entry and
+save/load are disabled in this mode. Escape pauses your local simulation while
+the connection and server clock keep running. Options changed during a session
+are not persisted, so the server's city never overwrites your solo settings.
+Without `--connect`, the game runs in its normal single-player mode.
+
+A broken connection removes remote figures and displays a German status message;
+restart the client to reconnect. A server restart starts a new session at its
+configured hour. There is no session persistence, authentication, encryption or
+anti-cheat: use this client-authoritative exploration mode on a trusted LAN or
+private VPN, not as a public competitive server.
+
+Configure Compose through environment variables or an untracked `.env` file:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MOOD_PORT` | `7777` | Published TCP port |
+| `MOOD_SEED` | `42` | Shared world seed (unsigned 64-bit integer) |
+| `MOOD_CITY` | `Landshuepf` | `Generisch`, `Landshuepf`, `NewDork`, `Londoof`, `Minga`, `Paree` |
+| `MOOD_HOUR` | `12` | Starting hour, 0 inclusive to 24 exclusive |
+| `MOOD_DAY_SECONDS` | `600` | Seconds per game day; `0` freezes the clock |
+
+```sh
+MOOD_CITY=Minga MOOD_SEED=123 docker compose up -d
+# Stop the session:
+docker compose down
+# Native server, useful for development and hosts without Docker:
+cargo run -p mood-multiplayer --bin mood-server -- --bind 0.0.0.0:7777 --city Minga
+# Protocol tests use real loopback sockets:
+cargo test -p mood-multiplayer
+# Render a graphical client beside a second protocol peer:
+cargo build --workspace
+python3 tools/check-multiplayer.py
+```
+
+The wire protocol is versioned and bounded. The server assigns IDs per connection,
+checks incoming data, rejects incompatible clients and expires idle connections
+after ten seconds. Its own Cargo lockfile keeps the standalone Docker build
+independent of the graphics dependency tree. CI builds and starts the Compose
+service and checks its protocol health endpoint.
+
 ## Controls
 
 | | |

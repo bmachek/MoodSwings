@@ -6,6 +6,12 @@ rust-version = "1.95"
 description = "An original open-world comedy sandbox"
 license = "GPL-3.0-or-later"
 publish = false
+default-run = "mood_swings"
+
+[workspace]
+members = ["crates/multiplayer"]
+default-members = ["."]
+resolver = "3"
 
 [features]
 default = []
@@ -19,6 +25,7 @@ raytracing = ["bevy/bevy_solari"]
 dlss = ["bevy/dlss"]
 
 [dependencies]
+mood-multiplayer = { path = "crates/multiplayer" }
 bevy = { version = "0.19", features = [
     "bevy_dev_tools",
     # `jpeg`: the scanned PBR sets under assets/materials are JPEG.

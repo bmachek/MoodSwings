@@ -146,6 +146,10 @@ fn load(config: &mut GameConfig, keybindings: &mut KeyBindings) {
 
 /// Writes `config` and `keybindings` to `saves/options.ron`.
 pub fn save(config: &GameConfig, keybindings: &KeyBindings) {
+    // A server's world must not become the next single-player world's seed.
+    if crate::multiplayer::active() {
+        return;
+    }
     let options = Options {
         config: config.clone(),
         keybindings: keybindings.clone(),

@@ -13,6 +13,8 @@ use rand_chacha::ChaCha8Rng;
 
 /// Fixed keys for each independent generation stream. Never reuse a value.
 pub mod stream {
+    /// Remote-player wardrobe; adding a peer must never reshuffle the crowd.
+    pub const MULTIPLAYER: u64 = 36;
     pub const ROADS: u64 = 1;
     pub const BLOCKS: u64 = 2;
     pub const BUILDINGS: u64 = 3;

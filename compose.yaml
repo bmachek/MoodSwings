@@ -1,0 +1,26 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "${MOOD_PORT:-7777}:7777/tcp"
+    command: ["--bind", "0.0.0.0:7777", "--seed", "${MOOD_SEED:-42}", "--city", "${MOOD_CITY:-Landshuepf}", "--hour", "${MOOD_HOUR:-12}", "--day-seconds", "${MOOD_DAY_SECONDS:-600}"]
+    healthcheck:
+      test: ["CMD", "mood-server", "--check", "127.0.0.1:7777"]
+      interval: 30s
+      timeout: 5s
+      start_period: 2s
+      retries: 3
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: 1
+    pids_limit: 32
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"

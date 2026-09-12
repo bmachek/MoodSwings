@@ -1,0 +1,13 @@
+FROM rust:1.95-bookworm AS build
+WORKDIR /build
+# Isolated context: the dedicated server has no Bevy, GPU or audio dependency.
+COPY crates/multiplayer/Cargo.toml ./Cargo.toml
+COPY crates/multiplayer/src ./src
+COPY crates/multiplayer/Cargo.lock ./Cargo.lock
+RUN cargo build --release --locked --bin mood-server
+
+FROM debian:bookworm-slim
+COPY --from=build /build/target/release/mood-server /usr/local/bin/mood-server
+USER 65532:65532
+EXPOSE 7777/tcp
+ENTRYPOINT ["mood-server"]
