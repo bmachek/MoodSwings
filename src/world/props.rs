@@ -29,7 +29,7 @@ use rand_chacha::ChaCha8Rng;
 
 use super::buildings::{ChunkOf, SIDEWALK_HEIGHT};
 use super::mayhem::Breakaway;
-use super::roadgraph::RoadEdge;
+use super::roadgraph::{NodeId, RoadEdge};
 
 /// What a car has to be doing, in metres per second, to take a hydrant off its
 /// footing.
@@ -259,7 +259,11 @@ pub struct PropAssets {
     /// The signal head, its pole, and the lens plate that faces the traffic.
     signal_post: (Handle<Mesh>, Handle<StandardMaterial>, f32),
     signal_head: (Handle<Mesh>, Handle<StandardMaterial>, f32),
-    signal_lens: [(Handle<Mesh>, Handle<StandardMaterial>); 3],
+    pub signal_lens: [(Handle<Mesh>, Handle<StandardMaterial>); 3],
+    /// The same three lenses with the lamp behind them on. Six materials for
+    /// the whole town rather than three per head, so every signal in a street
+    /// still batches — see `world::signals::show_aspect`.
+    pub signal_lens_lit: [Handle<StandardMaterial>; 3],
 }
 
 impl PropAssets {
@@ -385,9 +389,12 @@ pub fn build_assets(
             materials.add(painted_metal(Color::srgb(0.13, 0.14, 0.15), 0.55)),
             0.86,
         ),
-        // Unlit. Nothing in this game drives the signals yet, and a signal
-        // showing green down every approach of a crossroads at once would be a
-        // clearer lie than one showing nothing.
+        // Dark. `world::signals` swaps in the lit handle below for whichever
+        // lens its phase says, so these are the other two. They used to be all
+        // three, on the grounds that nothing drove the signals and a crossroads
+        // showing green down every arm would be a clearer lie than one showing
+        // nothing — which was true until `ai::junction` gave the crossing a
+        // rule for the lights to state.
         signal_lens: [
             Color::srgb(0.34, 0.06, 0.05),
             Color::srgb(0.36, 0.26, 0.05),
@@ -402,6 +409,24 @@ pub fn build_assets(
                     ..default()
                 }),
             )
+        }),
+        // And lit. Emissive rather than a brighter base colour, because a
+        // signal is a lamp: it has to read against a sunlit wall at noon and
+        // be the brightest thing on the street at midnight, and only emission
+        // does both. The amber is pushed hardest — it is on for three seconds
+        // of every forty-two and is the one a driver is meant to catch.
+        signal_lens_lit: [
+            (Color::srgb(0.86, 0.10, 0.07), 9.0),
+            (Color::srgb(0.92, 0.62, 0.06), 12.0),
+            (Color::srgb(0.16, 0.85, 0.31), 9.0),
+        ]
+        .map(|(color, glow)| {
+            materials.add(StandardMaterial {
+                base_color: color,
+                emissive: LinearRgba::from(color) * glow,
+                perceptual_roughness: 0.28,
+                ..default()
+            })
         }),
     }
 }
@@ -451,8 +476,9 @@ fn signal_pose(at: Vec2, towards: Vec2, widest: f32) -> Option<(Vec2, f32)> {
 pub fn spawn_junction(
     commands: &mut Commands,
     assets: &PropAssets,
+    node: NodeId,
     at: Vec2,
-    approaches: &[(Vec2, f32)],
+    approaches: &[(NodeId, Vec2, f32)],
     arterial: bool,
     chunk: IVec2,
 ) {
@@ -461,10 +487,10 @@ pub fn spawn_junction(
     }
     let widest = approaches
         .iter()
-        .map(|(_, width)| *width)
+        .map(|(_, _, width)| *width)
         .fold(0.0f32, f32::max);
 
-    for (towards, _) in approaches {
+    for (arm, towards, _) in approaches {
         let Some((foot, yaw)) = signal_pose(at, *towards, widest) else {
             continue;
         };
@@ -500,8 +526,17 @@ pub fn spawn_junction(
                         .clone()
                         .into_iter()
                         .zip(SIGNAL_LENSES)
-                        .map(|((lens, glass), y)| {
+                        .enumerate()
+                        .map(|(lamp, ((lens, glass), y))| {
                             (
+                                // Which crossing and which approach, so a mast
+                                // streamed back in finds its own phase again
+                                // rather than starting a cycle of its own.
+                                super::signals::SignalLamp {
+                                    at: node,
+                                    arm: *arm,
+                                    lamp,
+                                },
                                 Mesh3d(lens),
                                 MeshMaterial3d(glass),
                                 // Cylinders stand up; a lens looks out.

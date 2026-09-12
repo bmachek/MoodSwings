@@ -144,6 +144,18 @@ LANDSHUT=(
     # A junction from above: pavements, mitres, the junction plate and whether
     # anything is standing in the road.
     "junction|--city Landshuepf --at 43.7,45,170 --look 43.7,0,169 --hour 12 --frames 120"
+    # And one from a driver's seat on an approach to a *signalled* crossing,
+    # because that is the only angle a signal can be judged from: the head
+    # faces up its own arm, so every other framing in this battery sees the
+    # back of it. Landshut has fifteen signalled junctions -- three arms or
+    # more with a main road through them -- and this is the Gestuetstrasse.
+    # Both hours, because a lit lens has two jobs: read against a sunlit wall
+    # at noon and be the brightest thing on the street at night. Under
+    # `--screenshot` the phase comes from the junction rather than the clock,
+    # so this shot shows the same aspect on every run and a before/after pair
+    # is comparable -- see `world::signals`.
+    "signals|--city Landshuepf --at 724,2.2,-246 --look 736.3,3.0,-258.4 --hour 12 --frames 120"
+    "signals-night|--city Landshuepf --at 724,2.2,-246 --look 736.3,3.0,-258.4 --hour 21.5 --frames 120"
     # Where the Isar runs, and does not yet.
     # From above the riverside trees, which the terrain now plants.
     "isar|--city Landshuepf --at 40,14,-224 --look -25,1,-329 --hour 12 --frames 120"

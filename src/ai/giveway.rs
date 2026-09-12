@@ -19,7 +19,7 @@
 //! Altstadt uses: a Gasse is single file, and you wait at the mouth for the
 //! one coming the other way.
 //!
-//! So this owns two things and will own a third:
+//! So this owns two things, and the third has since moved next door:
 //!
 //! * **Runs.** The single-file stretches, worked out once from the layout. A
 //!   run reaches from one passing place to the next, and a passing place is a
@@ -30,9 +30,14 @@
 //!   them going the same way may follow. The moment anybody is standing at the
 //!   far mouth the near mouth stops admitting, the run drains, and the far end
 //!   takes it. That alternation is the whole starvation rule.
-//! * Junctions, next: the movements that conflict at a crossing and who yields
-//!   to whom. [`crate::world::roadgraph::movements_conflict`] is the policy
-//!   waiting for a caller.
+//! * Junctions, which [`ai::junction`](super::junction) now owns: the
+//!   movements that conflict at a crossing and who yields to whom.
+//!   [`crate::world::roadgraph::movements_conflict`] was written here as "the
+//!   policy waiting for a caller" and has one. It is a separate module rather
+//!   than more of this one because a run is a *street* held by a direction
+//!   and a junction is a *point* held by several movements at once, and the
+//!   two reservations have nothing in common but the stop line — which they
+//!   do share, deliberately.
 //!
 //! What this is *not* is a way of deleting cars. A car held at a mouth is
 //! waiting, not blocked — `traffic::DriverObservation::Yielding` says so and
@@ -164,10 +169,7 @@ impl Runs {
 
 /// The edge joining two junctions, if they are joined at all.
 fn edge_between(graph: &RoadGraph, from: NodeId, to: NodeId) -> Option<EdgeId> {
-    graph
-        .neighbors(from)
-        .find(|(node, _)| *node == to)
-        .map(|(_, edge)| edge)
+    graph.edge_between(from, to)
 }
 
 /// Which end of a run the cars in it went in by, and when.

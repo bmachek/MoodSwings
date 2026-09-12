@@ -28,6 +28,7 @@ pub mod roof;
 pub mod rooftop;
 pub mod shell;
 pub mod signage;
+pub mod signals;
 pub mod sky;
 pub mod stadium;
 pub mod statues;
@@ -83,7 +84,7 @@ impl Plugin for WorldPlugin {
         ))
         // A second call rather than a longer tuple: `Plugins` is implemented up
         // to a fixed arity and the tuple above is at it.
-        .add_plugins((sky::SkyPlugin, ground::GroundPlugin))
+        .add_plugins((sky::SkyPlugin, ground::GroundPlugin, signals::SignalPlugin))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball
         // bounces off concrete because *it* is elastic, and asking concrete to

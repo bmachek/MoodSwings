@@ -613,6 +613,92 @@ both read the queues directly, and the patrol complains about any line that has
 not moved in seventy-five seconds. A single wedged queue outside one shop in a
 town of several hundred is exactly the failure a human walks past.
 
+## Crossings
+
+Until recently nothing in this town had right of way. Traffic braked for
+obstacles and for nothing else, so two cars arriving at a crossroads together
+did not negotiate: they drove at each other until the obstacle ray found metal,
+stopped nose to nose in the middle, and sat there until the recovery timer
+deleted one of them twenty-six seconds later. `ai::giveway` had settled the
+*Gasse* — a street too narrow for two cars is entered one direction at a time —
+and left the junction as the half it did not do, with a conflict rule written
+and nothing calling it.
+
+`ai::junction` calls it. A crossing is claimed by a **movement** rather than by
+a car, so several can hold one junction at once as long as their paths do not
+cross — which is what makes a crossroads a crossroads rather than a turnstile.
+Whether two movements cross is geometry and not a table: each is the straight
+line from where it enters the junction, in its own travel lane, to where it
+leaves, in its own, and two conflict when those lines meet.
+
+That is worth spelling out, because the rule it replaces looked reasonable and
+was wrong. It was a table over turn kinds — straight, left, right, U-turn — and
+a turn kind is named relative to the car making it, so two cars approaching from
+*perpendicular* arms and carrying straight on are both "straight". The table
+said they could share the junction. They meet in the middle of it, and it is the
+commonest conflict at any crossing in the town. The old comment knew the shape of
+the hole it had — "two *same-direction* straight movements can share it" — and
+had no way to say so, because nothing in a pair of turn kinds names an arm.
+
+Read off the lanes instead, the priority rules fall out rather than being
+written down: an oncoming straight crosses a left turn and not a right one, so
+left turns wait and right turns do not. Nobody wrote that; it is the lane
+offsets. What is written down is the order when the paths genuinely do
+conflict — the main road first, then *rechts vor links*, then the longest
+wait, then the entity id so the answer never depends on query order. Right
+before left is a rule about a pair rather than an order over a crowd: at a
+four-way where everybody has somebody on their right it says nothing at all,
+which is the deadlock real drivers break by eye contact. Counting how many
+cars on my right I actually conflict with turns it into a sort key, and four
+cars all scoring one fall through to the wait and the index, so somebody goes.
+
+A bend is not a junction. Landshut's graph keeps a node at every vertex of
+every polyline, so a curved street carries one every few metres; 1191 of its
+1565 nodes have two arms and are corners. Holding cars at those would stop the
+town dead.
+
+Three ways a claim can outlive the car that made it, and each needs its own
+answer, because a car held at a stop line is *yielding* — which is neither
+blocked nor recovered, and is exactly the state the recovery timer is built to
+leave alone. So: a claim is refreshed every frame its owner is still coming or
+still in the crossing and dropped the frame it is not, which covers being
+deleted, launched onto a roof or driven off by the player. A car that asked,
+was let in, and then stopped short of the junction behind a queue gives it back
+after three seconds — it is holding a crossing it cannot enter, and everybody
+crossing is waiting behind a car that is waiting behind a car. And a wreck that
+still exists, still has the claim and is going nowhere loses it after
+twenty-two seconds, out loud in the log, because that one has no other symptom
+anywhere in the game.
+
+### And the lights
+
+The masts have stood on every arterial crossing since `world::props` learned to
+build them, and every one of them was dark. The comment beside the three lens
+colours said why, and it was right at the time: a signal showing green down
+every approach at once would be a clearer lie than one showing nothing. A
+signal can only show a phase if something is keeping one.
+
+Now something is. One axis at a time, with red-and-amber before the green and
+an all-red gap between phases so the junction genuinely empties — and the
+conflict rule still runs *underneath* the green, because a two-phase signal
+gives one road green in both directions and the car turning across the oncoming
+lane has a green and still has to wait. Same rule as at an unsignalled crossing,
+same geometry.
+
+The phase is a pure function of the junction and the clock rather than a state
+machine on an entity. Signals are spawned by chunk streaming, so a crossing you
+drive away from and come back to is a *different* set of entities; a machine on
+the entity would restart its cycle every time the street came back, and the
+lights would change when you looked at them. It also lets the traffic ask about
+a crossing whose masts are not spawned, which is most of the town. Each junction
+sits at its own offset in the cycle, so the town does not blink in unison.
+
+Lit and dark are two material handles rather than a material per lamp — six for
+the whole town — so a street full of signal heads still batches. Under
+`--screenshot` the phase comes from the junction alone and not from the clock:
+frame times differ between runs, and `tools/shoot.sh` exists to compare a
+before shot with an after one.
+
 ## Signs
 
 Nearly everything this city says, it says on a painted rectangle, and all of
@@ -1359,9 +1445,6 @@ in the world.
   model stops rather than pretending — a tree thrashing in a storm is not
   something one rotation can portray.
 
-- Traffic signals are unlit and nothing obeys them. A crossroads showing green
-  down every arm at once would be a clearer lie than one showing nothing.
-
 - Every room behind a window is the same shape: an empty box as deep as its own
   window is wide. It is the silhouette of the opening that varies, not what is
   in the room, so a shopfront and a bedroom differ in size and colour and in
@@ -1431,9 +1514,14 @@ in the world.
   street flickered. A visual that only misbehaves in a crowd is a visual for an
   empty street.
 
-- Pedestrians cross roads wherever their route turns, rather than at crossings.
-- Traffic has no right-of-way rules at junctions; it brakes for obstacles only —
-  the signals above are the visible half of a rule that is not implemented.
+- Pedestrians cross roads wherever their route turns, rather than at crossings,
+  and nothing on foot reads a signal: the lights below are for the traffic. A
+  citizen steps off a kerb on a green as readily as on a red.
+- A junction is reserved by the *chord* of each movement across it, not by the
+  arc a car actually drives, and the reservation is a point rather than a
+  queue: there is no check that there is room on the far side before a car is
+  let in. Two cars whose paths miss each other by half a metre are still made
+  to take turns.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
 - Six wall sets across five districts, so a long enough walk repeats. What

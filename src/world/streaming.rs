@@ -530,13 +530,16 @@ pub fn update_streaming(
         if let Some(junctions) = index.junctions_in(chunk) {
             for &id in junctions {
                 let node = city.graph.node(id);
-                let arms: Vec<(Vec2, f32)> = node
+                // The far node as well as its position: a signal head has to
+                // know which approach it faces to find its own phase in
+                // `world::signals`, and a position is not a key.
+                let arms: Vec<(NodeId, Vec2, f32)> = node
                     .edges
                     .iter()
                     .map(|&edge| {
                         let edge = city.graph.edge(edge);
                         let other = if edge.a == id { edge.b } else { edge.a };
-                        (city.graph.node(other).pos, edge.width)
+                        (other, city.graph.node(other).pos, edge.width)
                     })
                     .collect();
                 let arterial = node
@@ -574,6 +577,7 @@ pub fn update_streaming(
                 super::props::spawn_junction(
                     &mut commands,
                     &street.props,
+                    id,
                     node.pos,
                     &arms,
                     arterial,
