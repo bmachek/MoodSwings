@@ -972,6 +972,10 @@ fn strips(
     // round the wrong way mitres every pavement against the street on the far
     // side of the road, which looks very nearly right and is wrong at every
     // junction that is not symmetrical.
+    // A Gasse has no kerb to lay a pavement against. See [`flush`].
+    if flush(edge) {
+        return [None, None];
+    }
     let mut out = [None, None];
     for (index, side) in [(0usize, -1.0f32), (1, 1.0)] {
         let left = side > 0.0;
@@ -1180,11 +1184,22 @@ pub fn build_ribbons(
                 layout.graph.node(edge.a).edges.len() >= 3,
                 layout.graph.node(edge.b).edges.len() >= 3,
             );
+            // A flush lane has no pavement to hide the extra under, and
+            // wants it anyway: it is paved wall to wall, so the ribbon is the
+            // whole corridor rather than the carriageway inside it. Without
+            // this the lane comes out as a four-metre ribbon with three metres
+            // of open ground down each side of it — the same green stripe the
+            // underlap above exists to prevent, just wider.
+            let paved = if flush(edge) {
+                edge.width + 2.0 * SIDEWALK_WIDTH
+            } else {
+                edge.width
+            };
             meshes.add(super::buildings::with_tangents(cambered(
-                edge.width,
+                paved,
                 KERB_UNDERLAP,
                 edge.length,
-                edge.length + edge.width,
+                edge.length + paved,
                 TILE,
                 flat,
             )))
@@ -1321,6 +1336,45 @@ const KERB_UNDERLAP: f32 = 0.45;
 fn carriageway_height(width: f32, id: super::roadgraph::EdgeId) -> f32 {
     super::layer::carriageway(width, id.0)
 }
+
+/// A lane no wider than one car, not arterial, and paved in setts or slabs.
+///
+/// Which is to say a Gasse: a thing an old town is mostly made of and a thing
+/// that has no kerb, because there is no carriageway for a kerb to be the edge
+/// of. Landshut's Altstadt has five and a half kilometres of it — the lanes
+/// off the market, the churchyard paths, the passages between two courtyards —
+/// and every metre of it was being built as a road: four metres of cobble, a
+/// hundred-and-forty-millimetre kerb, three and a fifth metres of paving slab,
+/// both sides. Where such a lane wanders, which is what a lane does, those
+/// kerbs cross the open square at whatever angle the lane happens to arrive
+/// at. The Martinsfriedhof — the churchyard round St. Martin, two ways and
+/// three hundred and eighty-six metres of them — laid twenty-one kerbed
+/// strips across a forty-five by twenty-eight metre yard.
+///
+/// So a flush lane is paved wall to wall in its own surface and gets no kerb
+/// and no pavement. The corridor it reserves is unchanged, so the buildings
+/// stand exactly where they did; what changes is that the ground between them
+/// is one surface instead of three with steps between.
+///
+/// The width is `bake-city.py`'s `NARROWEST`, which is what that script gives
+/// a way it has no better number for — and a footway is exactly the way it has
+/// no better number for. The surface is the other half of the test and does
+/// the real work: a four-metre *asphalt* lane is a residential street with
+/// cars parked down it and it keeps its kerb. Nothing generated is affected —
+/// `citygen` lays every street in asphalt — so this is a rule about towns read
+/// off a map, which is the only place the shape it describes exists.
+fn flush(edge: &super::roadgraph::RoadEdge) -> bool {
+    edge.width <= NARROWEST_LANE
+        && !edge.arterial
+        && matches!(
+            edge.surface,
+            super::atlas::Surface::Sett | super::atlas::Surface::Slabs
+        )
+}
+
+/// See [`flush`]. Kept in step with `tools/bake-city.py`'s `NARROWEST` by a
+/// test against the committed atlas.
+const NARROWEST_LANE: f32 = 4.0;
 
 /// Lays the two pavements of one street.
 ///
@@ -3104,5 +3158,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_gasse_is_flush_and_a_street_is_kerbed() {
+        use super::super::atlas::Surface;
+        let lane =
+            |width: f32, arterial: bool, surface: Surface| super::super::roadgraph::RoadEdge {
+                a: super::super::roadgraph::NodeId(0),
+                b: super::super::roadgraph::NodeId(1),
+                width,
+                arterial,
+                surface,
+                length: 20.0,
+            };
+        // A churchyard path off the market: no kerb.
+        assert!(flush(&lane(4.0, false, Surface::Sett)));
+        assert!(flush(&lane(4.0, false, Surface::Slabs)));
+        // A four-metre residential street has cars parked down it and keeps
+        // its kerb; so does anything arterial, whatever it is paved with; so
+        // does a cobbled street wide enough to be a street.
+        assert!(!flush(&lane(4.0, false, Surface::Asphalt)));
+        assert!(!flush(&lane(4.0, true, Surface::Sett)));
+        assert!(!flush(&lane(7.8, false, Surface::Sett)));
+        // And nothing the generator builds, because it lays asphalt only.
+        assert!(!flush(&lane(4.0, false, Surface::Gravel)));
+    }
+
+    #[test]
+    fn the_old_town_is_mostly_gassen_and_the_rest_of_the_town_is_not() {
+        // A guard on the rule rather than on one street: `flush` takes the
+        // kerb off a fifth of the cobbled network, which is what an old town
+        // is, and must not start taking it off the town. The failure this
+        // catches is a bake that widens or repaves a class — the rule reads
+        // two fields it does not own, and a change to either at the other end
+        // would quietly unkerb Landshut or re-kerb the Altstadt.
+        let Some(town) = crate::world::atlas::load("landshut") else {
+            panic!("the committed Landshut atlas does not load");
+        };
+        let (layout, _) = crate::world::atlas::layout(&town, 1, 1000.0);
+        let mut gasse = 0.0;
+        let mut street = 0.0;
+        for edge in layout.graph.edges() {
+            if flush(edge) {
+                gasse += edge.length;
+            } else {
+                street += edge.length;
+            }
+        }
+        let share = gasse / (gasse + street);
+        assert!(
+            (0.05..0.25).contains(&share),
+            "{:.0} m of Gasse against {:.0} m of street is {:.0}% \u{2014} the rule has moved",
+            gasse,
+            street,
+            share * 100.0
+        );
     }
 }

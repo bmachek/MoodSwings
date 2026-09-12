@@ -1529,6 +1529,30 @@ then `--lineup --hour 12`, `--lineup --hour 21.5` and street and rain framings
 before and after, then `--patrol 120`. Look at head turns, short sleeves, long
 coats, wheelchair users and the camera at a corner.
 
+A Gasse is flush. A lane no wider than one car, not arterial, and paved in
+setts or slabs is not a carriageway with kerbs down it — it is a lane, and an
+old town is mostly made of them: 5.7 km of Landshut, the passages off the
+market, the churchyard paths, the ways between two courtyards. Every metre was
+being built as a road: four metres of cobble, a 140 mm kerb, 3.2 m of paving
+slab, both sides. Where such a lane wanders, which is what a lane does, those
+kerbs cross the open square at whatever angle the lane arrives at — the
+Martinsfriedhof, the churchyard round St. Martin, laid twenty-one kerbed strips
+across a 45 by 28 metre yard. Now the lane is paved wall to wall in its own
+surface with no kerb and no pavement, and the corridor it reserves is
+unchanged, so the buildings stand exactly where they did. 665 pavement sides
+of 3471 go, and with them 662 meshes.
+
+Two other readings were measured and thrown away first, which is worth writing
+down because both were plausible. The polyline does have hairpins — eleven
+vertices in the town that a ribbon of that street's own width cannot turn
+through, the worst a 123° kerb between 5 m segments on a 15 m street — but
+`mitre` and `on_another_carriageway` already handle them: after those, not one
+pavement in the town has its centre more than half a metre inside somebody
+else's tarmac. And the Altstadt is baked at 15.1 m where its own buildings say
+25.8 m wall to wall, because `cap_widths` may only narrow — but setting bands
+to their measured width moves four pavements and blows Wittstraße out to 48 m,
+so that is a real inaccuracy and not this bug.
+
 A queue whose head cannot reach the door now walks the door out to meet them.
 `hold_the_line` steers everybody straight at their slot with no path round
 anything, which is right — a queue is a straight line, and people in one do
