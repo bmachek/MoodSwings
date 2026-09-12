@@ -578,6 +578,14 @@ pub fn activate_nearby_vehicles(
     }
 }
 
+/// How far a wheel has to have moved, in metres or radians, to be worth
+/// writing down. A tenth of a millimetre and a twentieth of a degree: below
+/// that the ray length is jitter in the solver rather than a suspension
+/// travelling, and the same number serves both because a wheel is about half
+/// a metre across, so a radian and a metre are within a factor of two of each
+/// other on its rim.
+const STILL_WHEEL: f32 = 1.0e-4;
+
 /// Positions each wheel mesh from its suspension state.
 ///
 /// Every vehicle, not only the active ones — a parked car is still looked at.
@@ -607,12 +615,6 @@ pub fn update_wheel_visuals(
             // The mesh hangs below its anchor by however much suspension is extended.
             let drop = wheel_state.ray_length - spec.wheel_radius;
             let target = anchors[index] - Vec3::Y * drop;
-            transform.translation = Vec3::new(
-                target.x,
-                transform.translation.y + (target.y - transform.translation.y) * blend,
-                target.z,
-            );
-
             let steer = if VehicleSpec::is_front(index) {
                 Quat::from_rotation_y(state.steer_angle)
             } else {
@@ -621,7 +623,31 @@ pub fn update_wheel_visuals(
             // The wheel's axle is its own X axis, so rolling is a rotation
             // about that. Negative: driving forwards is -Z, and the contact
             // patch has to travel backwards relative to the car.
-            transform.rotation = steer * Quat::from_rotation_x(-state.wheel_spin);
+            let turned = steer * Quat::from_rotation_x(-state.wheel_spin);
+            let settled = Vec3::new(
+                target.x,
+                transform.translation.y + (target.y - transform.translation.y) * blend,
+                target.z,
+            );
+
+            // Eight hundred of this town's cars are parked, and a parked car's
+            // suspension does not move and its wheels do not turn: the value
+            // written is the value already there. `Mut` marks a component
+            // changed the instant it is dereferenced mutably, and a changed
+            // `Transform` is a propagation and an instance upload whether or
+            // not it differs — two and a half thousand of them a frame, for
+            // wheels nobody is turning. So the current pose is read past the
+            // bypass and written only by a wheel that has actually moved,
+            // which is the same trade `vegetation::sway` makes with a tree on
+            // a still day. Every vehicle is still walked, which is what the
+            // note above promises; what stops is the writing.
+            let held = transform.bypass_change_detection();
+            if held.translation.distance_squared(settled) > STILL_WHEEL * STILL_WHEEL
+                || held.rotation.angle_between(turned) > STILL_WHEEL
+            {
+                transform.translation = settled;
+                transform.rotation = turned;
+            }
         }
     }
 }

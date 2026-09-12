@@ -1456,6 +1456,56 @@ in the world.
 
 
 
+## Where the frame actually goes
+
+Written down because two days of guessing at it would otherwise be repeated.
+
+**The renderer preset is not the bottleneck.** At a street framing, `--frames
+200 --fps-log`:
+
+| preset | median |
+|---|---|
+| low | 20.46 ms |
+| medium | 20.49 ms |
+| high | 20.55 ms |
+| ultra | 26.34 ms |
+| photo | 33.91 ms |
+
+Low, medium and high are the same frame. Everything `render::quality` moves
+between them — shadow map size, SSAO level, volumetric steps — is free here.
+Only ultra and photo cost anything, and nobody plays there.
+
+**The frame is CPU-bound, not fill-bound.** A binary built at 800×450 instead
+of 1600×900 — a quarter of the pixels — measured 19.98 ms against 20.43 ms for
+the same framing, interleaved back to back. Quartering the pixels is free.
+Neither does resident geometry decide it: 76k mesh entities at
+`--stream-radius 200` and 220k at 900 are within about a millisecond of each
+other, so the frustum cull is doing its job. What is left is per-entity CPU
+work over the ~221,000 `Mesh3d` entities the streamer keeps resident —
+visibility, extraction, batching — plus whatever the per-frame gameplay
+systems scan.
+
+So the lever is the number of entities and the number of per-frame passes over
+them, not any renderer setting. A future attempt should start by merging static
+per-chunk geometry rather than by turning shadows down.
+
+**`--fps-log` does not measure the minimap.** `ui::mod` does not install
+`MinimapPlugin` under `--screenshot` unless `--map` is passed — deliberately,
+so comparison shots are not covered in instruments — which means every frame
+time in this file was taken without a view that shipping play always has. The
+minimap camera is a second `Camera3d` with a depth and a deferred prepass,
+rendering every frame with no run condition. Its 320² target costs nothing; its
+visibility and batching pass over the same 221k meshes does not. Nobody has
+measured it, and this file should not pretend otherwise.
+
+**Measuring here is harder than the guidance already says.** On this machine
+the same binary and the same framing, run three times back to back with
+nothing else started, gave 41.87, 48.12 and 20.84 ms. That is a factor of 2.3
+with no change of any kind. The interleaved A/B in one shell command — A, B, A,
+B, reading the pairs rather than the absolutes — is the only protocol that has
+survived, and it resolved about half a millisecond when it worked. Anything
+measured across a `cargo build` is measuring the build.
+
 ## Street moments and human character pass
 
 The follow-up to PR #26 gives the street more reasons to slow down.
