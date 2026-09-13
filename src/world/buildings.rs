@@ -1449,6 +1449,7 @@ fn spawn_building(
             ctx.stadium,
             seed,
             center,
+            building.ground,
             frontage,
             throat,
             yaw,
@@ -1462,7 +1463,7 @@ fn spawn_building(
             site,
             yaw,
             frontage,
-            SIDEWALK_HEIGHT + 4.6,
+            floor + 4.6,
             chunk,
         );
         return;
@@ -1568,14 +1569,22 @@ fn spawn_building(
             // The board hangs on the tower, which is much narrower than the
             // footprint — the same clamp the tower's own side length uses.
             (frontage * 0.32).min(5.5),
-            SIDEWALK_HEIGHT + 3.9,
+            floor + 3.9,
             chunk,
         );
         return;
     }
     if building.kind == super::citygen::BuildingKind::ParkingGarage {
         super::garage::spawn(
-            commands, assets, center, frontage, throat, height, yaw, chunk,
+            commands,
+            assets,
+            center,
+            building.ground,
+            frontage,
+            throat,
+            height,
+            yaw,
+            chunk,
         );
         hang_sign(
             commands,
@@ -1585,7 +1594,7 @@ fn spawn_building(
             site,
             yaw,
             frontage,
-            SIDEWALK_HEIGHT + 3.6,
+            floor + 3.6,
             chunk,
         );
         return;

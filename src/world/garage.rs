@@ -41,6 +41,13 @@ pub fn spawn(
     commands: &mut Commands,
     assets: &CityAssets,
     center: Vec2,
+    // How far above the town's datum the ground here stands — see
+    // `Building::ground`. Zero for the whole of the town, and non-zero only
+    // for something kept up on the relief. Taken for the same reason
+    // `world::gate` and `world::church` take it: a module that owns its
+    // building's whole structure owns every y in it, and one that writes
+    // `SIDEWALK_HEIGHT` flat is a module that cannot be put on a hill.
+    ground: f32,
     width: f32,
     depth: f32,
     height: f32,
@@ -55,7 +62,7 @@ pub fn spawn(
                  at: Vec3,
                  size: Vec3,
                  pitch: f32| {
-        let world = spin * at + Vec3::new(center.x, SIDEWALK_HEIGHT, center.y);
+        let world = spin * at + Vec3::new(center.x, ground + SIDEWALK_HEIGHT, center.y);
         commands.spawn((
             ChunkOf(chunk),
             Mesh3d(assets.unit_cube.clone()),
