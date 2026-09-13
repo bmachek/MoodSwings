@@ -2398,9 +2398,11 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 "(c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS\n"
                 "// by the European Union and ESA; all rights reserved.\n"
             )
-        out.write("// Do not edit by hand: rerun the fetch and the bake. To change only what\n")
-        out.write("// the landmark register says a named building is, run\n")
-        out.write("// tools/bake-city.py --relabel on this file.\n")
+        out.write("// Do not edit by hand: rerun the fetch and the bake. Three modes change\n")
+        out.write("// one thing each in a file this bake wrote, by line surgery:\n")
+        out.write("//   --relabel <atlas>                what the landmark register says a name is\n")
+        out.write("//   --reflag  <atlas> <roads.json>   which streets are one-way or closed to cars\n")
+        out.write("//   --rename  <atlas> <built.json>   the names and kinds the OSM building tags carry\n")
         out.write("(\n")
         out.write(f'    name: "{name}",\n')
         out.write(f"    centre: ({lat0}, {lon0}),\n")
@@ -2698,6 +2700,216 @@ def reflag(path, roads_path):
     )
 
 
+# How far a baked building's middle may lie outside an OSM footprint and still
+# be that building, in metres.
+#
+# Nearly nothing, because unlike a street there is nothing to be uncertain
+# about: the bake cut its rectangles out of these very polygons, so a part's
+# middle is inside its own building or it is inside nothing. The slack is for
+# an L whose largest inscribed rectangle straddles the inner corner, and for
+# the difference between the Overture footprint the file was cut from and the
+# OSM one being read here.
+RENAME_REACH = 2.0
+# And how much bigger than the part the polygon may be before the match is
+# refused. A part of a terrace sits inside the block the terrace is part of,
+# and naming it after the block would put the department store's name on nine
+# houses.
+RENAME_SWELL = 14.0
+# And how much *smaller* than the part the polygon may be. Tight, because the
+# part was cut out of a polygon and cannot honestly be bigger than one.
+#
+# This is the guard the register's own comment is about, arriving from the
+# other side: a `man_made=tower` forty square metres across stands against a
+# hall of six hundred, the hall's middle lands within a stride of the tower's
+# wall, and the hall is handed the tower's tags -- so the runtime draws a
+# thirty-seven-metre box of brick with a pyramid on it, which is the one
+# outcome that register spends a paragraph refusing.
+RENAME_MEAGRE = 0.5
+# And the longest name it will write onto a building, in characters.
+#
+# A name goes on a painted board over the door, and a board is a plate on a
+# wall rather than a hoarding across one -- `signage::name_board` shrinks the
+# lettering to fit and then the board itself has to grow, and the runtime has
+# a test that refuses one wider than a shopfront. OSM sometimes puts a
+# description where a name goes: "Staatliche Fachschule (Technikerschule) fuer
+# Maschinenbautechnik" is sixty-two characters and is not what anybody has
+# written over that door. Forty-eight is the longest name Landshut's own
+# buildings carried before this, and it fits.
+RENAME_LONGEST = 48
+
+
+def rename(path, buildings_path):
+    """Writes the `name` and the `kind` an Overpass buildings dump has onto the
+    buildings of a baked atlas.
+
+    Line surgery, like `relabel` and `reflag`, and the same argument holds:
+    this is what a bake reading *this* source would have written, applied to a
+    file the other source produced. The committed atlas takes its footprints
+    from Overture, which carries a building's shape, its roof and its height
+    and drops almost everything else -- so the town arrived with 81 named
+    buildings where the OSM tags name 187, and with Overture's handful of
+    coarse classes where `kind_of` reads amenity, shop, tourism, historic and
+    man_made and finds 236.
+
+    ## What it may and may not do
+
+    The same two rules `relabel` is held to, for the same reason:
+
+    * `name` is only ever *filled*. A building the file already names keeps
+      the name it has; nothing here overrules the source the geometry came
+      from, and a file run through this twice is the file it was after the
+      first run.
+    * `kind` is a *fallback*, exactly as in the bake (`kind_of(tags) or
+      register`): it stands in where the source said nothing and never
+      overrules a class the source gave.
+
+    It measures nothing that is written down. Geometry, heights, groups and
+    areas are read to find the right line and are not touched.
+
+    ## Matching
+
+    By containment, which a building allows and a street does not: the bake
+    cut its rectangles out of these polygons, so a part's centre is inside its
+    own building or inside none. What needs care is the opposite error -- a
+    part of a terrace lies inside the *block* as well, so a polygon more than
+    `RENAME_SWELL` times the part's own area is refused rather than believed,
+    and the smallest polygon containing a point wins.
+    """
+    text = open(path, encoding="utf-8").read()
+    centre = re.search(r"^\s*centre: \(([-\d.]+), ([-\d.]+)\),$", text, re.M)
+    if not centre:
+        sys.exit(f"{path} does not look like a baked atlas")
+    lat0, lon0 = float(centre[1]), float(centre[2])
+
+    # Every tagged footprint, in metres, filed by cell.
+    cell_size = 40.0
+
+    def cell(at):
+        return (int(math.floor(at[0] / cell_size)), int(math.floor(at[1] / cell_size)))
+
+    filed = {}
+    kept = 0
+    for element in json.load(open(buildings_path, encoding="utf-8")).get("elements", []):
+        tags = element.get("tags") or {}
+        name = tags.get("name", "")
+        kind = kind_of(tags)
+        if not name and not kind:
+            continue
+        for polygon in polygons_of(element, lat0, lon0):
+            if polygon.is_empty or polygon.area <= 0.0:
+                continue
+            kept += 1
+            low = cell((polygon.bounds[0], polygon.bounds[1]))
+            high = cell((polygon.bounds[2], polygon.bounds[3]))
+            for x in range(low[0], high[0] + 1):
+                for z in range(low[1], high[1] + 1):
+                    filed.setdefault((x, z), []).append((polygon, name, kind))
+
+    def tagged(at, area):
+        """The smallest tagged footprint this point is in, if any."""
+        best = None
+        point = shapely.geometry.Point(at)
+        for polygon, name, kind in filed.get(cell(at), ()):
+            if polygon.area > area * RENAME_SWELL or polygon.area < area * RENAME_MEAGRE:
+                continue
+            if polygon.distance(point) > RENAME_REACH:
+                continue
+            if best is None or polygon.area < best[0]:
+                best = (polygon.area, name, kind)
+        return best
+
+    # Read every building line first, because what is written is decided per
+    # *building* and the file is a list of its parts.
+    #
+    # A building read off a map is up to six rectangles sharing a `group` -- an
+    # L is two, a courtyard block four -- and everything a building has one of
+    # hangs off the largest of them. So a name matched by one part is a name
+    # for all of them, and a name matched by none of them is nobody's. Written
+    # part by part, the first attempt gave one wing of the Pflegedienst its
+    # name and left the other three blank, which the runtime reads as two
+    # different buildings that happen to touch.
+    lines = text.split("\n")
+    parts = []
+    inside = False
+    for index, line in enumerate(lines):
+        if line == "    buildings: [":
+            inside = True
+            continue
+        if inside and line.startswith("    ]"):
+            break
+        if not inside:
+            continue
+        m = BUILDING_LINE.match(line)
+        if not m:
+            sys.exit(f"cannot read a building back: {line[:90]}")
+        place = re.search(r"centre: \(([-\d.]+),([-\d.]+)\)", line)
+        span = re.search(r"frontage: ([\d.]+), depth: ([\d.]+)", line)
+        group = re.search(r"group: Some\((\d+)\)", line)
+        if not place or not span:
+            sys.exit(f"cannot read a building's place back: {line[:90]}")
+        parts.append({
+            "index": index,
+            "group": group[1] if group else f"part{index}",
+            "at": (float(place[1]), float(place[2])),
+            "area": max(float(span[1]) * float(span[2]), 1.0),
+            "name": m["name"],
+            "kind": m["kind"],
+        })
+
+    # What each building is called, decided on the part that stands for it:
+    # the largest that matched anything.
+    by_group = collections.defaultdict(list)
+    for part in parts:
+        by_group[part["group"]].append(part)
+    told = {}
+    for group, members in by_group.items():
+        best = None
+        for part in sorted(members, key=lambda p: -p["area"]):
+            hit = tagged(part["at"], part["area"])
+            if hit is None:
+                continue
+            _, name, kind = hit
+            if len(name) > RENAME_LONGEST:
+                name = ""
+            if name or kind:
+                best = (name, kind)
+                break
+        if best:
+            told[group] = best
+
+    named = collections.Counter()
+    kinded = collections.Counter()
+    for part in parts:
+        told_here = told.get(part["group"])
+        if not told_here:
+            continue
+        name, kind = told_here
+        line = lines[part["index"]]
+        if name and not part["name"]:
+            label = name.replace('"', "'")
+            line = line.replace('(name: "", ', f'(name: "{label}", ', 1)
+            named[name] += 1
+        if kind and part["kind"] == "None":
+            line = re.sub(r"kind: None", f"kind: Some({kind})", line, count=1)
+            kinded[kind] += 1
+        lines[part["index"]] = line
+
+    if not named and not kinded:
+        print(f"{path} already says everything the dump does", file=sys.stderr)
+        return
+    temp = path + ".part"
+    with open(temp, "w", encoding="utf-8") as out:
+        out.write("\n".join(lines))
+    os.replace(temp, path)
+    print(
+        f"{kept} tagged footprints read; {sum(named.values())} parts named "
+        f"({len(named)} names) and {sum(kinded.values())} given a kind",
+        file=sys.stderr,
+    )
+    for kind, parts in sorted(kinded.items()):
+        print(f"  {kind}: {parts} parts", file=sys.stderr)
+
+
 def relabel(path):
     """Re-applies `KNOWN_LANDMARKS` and `LANDMARK_HEIGHT` to a baked atlas.
 
@@ -2793,6 +3005,11 @@ def main():
     # down two tags the bake that made it never kept. See `reflag`.
     if len(sys.argv) == 4 and sys.argv[1] == "--reflag":
         reflag(sys.argv[2], sys.argv[3])
+        return
+    # And the one that needs the buildings dump, to write down the names and
+    # the kinds the Overture source the file was cut from does not carry.
+    if len(sys.argv) == 4 and sys.argv[1] == "--rename":
+        rename(sys.argv[2], sys.argv[3])
         return
     ap = argparse.ArgumentParser(description="Bake a town's map data into an atlas the game can build.")
     ap.add_argument("source", help="an Overpass roads dump, or with --from-ron a baked atlas")

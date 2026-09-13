@@ -1438,10 +1438,21 @@ mod tests {
             Some(crate::world::citygen::BuildingKind::Church)
         );
 
-        // And the rest of what a person walks across town to look at. Only a
-        // landmark is named — the five hundred listed townhouses that make up
-        // an Altstadt street wall are not, because a name here means the
-        // height is believed as it stands.
+        // And the rest of what the map puts a name on.
+        //
+        // This used to say that only a landmark is named, because a name is
+        // what made the bake believe a height as it stands and leave a box
+        // uncut. That is still true of the *bake*, and it is no longer all a
+        // name means in this file: `bake-city.py --rename` writes the names
+        // and the kinds off the OSM building tags, which the Overture source
+        // the footprints were cut from does not carry, and it writes them
+        // onto boxes that were already cut. So the Finanzamt, the Galeria,
+        // the Edeka and a hairdresser called HAARMONIE are named here, and
+        // none of them moved a millimetre for it.
+        //
+        // What the bar is still guarding is the other end: the five hundred
+        // listed townhouses of an Altstadt street wall must not each become a
+        // landmark, and a town with no names at all is a failed read.
         let named = town.buildings.iter().filter(|plot| !plot.name.is_empty());
         let mut kinds = std::collections::HashMap::new();
         for plot in named {
@@ -1454,8 +1465,8 @@ mod tests {
         }
         let total: usize = kinds.values().sum();
         assert!(
-            (40..400).contains(&total),
-            "{total} named landmarks, which is either a town with none or one \
+            (40..900).contains(&total),
+            "{total} named parts, which is either a town with none or one \
              where every listed house counts as one"
         );
 
