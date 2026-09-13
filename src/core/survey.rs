@@ -1034,16 +1034,31 @@ impl Survey {
             );
         }
         let _ = writeln!(out, "{line}   ({STOREY:.0} m a storey)");
-        let mut line = String::from("           roof      ");
-        for (i, (_, name)) in ROOFS.iter().enumerate() {
-            let _ = write!(line, " {name} {}", b.roofs[i]);
+        // The shapes only a map can name. `Building::roof` is the OSM
+        // `roof:shape` tag and nothing else ever sets it, so a generated city
+        // has one of every counter at zero — which printed as a row of noughts
+        // beside a parenthetical claiming a fifth of Minga's houses were
+        // gabled, on the same line, contradicting itself. What is true of a
+        // town with no map is the style's own share and nothing more.
+        if b.generated > 0 {
+            let _ = writeln!(
+                out,
+                "           roof       {:.0}% of low houses gabled   \
+                 (no map under this city: a roof shape is a tag)",
+                b.gables * 100.0
+            );
+        } else {
+            let mut line = String::from("           roof      ");
+            for (i, (_, name)) in ROOFS.iter().enumerate() {
+                let _ = write!(line, " {name} {}", b.roofs[i]);
+            }
+            let _ = writeln!(
+                out,
+                "{line}   unsaid {}   (style: {:.0}% of low houses gabled)",
+                b.roof_unsaid,
+                b.gables * 100.0
+            );
         }
-        let _ = writeln!(
-            out,
-            "{line}   unsaid {}   (style: {:.0}% of low houses gabled)",
-            b.roof_unsaid,
-            b.gables * 100.0
-        );
 
         match &self.coverage {
             Some(c) => {
