@@ -1426,6 +1426,36 @@ component goes on at the moment the beam is spawned rather than being attached
 by `render::volumetrics` — a beam is born at dusk and dies at dawn, and that
 system attaches its lights once and then sleeps on a change detector.
 
+Under all of that the car rides on four raycasts. Each wheel is a ray down from
+its suspension mount; where it hits, a spring-damper pushes the body up and the
+tyre puts its forces down in the contact plane, clamped by a friction budget
+proportional to that wheel's load. The clamp is the whole handling model: grip
+is not a boolean and drift is not a mode, so exceeding the budget at a wheel
+simply stops it cancelling slip and the back steps out on its own.
+
+The damping was the part that had to be argued twice. It was set at a fifth of
+critical on purpose — everything in this city bounces, so why not the
+suspension — and what that turned out to mean is a spring that rings for a dozen
+cycles: the body was never still, every junction set the nose pogoing, and
+aiming a car became a matter of waiting for it to come back down. It is a third
+of critical now, and asymmetric on top of that, because the two things a damper
+is asked for are opposites. Swallowing a kerb wants it soft; not handing the
+kerb straight back wants it firm. Real dampers resolve that by running two to
+three times as much rebound as bump and so does this one, which is the change
+that stopped the hopping without making the ride a bench. The numbers live on
+`VehicleSpec` as a bump figure in newton-seconds per metre and a rebound
+multiplier, and the dev panel divides both by critical damping as you drag
+them — the reason nobody noticed a fifth of critical for so long is that
+`damping: 1_280.0` does not look like anything until you put the spring rate and
+the kerb weight next to it.
+
+The one place the bouncing is still the point is the crash. `vehicle::impact`
+reads impacts off sudden velocity changes rather than collision events and
+flings both parties apart harder than physics would, because a fender-bender
+where everyone leaves the scene backwards, airborne and spinning is the joke the
+game is built around. Damping the ride does not touch it: braking as hard as the
+car can sheds about a sixteenth of the velocity per tick that fires one.
+
 ## Audio
 
 Every sound is a CC0 recording, fetched by `tools/fetch-materials.sh` into

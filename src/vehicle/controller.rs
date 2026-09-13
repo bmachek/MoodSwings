@@ -151,10 +151,22 @@ pub fn drive_vehicles(
 
             let compression = max_ray - hit.distance;
             let vertical_speed = forces.velocity_at_point(anchor).dot(up);
+            // Positive is the anchor rising, which with the ground where it is
+            // means the spring getting longer: the rebound stroke. The damper
+            // is deliberately not the same in both directions — see
+            // `VehicleSpec::rebound_damping` — because swallowing a kerb wants
+            // a soft damper and not handing the kerb straight back wants a firm
+            // one, and a single figure has to be wrong about one of them.
+            let damping = if vertical_speed > 0.0 {
+                spec.damping * spec.rebound_damping
+            } else {
+                spec.damping
+            };
             // Damper opposes motion; clamp at zero so suspension can only push,
-            // never suck the car down onto the road.
-            let load =
-                (compression * spec.spring_strength - vertical_speed * spec.damping).max(0.0);
+            // never suck the car down onto the road. That clamp is also the
+            // ceiling on rebound damping: once the spring has nothing left to
+            // give, neither has the damper.
+            let load = (compression * spec.spring_strength - vertical_speed * damping).max(0.0);
 
             *wheel = WheelState {
                 grounded: true,
@@ -451,10 +463,14 @@ mod tests {
     }
 
     #[test]
-    fn a_car_that_lands_bounces_before_it_settles() {
-        // Both halves matter. The bounce is the joke; the settling is what
-        // keeps a parked street from shimmering, and an underdamped spring
-        // with no floor to it does exactly that forever.
+    fn a_car_that_lands_takes_the_landing_and_is_done_with_it() {
+        // Both halves matter, and the second half is the one that changed. The
+        // suspension still has visible travel — a car that absorbs a two-metre
+        // drop without moving reads as a brick — but it is no longer allowed to
+        // spend ten seconds handing that drop back. The damping was a fifth of
+        // critical and the body never stopped moving between one junction and
+        // the next; it is a third of critical on the way in and two thirds on
+        // the way out now, which is about one overshoot.
         let (mut app, car, _) = harness(VehicleClass::Sedan, 2.5);
         step(&mut app, 30);
         let (low, high) = ride_envelope(&mut app, car, 80);
@@ -464,11 +480,13 @@ mod tests {
             high - low
         );
 
-        step(&mut app, 700);
-        let (low, high) = ride_envelope(&mut app, car, 120);
+        // A second and a half after touchdown, not ten. The old figures could
+        // not have passed this and that is the point of it.
+        step(&mut app, 100);
+        let (low, high) = ride_envelope(&mut app, car, 80);
         assert!(
-            high - low < 0.02,
-            "still pogoing {:.4}m a full ten seconds after landing",
+            high - low < 0.01,
+            "still pogoing {:.4}m a second and a half after landing",
             high - low
         );
     }
