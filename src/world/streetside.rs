@@ -1636,9 +1636,16 @@ pub(crate) fn district_at(at: Vec2, half_extent: f32, arterial: bool) -> Distric
 /// The building's *rotated* box, which is why this lives here rather than at
 /// the caller: an atlas building's `footprint` is measured in its own street's
 /// frame and stands at whatever angle that street runs at, so an axis-aligned
-/// test against the rectangle is a test against a rectangle nothing is. The
-/// broad phase is the block's own `area`, which is the circumscribed box round
-/// the whole building and therefore never misses one.
+/// test against the rectangle is a test against a rectangle nothing is.
+///
+/// The broad phase makes no assumption about how a block's `area` was built,
+/// and that is deliberate. Two of the three places that build one circumscribe
+/// it; the third — the back-yard sheds in [`lots`] — stores the footprint
+/// itself, which for a shed standing at its street's angle is a box its own
+/// walls reach outside of, and which is also the only thing that tells a shed
+/// from a terrace house once they are blocks (`core::survey` reads exactly
+/// that). So the reject grows `area` by its own half-diagonal, which bounds
+/// anything that can be turned inside it however it was written down.
 ///
 /// Asked by `world::monument`, which has to stand a fountain on a pavement
 /// without standing it in somebody's front room.
@@ -1649,9 +1656,10 @@ pub fn room_for(layout: &CityLayout, at: Vec2, radius: f32) -> bool {
         half: Vec2::splat(radius),
     };
     !layout.blocks.iter().any(|block| {
+        let reach = radius + block.area.size().length() * 0.5;
         let near = Rect::new(
-            block.area.min - Vec2::splat(radius),
-            block.area.max + Vec2::splat(radius),
+            block.area.min - Vec2::splat(reach),
+            block.area.max + Vec2::splat(reach),
         );
         let inside =
             at.x >= near.min.x && at.x <= near.max.x && at.y >= near.min.y && at.y <= near.max.y;

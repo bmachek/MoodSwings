@@ -27,10 +27,14 @@
 //! took. What is placed is "on this square, clear of the carriageway", which is
 //! true of the real one and is all the game needs to be.
 //!
-//! The third entry is a different kind of claim and says so: every market town
-//! in this game keeps a fountain on its market street, because every market
-//! town does. That one is a *rule*, not a record, and it is why this module is
-//! worth its length for the towns that are not Landshut.
+//! The third entry is a different kind of claim and says so: a market town
+//! keeps a fountain on its market street, because every market town does. That
+//! one is a *rule* rather than a record — but it is still written down against
+//! a town, and the register is still keyed by one. Nothing here reaches a
+//! generated city, which has no atlas to anchor to and no named streets to
+//! look a square up in; wiring the rule to the generator would mean asking
+//! `citygen` for its market band, which is a separate piece of work and is not
+//! done. What the entry buys today is the fountain on the Altstadt.
 //!
 //! ## Placement
 //!
@@ -135,8 +139,8 @@ const LISTED: &[Listed] = &[
     },
 ];
 
-/// The basin: how far across, how high its wall stands, and how thick the rim
-/// reads from outside.
+/// The basin: how far across, how high its wall stands, and how wide the ring
+/// of stone across the top of it is.
 ///
 /// A metre and three quarters of radius: three and a half metres across, which
 /// is a town's fountain — about the length of a small car, the only scale
@@ -150,6 +154,17 @@ const BASIN_RIM: f32 = 0.22;
 /// How far under the rim the water lies. A basin filled to its own rim is a
 /// disc of water with no basin round it.
 const WATER_BELOW: f32 = 0.14;
+/// How deep the water is drawn, and how high the stone floor under it stands.
+///
+/// The basin is *open*: a wall with no lid, a ring of stone across the top of
+/// it, and a stone floor low enough that the water has a thickness. It was a
+/// capped drum first — `props::cylinder` builds caps — and what that draws is
+/// a stone barrel with a pole out of the middle and the water sealed ninety
+/// millimetres under the lid, where nobody will ever see it. Two of the three
+/// monuments in the register are fountains, so that was two thirds of the
+/// module drawing the wrong object.
+const WATER_DEEP: f32 = 0.1;
+const BASIN_FLOOR: f32 = 0.4;
 
 /// The shaft up the middle of the basin, and the bowl it carries.
 const SHAFT_RADIUS: f32 = 0.3;
@@ -182,6 +197,9 @@ const PLAQUE: Vec2 = Vec2::new(0.9, 0.3);
 const _: () = assert!(SHAFT_RADIUS + 0.2 < BASIN_RADIUS - BASIN_RIM);
 const _: () = assert!(BOWL_RADIUS < BASIN_RADIUS - BASIN_RIM);
 const _: () = assert!(WATER_BELOW < BASIN_HEIGHT);
+// And the water has to lie *in* the basin: over its floor, under its rim.
+const _: () = assert!(BASIN_FLOOR < BASIN_HEIGHT - WATER_BELOW - WATER_DEEP * 0.5);
+const _: () = assert!(BASIN_HEIGHT - WATER_BELOW + WATER_DEEP * 0.5 < BASIN_HEIGHT);
 // And a column's shaft has to stand on its plinth.
 const _: () = assert!(COLUMN_SHAFT_RADIUS * 2.0 < COLUMN_PLINTH.x);
 const _: () = assert!(COLUMN_PLINTH.x < COLUMN_BASE);
@@ -190,7 +208,15 @@ const _: () = assert!(COLUMN_PLINTH.x < COLUMN_BASE);
 pub struct MonumentKit {
     step: Handle<Mesh>,
     plinth: Handle<Mesh>,
-    basin: Handle<Mesh>,
+    /// The basin, in three pieces because it is a bowl and not a barrel: the
+    /// wall as an open tube, the ring of stone across the top of it, and the
+    /// floor the water lies on.
+    basin_wall: Handle<Mesh>,
+    basin_rim: Handle<Mesh>,
+    basin_floor: Handle<Mesh>,
+    /// The wall is seen from inside as well as out, so it is drawn with the
+    /// one double-sided material in this module.
+    inside_out: Handle<StandardMaterial>,
     water: (Handle<Mesh>, Handle<StandardMaterial>),
     shaft: Handle<Mesh>,
     bowl: Handle<Mesh>,
@@ -207,6 +233,20 @@ pub struct MonumentKit {
     /// monument finds its own by index and nothing has to hash a string at
     /// spawn time.
     plates: Vec<Handle<StandardMaterial>>,
+}
+
+/// A cylinder with no lid and no bottom: the wall of a basin.
+///
+/// `props::cylinder` builds caps, which is right for a bollard and wrong for
+/// anything you are meant to look into. The resolution is the same one the
+/// radius earns there, so a basin and a bollard of the same width are cut the
+/// same number of ways.
+fn open_tube(radius: f32, height: f32) -> Mesh {
+    let mut builder = Cylinder::new(radius, height)
+        .mesh()
+        .resolution(super::props::cylinder_sides(radius));
+    builder.caps = false;
+    builder.build()
 }
 
 /// Paints one plate: bronze field, raised rim, the name in a lighter alloy.
@@ -255,6 +295,17 @@ pub fn build_assets(
         metallic: 0.9,
         ..default()
     });
+    // The basin wall, seen from inside as well as out. An open tube has one
+    // set of faces and they point outwards, so the far wall of the basin —
+    // the piece you are looking *at* when you look into it — is a backface
+    // and is culled, leaving a hole straight through the fountain.
+    let inside_out = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.46, 0.47, 0.45),
+        perceptual_roughness: 0.96,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    });
     // The same blue-green the canal is drawn in, so the town's water is one
     // colour. Held in a basin rather than laid on the ground, so this one owes
     // `world::layer` nothing: its surface is 480 mm up, and the whole ground
@@ -274,15 +325,25 @@ pub fn build_assets(
             COLUMN_PLINTH.y,
             COLUMN_PLINTH.z,
         )),
-        basin: meshes.add(super::props::cylinder(BASIN_RADIUS, BASIN_HEIGHT)),
+        basin_wall: meshes.add(open_tube(BASIN_RADIUS, BASIN_HEIGHT)),
+        // A flat ring, which is what the top of a basin wall is. Meshed in
+        // the XY plane like every 2D primitive, so it is laid down by the
+        // quarter turn the spawner gives it.
+        basin_rim: meshes.add(
+            Annulus::new(BASIN_RADIUS - BASIN_RIM, BASIN_RADIUS)
+                .mesh()
+                .resolution(super::props::cylinder_sides(BASIN_RADIUS)),
+        ),
+        basin_floor: meshes.add(super::props::cylinder(BASIN_RADIUS, BASIN_FLOOR)),
+        inside_out,
         water: (
             meshes.add(super::props::cylinder(
                 BASIN_RADIUS - BASIN_RIM,
-                // Thin rather than flat: a disc drawn at one height is a
-                // surface that can tie with the basin's own top face at a
-                // grazing angle. Ten centimetres of water has two faces and
-                // neither of them is anybody else's.
-                0.1,
+                // Thick rather than flat: a disc drawn at one height is a
+                // surface that can tie with the stone under it at a grazing
+                // angle. Ten centimetres of water has two faces and neither
+                // of them is anybody else's.
+                WATER_DEEP,
             )),
             water,
         ),
@@ -522,13 +583,35 @@ fn raise(commands: &mut Commands, kit: &MonumentKit, standing: &Standing, chunk:
 
     match standing.piece {
         Piece::Fountain => {
+            // The wall, with the collider on it: one solid drum, because a
+            // fountain is a thing you bounce off rather than a thing you fall
+            // into. What is open is the *mesh* — see `open_tube`.
             commands.spawn((
                 ChunkOf(chunk),
-                Mesh3d(kit.basin.clone()),
-                MeshMaterial3d(kit.weathered.clone()),
+                Mesh3d(kit.basin_wall.clone()),
+                MeshMaterial3d(kit.inside_out.clone()),
                 Transform::from_xyz(at.x, ground + BASIN_HEIGHT * 0.5, at.y),
                 RigidBody::Static,
                 Collider::cylinder(BASIN_RADIUS, BASIN_HEIGHT),
+                range.clone(),
+            ));
+            // The ring across the top of it. A quarter turn, because a 2D
+            // primitive meshes in the XY plane and this lies down.
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(kit.basin_rim.clone()),
+                MeshMaterial3d(kit.weathered.clone()),
+                Transform::from_xyz(at.x, ground + BASIN_HEIGHT, at.y)
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                range.clone(),
+            ));
+            // And the floor the water lies on, which is also what stops the
+            // open wall being seen through from the far side.
+            commands.spawn((
+                ChunkOf(chunk),
+                Mesh3d(kit.basin_floor.clone()),
+                MeshMaterial3d(kit.stone.clone()),
+                Transform::from_xyz(at.x, ground + BASIN_FLOOR * 0.5, at.y),
                 range.clone(),
             ));
             let (water_mesh, water_material) = &kit.water;
@@ -538,10 +621,10 @@ fn raise(commands: &mut Commands, kit: &MonumentKit, standing: &Standing, chunk:
                 MeshMaterial3d(water_material.clone()),
                 Transform::from_xyz(at.x, ground + BASIN_HEIGHT - WATER_BELOW, at.y),
                 range.clone(),
-                // No collider: the water is scenery, and a flummi that lands
-                // in a fountain should land in the basin it can see the bottom
-                // of. And no shadow — a disc of water casting one on the stone
-                // two hand-widths under it is a black ring.
+                // No collider: the wall's own is solid to the rim, so nothing
+                // can be inside the water to need one. And no shadow — a disc
+                // of water casting one on the stone a hand's breadth under it
+                // is a black ring.
                 NotShadowCaster,
             ));
             let shaft_at = ground + BASIN_HEIGHT + SHAFT_HEIGHT * 0.5 - WATER_BELOW;

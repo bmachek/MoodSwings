@@ -1685,7 +1685,13 @@ fn spawn_building(
     // real lights and moves it to whichever of these are nearest; a light per
     // building would be several hundred in a district, almost all of them
     // behind the camera.
-    if class != FacadeClass::House && !uphill {
+    //
+    // Once per building, for the same reason the sign is: the pool is small
+    // and the six wings of a palace claiming six of its slots is six shops on
+    // the street left dark. And a jog in a wall would put its marker at a
+    // metre and a bit out from its own two-metre middle, which is inside the
+    // mass of the part next to it — a point light in a wall.
+    if class != FacadeClass::House && !uphill && !annex {
         let outward = Quat::from_rotation_y(yaw) * Vec3::Z;
         let position = Vec3::new(center.x, floor, center.y)
             + outward * (throat * 0.5 + 1.1)

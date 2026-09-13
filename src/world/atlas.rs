@@ -640,6 +640,18 @@ pub fn footprints(
         // ordinary house is as often the ridge as the eaves and as often a typo
         // as either — but St. Martin really is a hundred and thirty metres, and
         // clamping that to a Landshut townhouse is how a town loses its tower.
+        // Drawn whether or not it is used, and that is the point.
+        //
+        // The two arms below are fixed answers that need no roll, and
+        // `unwrap_or_else` used to mean they took none — so the *shape* of
+        // this stream depended on how many buildings the map had measured and
+        // on which kinds the bake had named. Putting `Tower` against one name
+        // in `KNOWN_LANDMARKS` removed one draw from the middle of the town
+        // and re-rolled the height and the palette of every building after it
+        // in file order: a one-word change to a register, repainting several
+        // hundred houses in the north. Roll first, then decide, and the stream
+        // depends only on how many buildings there are.
+        let rolled = rng.random_range(low..high);
         let height = first
             .height
             .map(|metres| {
@@ -662,7 +674,7 @@ pub fn footprints(
                 // A gate carries a room over the arch and crenellations over
                 // that. The Ländtor is the one the map measured, at ten.
                 Some(BuildingKind::Gate) => 14.0,
-                _ => rng.random_range(low..high),
+                _ => rolled,
             });
         let palette = rng.random_range(0..super::citygen::PALETTE_SIZE);
         let kind = first.kind.unwrap_or(BuildingKind::Apartments);
