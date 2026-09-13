@@ -201,6 +201,7 @@ pub struct StreetKits<'w> {
     kerbs: Res<'w, crate::world::streetside::StreetsideKit>,
     ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
     plates: Res<'w, crate::world::streetname::StreetNameKit>,
+    roadsigns: Res<'w, crate::world::roadsign::RoadSignKit>,
     signs: Res<'w, crate::world::atlas::Signposts>,
     /// The town's own monuments, and the stone they are cut from.
     monuments: Res<'w, crate::world::monument::TownMonuments>,
@@ -268,6 +269,10 @@ pub fn update_streaming(
     let name_range = config
         .graphics
         .lod_distance(crate::world::streetname::RANGE)
+        .min(400.0);
+    let sign_range = config
+        .graphics
+        .lod_distance(crate::world::roadsign::RANGE)
         .min(400.0);
     let kerb_range = config
         .graphics
@@ -524,6 +529,34 @@ pub fn update_streaming(
                             name_range,
                         );
                     }
+                }
+                // And the law at the mouth of it: one-way arrows, no-entry
+                // discs, the boundary of the Fussgaengerzone. Once per arm
+                // like the name plate, and for the same reason — what a
+                // polyline calls an edge, a street calls a bend.
+                for (node, other) in [(edge.a, edge.b), (edge.b, edge.a)] {
+                    let Some(face) = super::roadsign::at_mouth(&city.graph, node, id) else {
+                        continue;
+                    };
+                    let widest = city
+                        .graph
+                        .node(node)
+                        .edges
+                        .iter()
+                        .map(|arm| city.graph.edge(*arm).width)
+                        .fold(edge.width, f32::max);
+                    super::roadsign::spawn(
+                        &mut commands,
+                        &street.roadsigns,
+                        &street.corridors,
+                        face,
+                        city.graph.node(node).pos,
+                        city.graph.node(other).pos,
+                        edge.width,
+                        widest,
+                        chunk,
+                        sign_range,
+                    );
                 }
                 super::bunting::spawn_edge(
                     &mut commands,

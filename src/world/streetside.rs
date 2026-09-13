@@ -3456,6 +3456,7 @@ mod tests {
                 arterial,
                 surface,
                 length: 20.0,
+                rules: Default::default(),
             };
         // A churchyard path off the market: no kerb.
         assert!(flush(&lane(4.0, false, Surface::Sett)));

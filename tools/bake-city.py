@@ -129,6 +129,39 @@ WIDTH = {
 # and its traffic prefers them.
 ARTERIAL = {"motorway", "trunk", "primary", "secondary"}
 
+# The classes that are a Fussgaengerzone: ground you walk on that happens to be
+# shaped like a street.
+#
+# `pedestrian` and nothing else. A `living_street` is a Spielstrasse -- walking
+# pace, children have right of way, and cars absolutely do drive down it -- and
+# a `footway` never reaches this table because it is not in `WIDTH`.
+WALKING = {"pedestrian"}
+
+
+def oneway_of(tags):
+    """+1 if a way runs the way it is drawn, -1 against it, 0 if it is not one-way.
+
+    The sign is relative to the order of the points, which is the only frame
+    available here and survives the whole pipeline: nothing below reverses a
+    polyline.
+
+    `alternating` and `reversible` come back as nought on purpose. They are one
+    lane that both directions share -- which the game already has, as the
+    single-file runs `ai::giveway` finds by width -- and calling them one-way
+    would close half of them to the traffic that belongs there.
+    """
+    value = (tags.get("oneway") or "").strip().lower()
+    if value in ("yes", "true", "1"):
+        return 1
+    if value in ("-1", "reverse"):
+        return -1
+    if value in ("no", "false", "0", "alternating", "reversible"):
+        return 0
+    # A roundabout is one-way by definition and mappers do not say so twice.
+    if tags.get("junction") in ("roundabout", "circular"):
+        return 1
+    return 0
+
 # Metres of carriageway per marked lane, and the margin either side of them.
 #
 # The class table above is a guess about a road nobody measured; `lanes` is
@@ -1330,6 +1363,14 @@ def merge_parallel(streets):
                     continue
                 taken[j] = True
                 folded += 1
+                # A band is not one-way, whatever its lanes were. Two
+                # carriageways of a dual road fold into one ribbon that
+                # carries both directions, and a one-way street that folded
+                # its own parking lane is a street whose flag the survivor
+                # can no longer speak for -- the partner's sign is relative
+                # to the partner's own points. Nought is the answer that is
+                # never wrong the dangerous way round.
+                leader["oneway"] = 0
                 half = group[j]["width"] * 0.5
                 low = min(low, min(offsets) - half)
                 high = max(high, max(offsets) + half)
@@ -1462,6 +1503,11 @@ def streets_from_overpass(data, lat0, lon0, half):
             "width": width,
             "arterial": kind in ARTERIAL,
             "surface": surface,
+            # Which way the traffic may go, and whether any of it may be here
+            # at all. Both are tags the bake has always had in its hands and
+            # never wrote down -- see `reflag`.
+            "oneway": oneway_of(tags),
+            "pedestrian": kind in WALKING,
             "points": points,
             # Which of those points another way also uses. The merge below must
             # not move one: a shared coordinate is the *only* thing that welds
@@ -2226,7 +2272,9 @@ STREET = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), '
     r"arterial: (?P<arterial>true|false), surface: (?P<surface>\w+), "
     r"points: \[(?P<points>.*)\](?:, band: (?P<band>true|false))?"
-    r"(?:, covered: (?P<covered>true|false))?\),?$"
+    r"(?:, covered: (?P<covered>true|false))?"
+    r"(?:, oneway: (?P<oneway>-?\d+))?"
+    r"(?:, pedestrian: (?P<pedestrian>true|false))?\),?$"
 )
 WATER = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), points: \[(?P<points>.*)\]\),?$'
@@ -2295,6 +2343,11 @@ def read_ron(path):
             "covered": m["covered"] == "true"
             if m["covered"]
             else "tunnel" in m["name"].lower(),
+            # Absent in a file written before `reflag` existed, which is a
+            # town where everything is two-way and nothing is closed to
+            # traffic -- exactly how that file has always been played.
+            "oneway": int(m["oneway"]) if m["oneway"] else 0,
+            "pedestrian": m["pedestrian"] == "true",
         })
     waters = []
     for line in sections.get("waters", []):
@@ -2366,6 +2419,12 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 # computed here and used here and never written down, so the
                 # runtime had to guess it back off the name.
                 + (", covered: true" if street.get("covered") else "")
+                # Which way the traffic may go and whether it may be here at
+                # all. Written only when they are not the default, so a town
+                # with no one-way streets and no Fussgaengerzone reads exactly
+                # as it did before either existed.
+                + (f", oneway: {street['oneway']}" if street.get("oneway") else "")
+                + (", pedestrian: true" if street.get("pedestrian") else "")
                 + "),\n"
             )
         out.write("    ],\n")
@@ -2429,6 +2488,214 @@ BUILDING_LINE = re.compile(
     r"height: (?P<height>Some\([\d.]+\)|None), kind: (?P<kind>Some\(\w+\)|None)"
     r"(?P<tail>, group: .*)$"
 )
+
+
+# How near a baked street has to pass an OSM way before `reflag` believes they
+# are the same street, in metres.
+#
+# Generous, and it has to be: `recentre_bands` moves a band's centreline to sit
+# between its walls, which on the Altstadt is the better part of ten metres off
+# the lane the mappers drew. The name does the real work -- a candidate of the
+# same name is taken over a nearer one of another -- and this is only the reach
+# of the search.
+REFLAG_REACH = 14.0
+# And how near an *unnamed* street has to pass, where there is no name to
+# arbitrate. A third of the reach: at the full one, every unnamed stub beside a
+# Fussgaengerzone would be inside it.
+REFLAG_TIGHT = 5.0
+# How far apart a street is sampled when it is matched, in metres.
+REFLAG_STEP = 4.0
+# How much of a street has to have matched anything at all before its flags are
+# believed, and how much of what matched has to agree.
+REFLAG_COVERED = 0.5
+REFLAG_AGREED = 0.6
+
+
+def reflag(path, roads_path):
+    """Writes the `oneway` and `pedestrian` of an Overpass roads dump onto the
+    streets of a baked atlas.
+
+    Line surgery, like `relabel`, and for the same reason: these are two tags
+    the bake has always had in its hands and never wrote down. A bake with the
+    wider tag set would have put them on exactly these streets; re-running the
+    whole thing to find that out means re-downloading a gigabyte of Overture
+    and a DEM tile and then diffing a town whose every line has moved by a
+    decimetre because the upstream data is a year newer.
+
+    It measures nothing that is written down. Geometry, widths, relief and
+    names are read and not touched; what comes out is a tag per street, and
+    running it twice writes the same tag.
+
+    ## How a baked street is matched back to the ways it was made of
+
+    Not by identity -- the bake keeps no way ids, folds parallel ways together,
+    cuts loops to their spine and splits streets at crossings, so there is no
+    identity to keep. By walking the baked polyline every `REFLAG_STEP` metres
+    and asking which way passes nearest, preferring one of the same name, and
+    letting the samples vote by the length they stand for. A street has to have
+    matched something along most of its run (`REFLAG_COVERED`) and most of what
+    it matched has to agree (`REFLAG_AGREED`) before anything is written -- the
+    failure that matters is closing a real road to traffic because a
+    Fussgaengerzone runs alongside it, and a street that cannot make its mind
+    up stays open and two-way, which is how it is played today.
+
+    The sign of `oneway` is relative to the *baked* street's own point order,
+    which is not always the way's: the matched segment's tangent is compared
+    with the street's and the sign flipped where they oppose.
+    """
+    text = open(path, encoding="utf-8").read()
+    centre = re.search(r"^\s*centre: \(([-\d.]+), ([-\d.]+)\),$", text, re.M)
+    if not centre:
+        sys.exit(f"{path} does not look like a baked atlas")
+    lat0, lon0 = float(centre[1]), float(centre[2])
+
+    # Every way, as metres about the same centre the atlas was baked about.
+    ways = []
+    for element in json.load(open(roads_path, encoding="utf-8")).get("elements", []):
+        if element.get("type") != "way":
+            continue
+        tags = element.get("tags", {}) or {}
+        if tags.get("highway") not in WIDTH:
+            continue
+        points = [project(n["lat"], n["lon"], lat0, lon0)
+                  for n in element.get("geometry", []) or []]
+        if len(points) < 2:
+            continue
+        ways.append({
+            "name": tags.get("name", ""),
+            "points": points,
+            "oneway": oneway_of(tags),
+            "pedestrian": tags.get("highway") in WALKING,
+        })
+
+    # Filed by cell, so a sample tests the handful of segments that could be
+    # under it rather than all six hundred ways.
+    cell_size = 25.0
+    filed = {}
+    for way in ways:
+        for a, b in zip(way["points"], way["points"][1:]):
+            low = (int(math.floor(min(a[0], b[0]) / cell_size)),
+                   int(math.floor(min(a[1], b[1]) / cell_size)))
+            high = (int(math.floor(max(a[0], b[0]) / cell_size)),
+                    int(math.floor(max(a[1], b[1]) / cell_size)))
+            for cx in range(low[0], high[0] + 1):
+                for cz in range(low[1], high[1] + 1):
+                    filed.setdefault((cx, cz), []).append((a, b, way))
+
+    def off_segment(a, b, at):
+        """How far `at` is off the segment `a`-`b`. `nearest_on` next door takes
+        a whole polyline and answers about the nearest of its segments; this
+        wants the one segment, because which segment matched is what carries
+        the direction."""
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        span = dx * dx + dy * dy
+        if span < 1e-9:
+            return None
+        t = max(0.0, min(1.0, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / span))
+        return math.dist(at, (a[0] + dx * t, a[1] + dy * t))
+
+    def nearest(at, name):
+        """The way passing nearest `at`, of the same name if one does."""
+        cx, cz = int(math.floor(at[0] / cell_size)), int(math.floor(at[1] / cell_size))
+        reach = int(math.ceil(REFLAG_REACH / cell_size))
+        best_named, best_any = None, None
+        for dx in range(-reach, reach + 1):
+            for dz in range(-reach, reach + 1):
+                for a, b, way in filed.get((cx + dx, cz + dz), ()):
+                    off = off_segment(a, b, at)
+                    if off is None or off > REFLAG_REACH:
+                        continue
+                    if name and way["name"] == name:
+                        if best_named is None or off < best_named[0]:
+                            best_named = (off, a, b, way)
+                    elif off <= REFLAG_TIGHT and (best_any is None or off < best_any[0]):
+                        best_any = (off, a, b, way)
+        return best_named or best_any
+
+    lines = text.split("\n")
+    inside = False
+    changed = collections.Counter()
+    for index, line in enumerate(lines):
+        if line == "    streets: [":
+            inside = True
+            continue
+        if inside and line == "    ],":
+            inside = False
+            continue
+        if not inside:
+            continue
+        stripped = line.strip()
+        m = STREET.match(stripped)
+        if not m:
+            sys.exit(f"cannot read a street back: {stripped[:80]}")
+        points = [(float(x), float(z)) for x, z in POINT.findall(m["points"])]
+        if len(points) < 2:
+            continue
+        name = m["name"]
+
+        walked = 0.0
+        matched = 0.0
+        walking = 0.0
+        votes = {1: 0.0, -1: 0.0}
+        for a, b in zip(points, points[1:]):
+            span = math.dist(a, b)
+            if span < 1e-6:
+                continue
+            steps = max(1, int(span / REFLAG_STEP))
+            weight = span / steps
+            tangent = ((b[0] - a[0]) / span, (b[1] - a[1]) / span)
+            for step in range(steps):
+                t = (step + 0.5) / steps
+                at = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+                walked += weight
+                hit = nearest(at, name)
+                if hit is None:
+                    continue
+                _, wa, wb, way = hit
+                matched += weight
+                if way["pedestrian"]:
+                    walking += weight
+                if way["oneway"]:
+                    run = math.dist(wa, wb)
+                    if run < 1e-6:
+                        continue
+                    along = ((wb[0] - wa[0]) / run, (wb[1] - wa[1]) / run)
+                    facing = along[0] * tangent[0] + along[1] * tangent[1]
+                    if abs(facing) < 0.2:
+                        # Crossing it, not running along it: a way at right
+                        # angles says nothing about this street's direction.
+                        continue
+                    sign = way["oneway"] * (1 if facing > 0 else -1)
+                    votes[sign] += weight
+
+        pedestrian = False
+        oneway = 0
+        if walked > 0 and matched >= REFLAG_COVERED * walked:
+            pedestrian = walking >= REFLAG_AGREED * matched
+            leading = max(votes, key=lambda s: votes[s])
+            if votes[leading] >= REFLAG_AGREED * matched and votes[leading] > votes[-leading]:
+                oneway = leading
+
+        # Rebuild the tail. The writer puts these two last and nothing else
+        # after them, so cutting from the first of them is cutting exactly
+        # what this wrote the last time it ran.
+        head = re.sub(r"(?:, oneway: -?\d+)?(?:, pedestrian: (?:true|false))?\),?$", "", stripped)
+        tail = (f", oneway: {oneway}" if oneway else "") + (", pedestrian: true" if pedestrian else "")
+        rebuilt = f"        {head}{tail}),"
+        if rebuilt != line:
+            changed["streets"] += 1
+        if oneway:
+            changed["one-way"] += 1
+        if pedestrian:
+            changed["walking"] += 1
+        lines[index] = rebuilt
+
+    open(path, "w", encoding="utf-8").write("\n".join(lines))
+    print(
+        f"{changed['streets']} street lines rewritten: "
+        f"{changed['one-way']} one-way, {changed['walking']} closed to traffic",
+        file=sys.stderr,
+    )
 
 
 def relabel(path):
@@ -2521,6 +2788,11 @@ def main():
     # is answered before the parser that demands a source and a centre.
     if len(sys.argv) == 3 and sys.argv[1] == "--relabel":
         relabel(sys.argv[2])
+        return
+    # And the one that needs the roads dump the atlas was made from, to write
+    # down two tags the bake that made it never kept. See `reflag`.
+    if len(sys.argv) == 4 and sys.argv[1] == "--reflag":
+        reflag(sys.argv[2], sys.argv[3])
         return
     ap = argparse.ArgumentParser(description="Bake a town's map data into an atlas the game can build.")
     ap.add_argument("source", help="an Overpass roads dump, or with --from-ron a baked atlas")

@@ -26,6 +26,7 @@ pub mod props;
 pub mod river;
 pub mod road;
 pub mod roadgraph;
+pub mod roadsign;
 pub mod roof;
 pub mod rooftop;
 pub mod shell;
@@ -186,6 +187,14 @@ fn generate_city(
 
     commands.insert_resource(streetname::build_assets(
         &signs.names,
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
+    // And the law under the name: who may drive here and which way. Beside
+    // the plates because it stands beside them on the same post-height and
+    // the same corners — see `world::roadsign`.
+    commands.insert_resource(roadsign::build_assets(
         &mut meshes,
         &mut materials,
         &mut images,

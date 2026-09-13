@@ -34,6 +34,63 @@ pub struct RoadEdge {
     /// asphalt here; the generator lays tarmac everywhere by construction.
     pub surface: super::atlas::Surface,
     pub length: f32,
+    /// What the traffic law says about it. Like `surface`, only a town read
+    /// off a map has anything here: an invented city is two-way throughout
+    /// and has no Fussgaengerzone, because nobody invented one.
+    pub rules: Rules,
+}
+
+/// Which way a street may be driven.
+///
+/// Named against the edge's own `a`-to-`b`, which is the order the atlas laid
+/// its points down in, because that is the only frame both ends of the edge
+/// agree on. A compass direction would have to be recomputed every time the
+/// graph is walked from the other end.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Oneway {
+    #[default]
+    Both,
+    /// Only `a` to `b`.
+    Along,
+    /// Only `b` to `a`.
+    Against,
+}
+
+/// What the law says about one street.
+///
+/// Two facts the map knows and the game never asked for: nine per cent of
+/// Landshut's road length is one-way and nearly five kilometres of it is a
+/// Fussgaengerzone — including the Altstadt, the market street the whole
+/// postcard is of, down which this game has been driving traffic.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rules {
+    pub oneway: Oneway,
+    /// A Fussgaengerzone: paved like a street, and closed to it.
+    pub pedestrian: bool,
+}
+
+impl RoadEdge {
+    /// May a car take this edge, starting from the end at `from`?
+    ///
+    /// Both halves of the question in one place, because every caller that
+    /// asks one asks the other: a street closed to traffic is closed to it
+    /// whichever end you arrive at.
+    pub fn drivable_from(&self, from: NodeId) -> bool {
+        if self.rules.pedestrian {
+            return false;
+        }
+        match self.rules.oneway {
+            Oneway::Both => true,
+            Oneway::Along => from == self.a,
+            Oneway::Against => from == self.b,
+        }
+    }
+
+    /// May a car stand parked along it? A Fussgaengerzone is not a car park,
+    /// whatever the delivery vans think — see `vehicle::delivery`.
+    pub fn parkable(&self) -> bool {
+        !self.rules.pedestrian
+    }
 }
 
 /// The movement a vehicle makes at a junction. Kept in the road module so
@@ -152,6 +209,10 @@ impl RoadGraph {
         id
     }
 
+    /// An ordinary street: two-way, and cars may use it.
+    ///
+    /// Which is every street a generator builds, so the fifteen places that
+    /// raise one keep the shorter call.
     pub fn connect(
         &mut self,
         a: NodeId,
@@ -159,6 +220,19 @@ impl RoadGraph {
         width: f32,
         arterial: bool,
         surface: super::atlas::Surface,
+    ) -> EdgeId {
+        self.connect_under(a, b, width, arterial, surface, Rules::default())
+    }
+
+    /// A street with the map's own rules on it.
+    pub fn connect_under(
+        &mut self,
+        a: NodeId,
+        b: NodeId,
+        width: f32,
+        arterial: bool,
+        surface: super::atlas::Surface,
+        rules: Rules,
     ) -> EdgeId {
         let length = self.node(a).pos.distance(self.node(b).pos);
         let id = EdgeId(self.edges.len() as u32);
@@ -169,6 +243,7 @@ impl RoadGraph {
             arterial,
             surface,
             length,
+            rules,
         });
         self.nodes[a.0 as usize].edges.push(id);
         self.nodes[b.0 as usize].edges.push(id);

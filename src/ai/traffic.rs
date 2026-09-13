@@ -150,6 +150,24 @@ fn choose_exit(city: &City, from: NodeId, at: NodeId, rng: &mut ChaCha8Rng) -> N
         .graph
         .neighbors(at)
         .filter(|(node, _)| *node != from)
+        // A Fussgaengerzone is not a rat run and a one-way street has one
+        // way. Unlike the narrow-street rule below this is a ban rather than
+        // a penalty, because that is what the two signs mean — and unlike
+        // narrowness, neither of them shatters the drivable network: a town
+        // plans its one-way cells and its pedestrian quarter to be driven
+        // round, which is what they are for.
+        .filter(|(_, edge)| city.graph.edge(*edge).drivable_from(at))
+        // And not into one it cannot come out of. Twelve of Landshut's
+        // fifteen hundred junctions are a one-way street clipped at the edge
+        // of the square: legal to enter, nothing legal beyond. Without this a
+        // driver reaching one turns round — the fallback every cul-de-sac has
+        // always had — and drives back up the one-way street the wrong way,
+        // which is the one thing the sign it just passed was about.
+        .filter(|(node, _)| {
+            city.graph
+                .neighbors(*node)
+                .any(|(_, onward)| city.graph.edge(onward).drivable_from(*node))
+        })
         .map(|(node, edge)| {
             let direction = (city.graph.node(node).pos - here).normalize_or_zero();
             // Straight on is worth the most, and a street two cars cannot pass
@@ -168,7 +186,10 @@ fn choose_exit(city: &City, from: NodeId, at: NodeId, rng: &mut ChaCha8Rng) -> N
         .collect();
 
     if exits.is_empty() {
-        // Dead end: the only way out is back.
+        // Dead end, or a car that is somehow standing where it may not be:
+        // the only way out is back. Turning round in a one-way street is
+        // against the law and being stuck in one forever is against the
+        // point, and this is the same answer a cul-de-sac has always had.
         return from;
     }
 
@@ -250,7 +271,12 @@ fn maintain_population(
             // street they cannot pass on are a deadlock nobody asked for and
             // nobody granted: `ai::giveway` arbitrates who goes *in*, and has
             // nothing to say to two cars that were already there.
-            !super::steering::single_file(edge.width)
+            // Nor in a street closed to traffic. A car faded in on the
+            // Altstadt has broken the rule before it has moved, and
+            // `choose_exit` would then have to drive it out of a place it
+            // may not have been.
+            !edge.rules.pedestrian
+                && !super::steering::single_file(edge.width)
                 && (config.traffic.spawn_min..config.traffic.spawn_max)
                     .contains(&midpoint.distance(focus))
         })
@@ -273,11 +299,19 @@ fn maintain_population(
         let a = city.graph.node(edge.a).pos;
         let b = city.graph.node(edge.b).pos;
 
-        // Randomly pick a direction of travel along this segment.
+        // Randomly pick a direction of travel along this segment — out of
+        // the ones the street allows. A one-way street has one, and a car
+        // faded in facing the wrong way down it is the worst of both: it is
+        // breaking the rule *and* it is about to meet everybody who is not.
         let (from, to, start, end) = if rng.0.random_range(0.0..1.0) < 0.5 {
             (edge.a, edge.b, a, b)
         } else {
             (edge.b, edge.a, b, a)
+        };
+        let (from, to, start, end) = if edge.drivable_from(from) {
+            (from, to, start, end)
+        } else {
+            (to, from, end, start)
         };
         let Ok(direction) = Dir2::new(end - start) else {
             continue;

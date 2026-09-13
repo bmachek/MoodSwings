@@ -195,6 +195,14 @@ pub struct Streets {
     pub widest: f32,
     /// Kilometres per [`Surface`], by `Surface::index`.
     pub surfaces: [f32; 4],
+    /// What the map says about who may use them: edges and kilometres that
+    /// are one-way, and that are closed to traffic altogether.
+    ///
+    /// Both are nought in an invented city by construction, which is the
+    /// point of measuring them — a generated town has no Fussgaengerzone
+    /// because nobody drew one.
+    pub oneway: (usize, f32),
+    pub walking: (usize, f32),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -460,6 +468,14 @@ fn measure_streets(layout: &CityLayout, town: Option<&Atlas>) -> Streets {
         bin.1 += km;
         streets.widest = streets.widest.max(edge.width);
         streets.surfaces[edge.surface.index()] += km;
+        if edge.rules.oneway != crate::world::roadgraph::Oneway::Both {
+            streets.oneway.0 += 1;
+            streets.oneway.1 += km;
+        }
+        if edge.rules.pedestrian {
+            streets.walking.0 += 1;
+            streets.walking.1 += km;
+        }
     }
 
     // What the layout threw away, counted again by its own rule: a run of
@@ -1064,6 +1080,11 @@ impl Survey {
             );
         }
         let _ = writeln!(out, "{line}   (by length)");
+        let _ = writeln!(
+            out,
+            "           law        {:>4} edges one-way ({:.2} km)                {:>4} edges closed to traffic ({:.2} km)",
+            s.oneway.0, s.oneway.1, s.walking.0, s.walking.1
+        );
 
         let b = &self.buildings;
         if b.generated > 0 {
