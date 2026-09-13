@@ -221,10 +221,25 @@ cargo run --features raytracing
 ## Development
 
 ```sh
+tools/dev-setup.sh                          # what a fresh clone is missing, and what it can fix
 cargo test                                  # 402 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
+
+`tools/dev-setup.sh` exists because four setup failures here are silent: a rustc
+older than the `rust-version` in `Cargo.toml`, the ALSA and libudev headers Bevy
+links on Linux, a sound bank that has not been fetched (every sound then plays
+as a short silence with a warning), and no Vulkan adapter at all — which is the
+normal state of a container, and the one fact that decides whether any of the
+capture battery below can run. `cargo test`, `--survey` and `--audition` never
+open a window and work anywhere.
+
+Each instrument in this section is also a subagent in `.claude/agents/`, with
+the protocol that makes its output trustworthy written into it — the settled
+`--frames 200` window for a frame time, the pinned `--hour` for a pair of
+shots, the before *and* after survey. `CLAUDE.md` lists the roster; `/ship` runs
+the three checks every change owes and ends with what is still unverified.
 
 ### Screenshots without a human
 

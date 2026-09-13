@@ -1,0 +1,72 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo run -- --survey:*)",
+      "Bash(cargo run -- --audition:*)",
+      "Bash(cargo run -- --screenshot:*)",
+      "Bash(cargo run --release -- --screenshot:*)",
+      "Bash(cargo run --release -- --patrol:*)",
+      "Bash(cargo run --release -- --survey:*)",
+      "Bash(tools/shoot.sh:*)",
+      "Bash(tools/dev-setup.sh:*)",
+      "Bash(tools/check-docs.sh:*)",
+      "Bash(python3 tools/check-multiplayer.py:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash list:*)",
+      "Bash(rg:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(sed -n:*)",
+      "Bash(awk:*)",
+      "Bash(diff:*)",
+      "Bash(pkg-config:*)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)"
+    ]
+  },
+  "env": {
+    "CARGO_TERM_COLOR": "never",
+    "RUST_BACKTRACE": "1"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/tools/dev-setup.sh --hook",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/tools/check-docs.sh --hook",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

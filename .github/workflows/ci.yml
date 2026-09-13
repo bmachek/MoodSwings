@@ -23,6 +23,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      # CLAUDE.md and AGENTS.md are twins, like the two fetch scripts. They had
+      # drifted forty-two lines apart before anything checked. Needs no
+      # toolchain, so it runs first and fails in seconds.
+      - run: tools/check-docs.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

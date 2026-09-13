@@ -28,8 +28,18 @@ shots/*/
 /shots/audio/
 __pycache__/
 
-# Claude Code worktrees and session files
-/.claude/
+# Claude Code. The agent configuration is part of the project and is tracked —
+# the subagent roster, the slash commands, the permission allow-list and the
+# hooks are the same kind of thing as tools/shoot.sh, and an agent that has to
+# rediscover the traps every session is an agent that walks into them. What a
+# session writes for *itself* — worktrees, transcripts, local overrides — is
+# not.
+/.claude/*
+!/.claude/agents/
+!/.claude/commands/
+!/.claude/skills/
+!/.claude/settings.json
+/.claude/settings.local.json
 
 # Local multiplayer server configuration
 .env

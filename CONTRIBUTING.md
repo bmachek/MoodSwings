@@ -11,9 +11,17 @@ By contributing you agree that your contribution is licensed under the
 ```sh
 git clone https://github.com/bmachek/MoodSwings
 cd MoodSwings
+tools/dev-setup.sh          # checks what a clone needs; fixes what it can
 tools/fetch-materials.sh    # or tools/fetch-materials.bat on Windows
 cargo run
 ```
+
+`tools/dev-setup.sh` is the answer to four setup failures that are all silent:
+a rustc older than the `rust-version` in `Cargo.toml` (one error naming eleven
+packages, which reads like a dependency problem and is not), the ALSA and
+libudev headers Bevy links on Linux, the sound bank below, and — on anything
+without a graphics card — the absence of any Vulkan adapter for the capture
+harness to render into. It reports what it cannot fix and prints the command.
 
 `tools/fetch-materials.sh` fetches two things. The scanned PBR material sets
 are an **optional** upgrade — `world::texture` paints a procedural stand-in for
@@ -35,8 +43,15 @@ screenshots — see below.
 ## How this codebase works
 
 `CLAUDE.md` is the short architectural tour: the module table, the schedule,
-the four traps that have bitten more than once. Read it before a first change.
-The rest of this page is the etiquette.
+the traps that have bitten more than once. Read it before a first change. The
+rest of this page is the etiquette.
+
+`AGENTS.md` is its twin — the same tour, addressed to a different agent — and
+the two must stay identical from line 4 down, the way the two fetch scripts must
+carry the same lists. `tools/check-docs.sh` reports the drift and
+`tools/check-docs.sh --fix` rewrites `AGENTS.md` from `CLAUDE.md`, which is the
+source because it is the copy that gets edited in passing. They had drifted by
+forty-two lines before there was a script to say so.
 
 ### Comments explain *why*
 
