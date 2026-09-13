@@ -1631,6 +1631,55 @@ pub(crate) fn district_at(at: Vec2, half_extent: f32, arterial: bool) -> Distric
     }
 }
 
+/// Is something `radius` across, standing at `at`, clear of every building?
+///
+/// The building's *rotated* box, which is why this lives here rather than at
+/// the caller: an atlas building's `footprint` is measured in its own street's
+/// frame and stands at whatever angle that street runs at, so an axis-aligned
+/// test against the rectangle is a test against a rectangle nothing is.
+///
+/// The broad phase makes no assumption about how a block's `area` was built,
+/// and that is deliberate. Two of the three places that build one circumscribe
+/// it; the third — the back-yard sheds in [`lots`] — stores the footprint
+/// itself, which for a shed standing at its street's angle is a box its own
+/// walls reach outside of, and which is also the only thing that tells a shed
+/// from a terrace house once they are blocks (`core::survey` reads exactly
+/// that). So the reject grows `area` by its own half-diagonal, which bounds
+/// anything that can be turned inside it however it was written down.
+///
+/// Asked by `world::monument`, which has to stand a fountain on a pavement
+/// without standing it in somebody's front room.
+pub fn room_for(layout: &CityLayout, at: Vec2, radius: f32) -> bool {
+    let thing = Oblong {
+        centre: at,
+        axis: Vec2::X,
+        half: Vec2::splat(radius),
+    };
+    !layout.blocks.iter().any(|block| {
+        let reach = radius + block.area.size().length() * 0.5;
+        let near = Rect::new(
+            block.area.min - Vec2::splat(reach),
+            block.area.max + Vec2::splat(reach),
+        );
+        let inside =
+            at.x >= near.min.x && at.x <= near.max.x && at.y >= near.min.y && at.y <= near.max.y;
+        inside
+            && block.buildings.iter().any(|building| {
+                let yaw = building.facing.unwrap_or(0.0);
+                // The convention the whole of `buildings` reads: a yaw of
+                // theta sends the building's local +Z outward across the
+                // pavement, so its frontage runs along +X turned by theta.
+                let axis = Vec2::new(yaw.cos(), -yaw.sin());
+                Oblong {
+                    centre: building.footprint.center(),
+                    axis,
+                    half: building.footprint.size() * 0.5,
+                }
+                .clashes_with(&thing, 0.0)
+            })
+    })
+}
+
 /// A rectangle with a direction: a building's plot, or a road's corridor.
 ///
 /// Both are the same shape and neither is axis-aligned, which is the whole
@@ -1989,6 +2038,18 @@ pub fn lots(
         if kept.is_empty() {
             continue;
         }
+        // The building it is now, not the building it was.
+        //
+        // Parts are dropped one at a time, and for seventeen of Landshut's
+        // buildings the one that goes is the *first* — the largest part, the
+        // one the bake emitted as the building and everything a building has
+        // exactly one of hangs off. What is left standing is its wings, and
+        // wings carry `annex`, so the survivor had no door, no sign, no room
+        // behind the door and nowhere to hang its own name. Whatever is left
+        // of a building, the largest piece of it is the building.
+        if kept.iter().all(|building| building.annex) {
+            kept[0].annex = false;
+        }
         block.buildings = kept;
         blocks.push(block);
         mapped += 1;
@@ -2098,6 +2159,8 @@ pub fn lots(
                             kind: kind_for(&mut rng, district, terrace.arterial),
                             roof: None,
                             ground: 0.0,
+                            annex: false,
+                            name: None,
                         }],
                         vacants: Vec::new(),
                         arterial: [terrace.arterial; 4],
@@ -2160,6 +2223,8 @@ pub fn lots(
                                 kind: BuildingKind::Apartments,
                                 roof: None,
                                 ground: 0.0,
+                                annex: false,
+                                name: None,
                             }],
                             vacants: Vec::new(),
                             arterial: [false; 4],
@@ -2681,6 +2746,49 @@ fn kind_for(rng: &mut ChaCha8Rng, district: District, arterial: bool) -> Buildin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whatever survives of a mapped building, one part of it is the building.
+    ///
+    /// Parts are dropped one at a time, and the one that goes is often the
+    /// first — the largest, the one the bake emitted as *the* building. What is
+    /// left is its wings, and a wing is an `annex`: no door, no sign, no room
+    /// behind the door, nowhere to hang the name the map gave it. Seventeen of
+    /// Landshut's buildings were standing like that, which is a shop with no
+    /// sign on it and a museum nobody can walk into.
+    #[test]
+    fn a_building_that_loses_its_largest_part_is_still_a_building() {
+        let path = crate::core::assets::root().join("cities/landshut.ron");
+        let town = super::super::atlas::load("landshut");
+        assert!(
+            town.is_some() || !path.exists(),
+            "{} is on disk and does not load as an atlas",
+            path.display()
+        );
+        let Some(town) = town else { return };
+
+        let (layout, _) = super::super::atlas::layout(&town, 1, 1_000.0);
+        let (real, _) = super::super::atlas::footprints(
+            &town,
+            &layout.graph,
+            1,
+            1_000.0,
+            CityStyle::Landshuepf,
+        );
+        let before = real.len();
+        let (blocks, _) = lots(&layout, 1, CityStyle::Landshuepf, real);
+        assert!(
+            before > 2_000 && blocks.len() > before,
+            "{blocks:?} is not a town"
+        );
+
+        for block in &blocks {
+            assert!(
+                block.buildings.iter().any(|building| !building.annex),
+                "a building at {:?} is all wings and no building",
+                block.area.center()
+            );
+        }
+    }
 
     /// A fan of arms leaving one node, sorted the way [`fans`] sorts them.
     fn fan_of(arms: &[(f32, f32)]) -> Vec<Arm> {

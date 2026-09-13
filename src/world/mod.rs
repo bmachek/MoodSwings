@@ -1,6 +1,7 @@
 //! The world: procedural city, physics, streaming, and the day/night cycle.
 
 pub mod atlas;
+pub mod bridge;
 pub mod buildings;
 pub mod bunting;
 pub mod church;
@@ -19,6 +20,7 @@ pub mod lots;
 pub mod markings;
 pub mod material;
 pub mod mayhem;
+pub mod monument;
 pub mod plume;
 pub mod props;
 pub mod river;
@@ -142,11 +144,15 @@ fn generate_city(
     // fills it is not blocks — a real block is not a rectangle — but frontages
     // marched down each side of each street; see `world::streetside`.
     let mut frontage = streetside::Frontage::default();
+    // What the map calls the buildings it names — empty for a generated city,
+    // where the plaques are the joke ones. Spent by `signage::build_assets`
+    // further down, which paints one board per name.
+    let mut landmarks = atlas::Landmarks::default();
     if layout.blocks.is_empty() {
         // What the map actually knows: the town's own buildings, where they
         // really stand and at the angle they really stand at. The marcher then
         // fills the rest — see `streetside::lots`.
-        let real = town
+        let (real, named) = town
             .as_ref()
             .map(|atlas| {
                 atlas::footprints(
@@ -158,6 +164,7 @@ fn generate_city(
                 )
             })
             .unwrap_or_default();
+        landmarks = named;
         let (blocks, holes) = streetside::lots(&layout, config.world_seed, config.city, real);
         layout.blocks = blocks;
         frontage = holes;
@@ -183,10 +190,20 @@ fn generate_city(
         &mut materials,
         &mut images,
     ));
-    commands.insert_resource(signs);
-
+    // Where a street crosses a river. Worked out once, because three things
+    // need the same answer: the bridge that stands there, the bank wall that
+    // must not be laid across it, and the water's trampoline, which must not
+    // be under the asphalt a car is driving on.
+    let bridges = bridge::crossings(&layout);
     river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
-    river::spawn_waters(&mut commands, &layout, &mut meshes, &mut materials);
+    river::spawn_waters(
+        &mut commands,
+        &layout,
+        &bridges,
+        &mut meshes,
+        &mut materials,
+    );
+    bridge::spawn(&mut commands, &bridges, &mut meshes, &mut materials);
 
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
@@ -194,7 +211,18 @@ fn generate_city(
     // something upright beside a street. Built here rather than inside each of
     // them because it is a fact about the whole layout and it costs a pass over
     // the graph.
-    commands.insert_resource(streetside::Corridors::build(&city));
+    let corridors = streetside::Corridors::build(&city);
+    // What the town keeps on its squares. Resolved here, once, because it
+    // needs three things that are only all in scope at this line — the street
+    // names, the whole layout and the corridors — and because a monument that
+    // moved when its chunk was walked back into would be a monument on wheels.
+    // A generated city gets an empty list: the register is about real places.
+    commands.insert_resource(match town.as_ref() {
+        Some(atlas) => monument::place(&atlas.name, &city, &signs, &corridors),
+        None => monument::TownMonuments::default(),
+    });
+    commands.insert_resource(signs);
+    commands.insert_resource(corridors);
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
@@ -218,9 +246,15 @@ fn generate_city(
         &mut images,
         &mut materials,
         &mut meshes,
+        &landmarks,
     ));
     commands.insert_resource(lots::build_assets(&mut meshes, &mut materials, &mut images));
     commands.insert_resource(statues::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
+    commands.insert_resource(monument::build_assets(
         &mut meshes,
         &mut materials,
         &mut images,

@@ -120,6 +120,20 @@ pub const PAINT_SLOTS: u32 = 5;
 const FOOTWAY_STEP: u32 = 4;
 pub const FOOTWAY_SLOTS: u32 = 6;
 
+/// Bare earth where a footway has been lifted — `world::worksite`.
+///
+/// Over the pavement rather than under it, and that is the whole of what a dug
+/// street looks like from three metres: the paving is not cut into, it is
+/// taken up and stacked on edge round the rim, and what shows is the ground it
+/// was bedded on. So this is a surface laid *on* the footway and it has to
+/// clear every slot the footway has — twelve steps against the footway's four
+/// plus six, which leaves two clear.
+const DIGGING_STEP: u32 = 12;
+pub const DIGGING_SLOTS: u32 = 3;
+
+// Every band in the stack measured off the kerb has to clear the one under it.
+const _: () = assert!(DIGGING_STEP > FOOTWAY_STEP + FOOTWAY_SLOTS);
+
 pub const WATER: f32 = WATER_STEP as f32 * STEP;
 pub const FORECOURT: f32 = FORECOURT_STEP as f32 * STEP;
 pub const YARD: f32 = YARD_STEP as f32 * STEP;
@@ -127,6 +141,7 @@ pub const ROAD_BED: f32 = ROAD_STEP as f32 * STEP;
 pub const JUNCTION: f32 = JUNCTION_STEP as f32 * STEP;
 pub const PAINT: f32 = PAINT_STEP as f32 * STEP;
 pub const FOOTWAY: f32 = super::buildings::SIDEWALK_HEIGHT + FOOTWAY_STEP as f32 * STEP;
+pub const DIGGING: f32 = super::buildings::SIDEWALK_HEIGHT + DIGGING_STEP as f32 * STEP;
 
 /// Which slot of a layer something takes, so two of the same kind that overlap
 /// cannot be laid at the same height.

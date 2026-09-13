@@ -50,6 +50,9 @@ const PIT: Vec2 = Vec2::new(2.6, 1.9);
 /// How high the slabs stacked on edge round the dug patch stand. Low: they are
 /// paving, not a fence.
 const RIM: f32 = 0.10;
+/// How thick the slab of bare earth is drawn. Only its top face is ever seen —
+/// `world::layer` decides where that goes — and the rest is under the paving.
+const EARTH: f32 = 0.016;
 
 /// Barrier proportions.
 const PANEL: Vec3 = Vec3::new(1.85, 0.44, 0.055);
@@ -530,9 +533,13 @@ pub fn spawn_edge(
         ChunkOf(chunk),
         Mesh3d(kit.cube.clone()),
         MeshMaterial3d(kit.dark.clone()),
-        Transform::from_xyz(middle.x, ground + 0.008, middle.y)
+        // Its *top* on the digging layer, not its middle at a number picked
+        // beside the spawner: this is a flat surface over the pavement and
+        // `world::layer` owns where those go. The box is sunk below it so
+        // nothing shows a seam at the rim.
+        Transform::from_xyz(middle.x, super::layer::DIGGING - EARTH * 0.5, middle.y)
             .with_rotation(Quat::from_rotation_y(facing))
-            .with_scale(Vec3::new(PIT.x, 0.016, PIT.y)),
+            .with_scale(Vec3::new(PIT.x, EARTH, PIT.y)),
         visibility.clone(),
     ));
     for (a, d, turn) in [

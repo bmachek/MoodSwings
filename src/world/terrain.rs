@@ -697,6 +697,8 @@ mod tests {
                 kind: citygen::BuildingKind::TownHall,
                 roof: None,
                 ground: 40.0,
+                annex: false,
+                name: None,
             }],
             vacants: Vec::new(),
             arterial: [false; 4],
@@ -816,7 +818,7 @@ mod tests {
             return;
         };
         let (mut layout, _) = crate::world::atlas::layout(&town, 1, HALF_EXTENT);
-        let real = crate::world::atlas::footprints(
+        let (real, _) = crate::world::atlas::footprints(
             &town,
             &layout.graph,
             1,

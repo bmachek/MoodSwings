@@ -399,26 +399,47 @@ const CELL_ASPECT: f32 = 0.95;
 /// Counted in characters, not bytes — an umlaut is two bytes and one cell,
 /// and a board sized by bytes would carry a blank cell for every one.
 fn board_size(plaque: &Plaque) -> Vec2 {
-    let title_cells = (plaque.title.chars().count() + 2) as f32;
+    measure(plaque.title, plaque.subline, plaque.letter)
+}
+
+/// The same, for a board whose words are not in a `Plaque` because they are
+/// not `'static`: a landmark's own name, read off the map at startup.
+fn measure(title: &str, subline: Option<&str>, letter: f32) -> Vec2 {
+    let title_cells = (title.chars().count() + 2) as f32;
     // Subline letters are painted at half size, so two of them fit a cell.
-    let sub_cells = plaque
-        .subline
+    let sub_cells = subline
         .map(|s| (s.chars().count() + 2) as f32 * 0.5)
         .unwrap_or(0.0);
     let cells = title_cells.max(sub_cells);
-    let height = plaque.letter * if plaque.subline.is_some() { 2.1 } else { 1.6 };
-    Vec2::new(cells * plaque.letter * CELL_ASPECT, height)
+    let height = letter * if subline.is_some() { 2.1 } else { 1.6 };
+    Vec2::new(cells * letter * CELL_ASPECT, height)
 }
 
 /// Paints one board.
 fn board_texture(plaque: &Plaque) -> Image {
-    let size = board_size(plaque);
+    paint_board(
+        plaque.title,
+        plaque.subline,
+        plaque.letter,
+        plaque.ink,
+        plaque.field,
+    )
+}
+
+/// Paints one board out of loose words rather than out of a `Plaque`.
+fn paint_board(
+    title: &str,
+    subline: Option<&str>,
+    letter: f32,
+    ink: [u8; 4],
+    field: [u8; 4],
+) -> Image {
+    let size = measure(title, subline, letter);
     // Pixels per metre, capped so the police novel stays a sane texture.
     let width = ((size.x * 56.0) as u32).clamp(64, 2048);
     let height = ((size.y * 56.0) as u32).clamp(32, 512);
-    let title = encode(plaque.title);
-    let subline = plaque.subline.map(encode);
-    let (ink, field) = (plaque.ink, plaque.field);
+    let title = encode(title);
+    let subline = subline.map(encode);
 
     painted_rect(width, height, TextureFormat::Rgba8UnormSrgb, move |u, v| {
         // A pressed rim, same trick as the plates: it is what you see of a
@@ -1057,6 +1078,9 @@ pub struct SignKit {
     /// The poster mesh and the run of poster materials.
     poster: Handle<Mesh>,
     adverts: Vec<Handle<StandardMaterial>>,
+    /// One board per name the map puts on a building in this town, indexed
+    /// the way `atlas::Landmarks` indexes them. Empty for a generated city.
+    landmarks: Vec<(Handle<Mesh>, Handle<StandardMaterial>, Vec2)>,
 }
 
 impl SignKit {
@@ -1094,6 +1118,18 @@ impl SignKit {
         (mesh, material, *size)
     }
 
+    /// The board a named building hangs: its own name, not its kind's joke.
+    ///
+    /// `None` where the index is out of range, which is the honest answer for
+    /// a save or an atlas that names more buildings than the kit was built
+    /// for — the building falls back to its kind's plaque, which is what it
+    /// wore before any of this.
+    pub fn landmark(&self, name: u16) -> Option<(&Handle<Mesh>, &Handle<StandardMaterial>, Vec2)> {
+        self.landmarks
+            .get(name as usize)
+            .map(|(mesh, material, size)| (mesh, material, *size))
+    }
+
     /// The painted ground storey for a civic kind, as a unit quad and its
     /// material — the caller stretches it across the front face.
     pub fn frontage(
@@ -1107,10 +1143,109 @@ impl SignKit {
     }
 }
 
+/// How wide a landmark's own board is drawn, in metres, before `hang_sign`
+/// scales it to the wall it is bolted to.
+///
+/// A fixed plate, like the street-name plates on the corners and for the same
+/// reason: the names are not the same length and a real sign does not change
+/// size for them. Sankt Jodok is written in fat letters and Sozialgericht
+/// Landshut, Arbeitsgericht Regensburg in thin ones, on the same board.
+const NAME_BOARD: f32 = 3.4;
+/// And the letters may not shrink past this, or grow past it either. Below the
+/// lower bound a name is a smudge at any distance worth drawing it from; above
+/// the upper one a four-letter name is a shopfront.
+///
+/// The lower bound is what actually decides how wide the longest boards come
+/// out: a name too long to fit [`NAME_BOARD`] at this letter size widens its
+/// plate rather than shrinking its letters below it, because a plate nobody
+/// can read is a plate that need not have been painted. [`NAME_WIDEST`] is how
+/// far that is allowed to go.
+const NAME_LETTER: (f32, f32) = (0.17, 0.58);
+/// The widest a name board grows before it stops being a plate.
+const NAME_WIDEST: f32 = NAME_BOARD * 1.6;
+
+/// The colours a named building's board takes: its own kind's, so a church's
+/// name is on the dark board the church plaques already use and a museum's on
+/// the sand one, and the civic cream for the kinds that hang no board at all.
+///
+/// That last case is most of the point. A tower, a gate, a bank and an old
+/// post office are `Apartments`, `Offices`, `Tower` and `Gate` to this module
+/// and it has nothing to say about any of them — deliberately, because in an
+/// invented city they have no names. In a real one they do.
+fn name_colours(kind: BuildingKind) -> ([u8; 4], [u8; 4]) {
+    plaques_for(kind)
+        .first()
+        .map(|plaque| (plaque.ink, plaque.field))
+        .unwrap_or(([42, 38, 32, 255], [212, 196, 166, 255]))
+}
+
+/// How many characters fit on one line of a name board before it is worth
+/// breaking onto two.
+///
+/// Twenty-two: at [`NAME_BOARD`] wide that is a letter a hand's width tall,
+/// which is the smallest a name is worth painting at. Landshut has four names
+/// past it and one of them — Sozialgericht Landshut, Arbeitsgericht
+/// Regensburg — is forty-eight characters, which on one line is a board eight
+/// metres wide. That is a hoarding, not a plate.
+const NAME_ONE_LINE: usize = 22;
+
+/// Breaks a long name into the two lines a sign painter would break it into:
+/// at the comma if there is one, and otherwise at the space nearest the
+/// middle. A name that fits on one line is left on one line.
+fn break_name(title: &str) -> (&str, Option<&str>) {
+    if title.chars().count() <= NAME_ONE_LINE {
+        return (title, None);
+    }
+    // A comma is the author of the name telling you where it breaks.
+    if let Some(comma) = title.find(',') {
+        let (head, tail) = title.split_at(comma);
+        return (head, Some(tail[1..].trim_start()));
+    }
+    let middle = title.len() / 2;
+    let at = title
+        .char_indices()
+        .filter(|(_, c)| *c == ' ' || *c == '-')
+        .min_by_key(|(index, _)| index.abs_diff(middle))
+        .map(|(index, _)| index);
+    match at {
+        // A hyphen stays on the line it breaks after; a space does not.
+        Some(index) if title.as_bytes()[index] == b'-' => {
+            let (head, tail) = title.split_at(index + 1);
+            (head, Some(tail))
+        }
+        Some(index) => {
+            let (head, tail) = title.split_at(index);
+            (head, Some(tail.trim_start()))
+        }
+        None => (title, None),
+    }
+}
+
+/// Paints one landmark's board: its name, at whatever letter size makes it
+/// [`NAME_BOARD`] wide.
+fn name_board(name: &str, kind: BuildingKind) -> (Vec2, Image) {
+    // Upper case, like every other board here. `to_uppercase` turns ß into SS,
+    // which is what a sign painter does too.
+    let spelt = name.to_uppercase();
+    let (title, subline) = break_name(&spelt);
+    // The wider of the two lines decides the letter size, counting the
+    // subline the way `measure` paints it — at half size, so two of its
+    // characters take one cell.
+    let cells = ((title.chars().count() + 2) as f32)
+        .max(subline.map_or(0.0, |s| (s.chars().count() + 2) as f32 * 0.5));
+    let letter = (NAME_BOARD / (cells * CELL_ASPECT)).clamp(NAME_LETTER.0, NAME_LETTER.1);
+    let (ink, field) = name_colours(kind);
+    (
+        measure(title, subline, letter),
+        paint_board(title, subline, letter, ink, field),
+    )
+}
+
 pub fn build_assets(
     images: &mut Assets<Image>,
     materials: &mut Assets<StandardMaterial>,
     meshes: &mut Assets<Mesh>,
+    landmarks: &crate::world::atlas::Landmarks,
 ) -> SignKit {
     let boards = SIGNED
         .iter()
@@ -1162,6 +1297,28 @@ pub fn build_assets(
         })
         .collect();
 
+    // One board per named building in the town — eighty-six for Landshut,
+    // none for a generated city. Painted here rather than on demand because a
+    // texture built inside the streaming path is a texture built afresh every
+    // time the chunk comes back, which is the documented leak.
+    let named = landmarks
+        .names
+        .iter()
+        .zip(landmarks.kinds.iter())
+        .map(|(name, &kind)| {
+            let (size, image) = name_board(name, kind);
+            (
+                meshes.add(Rectangle::new(size.x, size.y)),
+                materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(image)),
+                    perceptual_roughness: 0.72,
+                    ..default()
+                }),
+                size,
+            )
+        })
+        .collect();
+
     let adverts = ADVERTS
         .iter()
         .map(|advert| {
@@ -1181,6 +1338,7 @@ pub fn build_assets(
         frontages,
         poster: meshes.add(Rectangle::new(POSTER.x, POSTER.y)),
         adverts,
+        landmarks: named,
     }
 }
 
@@ -1417,7 +1575,12 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<StandardMaterial>::default();
         let mut meshes = Assets::<Mesh>::default();
-        let kit = build_assets(&mut images, &mut materials, &mut meshes);
+        let kit = build_assets(
+            &mut images,
+            &mut materials,
+            &mut meshes,
+            &crate::world::atlas::Landmarks::default(),
+        );
         for variant in [0u32, 1, 2, 3, u32::MAX, 3_185_463_605] {
             kit.tankstelle(variant);
             kit.markt(variant);
@@ -1427,6 +1590,112 @@ mod tests {
             kit.markt(1).1.clone(),
             "every market in the city has the same name over it"
         );
+    }
+
+    /// A real town's names are painted, and a building that has one wears it
+    /// instead of its kind's joke.
+    ///
+    /// The failure this catches is silent in both directions: a kit built
+    /// without the names hands every landmark back its kind's plaque, and a
+    /// name that falls off the end of the run hands back nothing at all, which
+    /// is a landmark with no sign on it.
+    #[test]
+    fn a_named_building_wears_its_own_name() {
+        use crate::world::atlas::Landmarks;
+        use crate::world::citygen::BuildingKind as Kind;
+
+        let mut images = Assets::<Image>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let mut meshes = Assets::<Mesh>::default();
+        let mut named = Landmarks::default();
+        // One of each interesting case: a kind with a plaque of its own, a
+        // kind with none, and a name long enough to need thin letters.
+        for (name, kind) in [
+            ("Basilika Sankt Martin", Kind::Church),
+            ("Sparkasse Landshut", Kind::Offices),
+            (
+                "Sozialgericht Landshut, Arbeitsgericht Regensburg",
+                Kind::TownHall,
+            ),
+            ("Hungerturm", Kind::Tower),
+        ] {
+            named.names.push(name.to_owned());
+            named.kinds.push(kind);
+        }
+        let kit = build_assets(&mut images, &mut materials, &mut meshes, &named);
+
+        for index in 0..named.names.len() as u16 {
+            let (_, _, size) = kit
+                .landmark(index)
+                .unwrap_or_else(|| panic!("{} has no board", named.names[index as usize]));
+            assert!(
+                size.x <= NAME_WIDEST && size.y <= NAME_LETTER.1 * 2.2,
+                "{} is painted on a {:?} board rather than a plate",
+                named.names[index as usize],
+                size
+            );
+        }
+        // Past the end is the fallback, not a panic.
+        assert!(kit.landmark(named.names.len() as u16).is_none());
+        // And a kit built without names still hands every kind its plaque.
+        let plain = build_assets(
+            &mut images,
+            &mut materials,
+            &mut meshes,
+            &Landmarks::default(),
+        );
+        assert!(plain.landmark(0).is_none());
+        assert!(plain.get(Kind::Church, 0).is_some());
+    }
+
+    /// Every name a real town puts on a building survives the sign painter.
+    ///
+    /// `encode` knows four umlauts and drops everything else to a space, and
+    /// Landshut's landmarks are full of them — Dürnitztrakt, Äußeres
+    /// Torwarthaus, Königmuseum. A name that paints as a blank plate is a
+    /// building with a wordless board on it.
+    #[test]
+    fn every_landshut_landmark_paints_a_readable_board() {
+        use crate::core::config::CityStyle;
+        let path = crate::core::assets::root().join("cities/landshut.ron");
+        let town = crate::world::atlas::load("landshut");
+        assert!(
+            town.is_some() || !path.exists(),
+            "{} is on disk and does not load as an atlas",
+            path.display()
+        );
+        let Some(town) = town else { return };
+        let (layout, _) = crate::world::atlas::layout(&town, 1, 1_000.0);
+        let (_, named) = crate::world::atlas::footprints(
+            &town,
+            &layout.graph,
+            1,
+            1_000.0,
+            CityStyle::Landshuepf,
+        );
+        assert!(
+            named.names.len() > 60,
+            "only {} of Landshut's landmarks are named",
+            named.names.len()
+        );
+        assert_eq!(named.names.len(), named.kinds.len());
+        for (name, &kind) in named.names.iter().zip(named.kinds.iter()) {
+            let painted = encode(&name.to_uppercase());
+            let readable = painted.iter().filter(|byte| **byte != b' ').count();
+            assert!(
+                readable * 2 >= painted.len(),
+                "{name:?} paints as {readable} legible characters out of {}",
+                painted.len()
+            );
+            // And it is a plate on a wall, not a hoarding across one. The
+            // longest name in Landshut is forty-eight characters.
+            let (size, _) = name_board(name, kind);
+            assert!(
+                size.x <= NAME_WIDEST,
+                "{name:?} needs a {:.1} m board",
+                size.x
+            );
+        }
     }
 
     #[test]
@@ -1452,7 +1721,12 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let mut materials = Assets::<StandardMaterial>::default();
         let mut meshes = Assets::<Mesh>::default();
-        let kit = build_assets(&mut images, &mut materials, &mut meshes);
+        let kit = build_assets(
+            &mut images,
+            &mut materials,
+            &mut meshes,
+            &crate::world::atlas::Landmarks::default(),
+        );
         for kind in SIGNED {
             for variant in [0u32, 1, 2, 3, u32::MAX, 3_185_463_605] {
                 assert!(

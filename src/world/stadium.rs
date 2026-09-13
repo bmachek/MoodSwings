@@ -205,13 +205,20 @@ pub fn spawn(
     kit: &StadiumKit,
     seed: u64,
     center: Vec2,
+    // How far above the town's datum the ground here stands — see
+    // `Building::ground`. Zero for the whole of the town, and non-zero only
+    // for something kept up on the relief. Taken for the same reason
+    // `world::gate` and `world::church` take it: a module that owns its
+    // building's whole structure owns every y in it, and one that writes
+    // `SIDEWALK_HEIGHT` flat is a module that cannot be put on a hill.
+    ground: f32,
     width: f32,
     depth: f32,
     yaw: f32,
     chunk: IVec2,
 ) {
     let spin = Quat::from_rotation_y(yaw);
-    let place = |at: Vec3| spin * at + Vec3::new(center.x, SIDEWALK_HEIGHT, center.y);
+    let place = |at: Vec3| spin * at + Vec3::new(center.x, ground + SIDEWALK_HEIGHT, center.y);
     let far = VisibilityRange {
         start_margin: 0.0..0.0,
         end_margin: (RANGE * 0.9)..RANGE,

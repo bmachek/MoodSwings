@@ -190,6 +190,27 @@ impl BuildingKind {
                 | BuildingKind::Cathedral
         )
     }
+
+    /// Whether `buildings::spawn_building` hands this kind's whole structure
+    /// to a module of its own instead of drawing a box with a roof on it.
+    ///
+    /// The five that do: the stadium (`world::stadium`), the gate
+    /// (`world::gate`), the wall tower, the church (`world::church`) and the
+    /// parking deck (`world::garage`). What they have in common is that the
+    /// building's *mass* comes from the module rather than from the
+    /// footprint — which is why a second part of the same building must not
+    /// raise a second one. See `Building::annex`.
+    pub fn owns_its_structure(self) -> bool {
+        matches!(
+            self,
+            BuildingKind::Stadium
+                | BuildingKind::Gate
+                | BuildingKind::Tower
+                | BuildingKind::Church
+                | BuildingKind::Cathedral
+                | BuildingKind::ParkingGarage
+        )
+    }
 }
 
 /// What a lot the vacancy roll left empty is used for.
@@ -318,6 +339,38 @@ pub struct Building {
     /// with this added to every y it writes, and the terrain stamps a plateau
     /// at this height under it so the ground meets its plinth.
     pub ground: f32,
+    /// Whether this box is *another part* of the building next to it rather
+    /// than a building of its own.
+    ///
+    /// Always false for anything the generator invents: a stamped building is
+    /// one rectangle and that rectangle is the whole of it. True for every
+    /// part but the first of a real building read off `world::atlas`, which
+    /// arrives as up to six rectangles cut out of one mapped polygon — an L is
+    /// two, a courtyard block four — sharing a `group`, a height, a palette
+    /// and a kind.
+    ///
+    /// Every one of those rectangles is a wall that has to be drawn, so every
+    /// one of them is a `Building`. But only one of them is *the* building, and
+    /// everything a building has exactly one of hangs off this: the sign over
+    /// the door, the door, the room behind the door, the painted civic ground
+    /// storey, the advert on the blind flank. Without it the Stadtresidenz wore
+    /// six identical RATHAUS plaques and the one hotel in the Altstadt
+    /// advertised itself under four different names, one per wing.
+    pub annex: bool,
+    /// What this building is called, if the map calls it anything.
+    ///
+    /// An index into `atlas::Landmarks`, not a string: a `Building` is `Copy`,
+    /// there are four thousand of them, and eighty-six of Landshut's are named
+    /// while the rest are the houses in between. `None` for everything the
+    /// generator invents and for every anonymous mapped house.
+    ///
+    /// What it buys is the difference between a town and a town plan. The
+    /// generic plaque is a joke written for an invented city — every church in
+    /// it is SANKT BOING and every civic building is RATHAUS — and hanging that
+    /// on the Basilika Sankt Martin, or on the Regierung von Niederbayern, is
+    /// the one place the joke reads as a mistake. A building the map names
+    /// wears its own name instead; see `signage::SignKit::landmark`.
+    pub name: Option<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -734,6 +787,12 @@ fn lay_out_buildings(
             kind: common_kind(seed, &footprint, district),
             roof: None,
             ground: 0.0,
+            // A stamped building is one rectangle and that rectangle is all
+            // of it. Only a mapped polygon arrives in parts.
+            annex: false,
+            // And nothing the generator invents has a name: the joke plaques
+            // are what an invented town is called by.
+            name: None,
         });
     }
     (buildings, vacants)

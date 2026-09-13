@@ -8,6 +8,7 @@ Usage:
         --buildings-parquet <overture.parquet> --dem <copernicus.tif>
     tools/bake-city.py --from-ron <old.ron> <out.ron> \\
         --buildings-parquet <overture.parquet> --dem <copernicus.tif>
+    tools/bake-city.py --relabel <atlas.ron>      # re-apply the register only
 
 What comes out is a `world::atlas::Atlas` in RON: the streets, each a
 polyline in *metres* about the extract's own centre with a width and a class;
@@ -301,6 +302,15 @@ LANDMARK_CLASSES = {"church", "cathedral", "chapel", "castle", "temple", "tower"
 # either source, and the kind here stands in wherever the source's own class
 # says nothing -- so the skyline survives the change of source, and a future
 # Overpass bake, which reads the tags, agrees with this one.
+# A name here with a kind against it is a fact about the building, not a guess
+# from its shape: the LANDSHUTmuseum is a museum, the Sparkasse is a bank, the
+# Wasserturm on the Hofberg is a water tower seven metres square. A name with
+# `None` is a landmark whose kind nothing here can honestly say — the wings of
+# the castle, the Salzstadl, the Marstall — and the runtime draws it as what
+# the town is mostly made of. Getting that wrong costs more than leaving it
+# blank: a `Tower` is drawn as brick with a pyramid on it, and the Röcklturm's
+# footprint in the map is thirty-four metres of the block it is part of.
+#
 # And what a landmark is called, where the parquet carries no tag to say so.
 # Overture keeps a building's name and drops `historic`, `wikidata` and
 # `tourism`, which is what the Overpass bake read; so the wings of the castle
@@ -321,7 +331,7 @@ LANDMARK_WORDS = re.compile(
 KNOWN_LANDMARKS = {
     "Afrakapelle": "Church",
     "Alt St. Nikola": "Church",
-    "Alte Post": None,
+    "Alte Post": "Offices",
     "Alter Bahnhof": None,
     "Altes Franziskanerkloster": None,
     "Amtsgericht Landshut": "TownHall",
@@ -331,11 +341,11 @@ KNOWN_LANDMARKS = {
     "Christuskirche": "Church",
     "City Hotel Isar-Residenz": "Hotel",
     "Dominikanerkirche St. Blasius": "Church",
-    "Ehem. Maschinenbaufachschule": None,
+    "Ehem. Maschinenbaufachschule": "School",
     "Falkenturm": "Tower",
     "Frauenkapelle": "Church",
     "Freundschaftstempel": None,
-    "Gewerbe-Haus": None,
+    "Gewerbe-Haus": "Offices",
     "Hauptgebäude (HCG)": "School",
     "Heilig Geist": "Church",
     "Heilig-Geist-Spital Alten- und Pflegeheim": None,
@@ -344,15 +354,15 @@ KNOWN_LANDMARKS = {
     "Hofstallgebäude": None,
     "Hungerturm": "Tower",
     "Jesuitenkirche Sankt Ignatius": "Church",
-    "Königmuseum im Hofberg": None,
-    "LANDSHUTmuseum": None,
+    "Königmuseum im Hofberg": "Museum",
+    "LANDSHUTmuseum": "Museum",
     "Lebenshilfe": "Supermarket",
     "Lipp": "Supermarket",
     "Ländtor": "Gate",
     "Magdalenenheim": None,
     "Marstall": None,
     "Maxwehr": None,
-    "Moserbräu": None,
+    "Moserbräu": "Hotel",
     "Münzturm": "Tower",
     "Neuapostolische Kirche": "Church",
     "Ottonianum": None,
@@ -368,7 +378,7 @@ KNOWN_LANDMARKS = {
     "Sankt Pius": "Church",
     "Schwedentor": "Gate",
     "Sozialgericht Landshut, Arbeitsgericht Regensburg": None,
-    "Sparkasse Landshut": None,
+    "Sparkasse Landshut": "Offices",
     "St Sebastian": "Church",
     "St. Jodok": "Church",
     "St. Konrad": "Church",
@@ -380,9 +390,10 @@ KNOWN_LANDMARKS = {
     "Theklakapelle": "Church",
     "Ursulinenkirche": "Church",
     "Ussar Villa": None,
-    "Volkshochschule Landshut": None,
+    "Volkshochschule Landshut": "School",
     "Waffenturm": "Tower",
     "Wartturm": "Tower",
+    "Wasserturm": "Tower",
     "Wittelsbacherturm": "Tower",
     "Zeughaus": None,
     "ehemaliges Ursulinenkloster Sankt Joseph": "School",
@@ -2214,7 +2225,8 @@ POINT = re.compile(r"\(([-\d.]+),([-\d.]+)\)")
 STREET = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), '
     r"arterial: (?P<arterial>true|false), surface: (?P<surface>\w+), "
-    r"points: \[(?P<points>.*)\](?:, band: (?P<band>true|false))?\),?$"
+    r"points: \[(?P<points>.*)\](?:, band: (?P<band>true|false))?"
+    r"(?:, covered: (?P<covered>true|false))?\),?$"
 )
 WATER = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), points: \[(?P<points>.*)\]\),?$'
@@ -2277,7 +2289,12 @@ def read_ron(path):
             # A file that says which ways it folded was written by a bake
             # that had already put its bands between their walls.
             "recentred": m["band"] is not None,
-            "covered": "tunnel" in m["name"].lower(),
+            # The flag if the file carries one, and the way it was decided
+            # otherwise. Same rule as `streets_from_overpass`, and the same one
+            # `atlas::Street::is_covered` applies at load.
+            "covered": m["covered"] == "true"
+            if m["covered"]
+            else "tunnel" in m["name"].lower(),
         })
     waters = []
     for line in sections.get("waters", []):
@@ -2328,7 +2345,9 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 "(c) Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS\n"
                 "// by the European Union and ESA; all rights reserved.\n"
             )
-        out.write("// Do not edit by hand: rerun the fetch and the bake.\n")
+        out.write("// Do not edit by hand: rerun the fetch and the bake. To change only what\n")
+        out.write("// the landmark register says a named building is, run\n")
+        out.write("// tools/bake-city.py --relabel on this file.\n")
         out.write("(\n")
         out.write(f'    name: "{name}",\n')
         out.write(f"    centre: ({lat0}, {lon0}),\n")
@@ -2342,6 +2361,11 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 f'surface: {street["surface"]}, '
                 f'points: {ron_points(street["points"])}'
                 + (", band: true" if street.get("band") else "")
+                # The runtime reads this one: a covered way is not a street the
+                # game can build, and half a tunnel is worse than none. It was
+                # computed here and used here and never written down, so the
+                # runtime had to guess it back off the name.
+                + (", covered: true" if street.get("covered") else "")
                 + "),\n"
             )
         out.write("    ],\n")
@@ -2398,10 +2422,106 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
     os.replace(temp, path)
 
 
+# ----------------------------------------------------------- the register ----
+
+BUILDING_LINE = re.compile(
+    r'^(?P<head>\s*\(name: "(?P<name>[^"]*)", .*?)'
+    r"height: (?P<height>Some\([\d.]+\)|None), kind: (?P<kind>Some\(\w+\)|None)"
+    r"(?P<tail>, group: .*)$"
+)
+
+
+def relabel(path):
+    """Re-applies `KNOWN_LANDMARKS` and `LANDMARK_HEIGHT` to a baked atlas.
+
+    Line surgery, not a bake: it reads the file this script wrote, rewrites the
+    `kind` and `height` of the named buildings the register has something to
+    say about, and leaves every other byte alone.
+
+    ## Why this exists
+
+    Because the register is not data, it is a *decision*, and the decision
+    changes more often than the map does. A name arriving on the list — the
+    LANDSHUTmuseum is a museum, not a block of flats — is worth a hundred and
+    sixty kilobytes of diff and nothing else: the geometry is the same
+    geometry, measured on the same day, by the same bake. Re-running the whole
+    bake to change one field means re-downloading four megabytes of Overpass,
+    a gigabyte of Overture parquet and a DEM tile, and then diffing a file in
+    which every single line has moved by a decimetre because the upstream data
+    is a year newer. That is not a re-bake, it is a different town.
+
+    It is also, bluntly, what can be done from a machine that cannot reach
+    Overpass — the same reason `--from-ron` exists.
+
+    ## What it may and may not do
+
+    It may only do what a bake with the updated register would have done to
+    the same source data, which is exactly two things, and it does them the
+    same way round the bake does:
+
+    * `kind` is a *fallback*. The bake writes `kind_of(tags) or
+      KNOWN_LANDMARKS.get(name)`, so the register only ever stands in where the
+      source said nothing — and so this only ever fills a `None`, never
+      overrules a kind the tags gave.
+    * `height` is an *override*: `LANDMARK_HEIGHT` wins over whatever the
+      source measured, because it is the number with a citation.
+
+    It may not measure anything. A bake of its own output must be its own
+    output, and re-measuring a width or a relief that the previous bake already
+    moved is the one step that makes that false — see `tidy_bands`. A lookup in
+    a table is not a measurement, and running this twice changes nothing the
+    second time.
+    """
+    text = open(path, encoding="utf-8").read()
+    lines = text.split("\n")
+    inside = False
+    changed = collections.Counter()
+    for index, line in enumerate(lines):
+        if line == "    buildings: [":
+            inside = True
+            continue
+        if inside and line.startswith("    ]"):
+            break
+        if not inside:
+            continue
+        m = BUILDING_LINE.match(line)
+        if not m:
+            sys.exit(f"cannot read a building back: {line[:90]}")
+        name = m["name"]
+        if not name:
+            continue
+        kind, height = m["kind"], m["height"]
+        want_kind = KNOWN_LANDMARKS.get(name)
+        if kind == "None" and want_kind:
+            kind = f"Some({want_kind})"
+            changed[f"{name} -> {want_kind}"] += 1
+        if name in LANDMARK_HEIGHT:
+            want = f"Some({LANDMARK_HEIGHT[name]})"
+            if height != want:
+                height = want
+                changed[f"{name} -> {want} m"] += 1
+        lines[index] = f"{m['head']}height: {height}, kind: {kind}{m['tail']}"
+    if not changed:
+        print(f"{path} already agrees with the register", file=sys.stderr)
+        return
+    temp = path + ".part"
+    with open(temp, "w", encoding="utf-8") as out:
+        out.write("\n".join(lines))
+    os.replace(temp, path)
+    for what, parts in sorted(changed.items()):
+        print(f"  {what} ({parts} part{'s' if parts != 1 else ''})", file=sys.stderr)
+    print(f"{sum(changed.values())} parts relabelled in {path}", file=sys.stderr)
+
+
 # ------------------------------------------------------------------ main ----
 
 
 def main():
+    # The register-only mode takes one argument and none of the bake's, so it
+    # is answered before the parser that demands a source and a centre.
+    if len(sys.argv) == 3 and sys.argv[1] == "--relabel":
+        relabel(sys.argv[2])
+        return
     ap = argparse.ArgumentParser(description="Bake a town's map data into an atlas the game can build.")
     ap.add_argument("source", help="an Overpass roads dump, or with --from-ron a baked atlas")
     ap.add_argument("out")
