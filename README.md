@@ -1073,6 +1073,18 @@ stood in the road. And the buildings the map names now wear their own names
 rather than the invented city's jokes — the Basilika Sankt Martin is not SANKT
 BOING, and the Stadtresidenz is not the Rathaus.
 
+The six streets that cross the Isar and its two arms got bridges to go with
+them. They could not get arches: the deck is flush with the road either side,
+because the ground is held at exactly zero wherever anything is built, so there
+is no soffit and anything hung under a deck is hung in the water. What
+`world::bridge` builds instead is what a low bridge actually shows from a
+bank — a stone parapet you bounce off, a row of lamp standards, and the pier
+heads that break the surface. Finding the crossings also fixed two things that
+had been invisible for want of a list of them: the river's bank wall was being
+laid straight across every deck, and its trampoline — the collider whose job is
+to throw you back out of the water — sat two centimetres above the road, so
+every crossing of the Isar was a launch ramp.
+
 Then came the skyline: churches with naves, towers and four-sided spires;
 a museum, schools, market lots with scatterable crates; one stadium whose
 seated crowd does die Welle forever over an eternal nil-nil; and a canal —

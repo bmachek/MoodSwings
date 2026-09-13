@@ -165,7 +165,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -324,6 +324,30 @@ a citation, touching nothing else — so a name arriving on the list costs one
 diff hunk rather than a re-download of Overpass, Overture and a DEM tile. It is
 idempotent, it measures nothing (see the `tidy_bands` rule above), and a Rust
 test fails if the committed file has not had it run.
+
+### A bridge cannot be raised
+
+`world::river`'s trick is that a bridge is free: the water is laid at
+`layer::WATER`, one millimetre off the grass and thirteen under the lowest
+carriageway, so every street that crosses it is already drawn over it. Nothing
+finds the crossing, cuts the water or ramps anything up.
+
+What that cannot give you is a bridge you can *see*. The deck is flush — it has
+to be, because `Terrain::height` is exactly zero wherever anything is built —
+so there is no soffit, no arch and nowhere to hang one: anything under the deck
+is under thirteen millimetres of water. `world::bridge` therefore builds
+upward and into the river — parapet, lamp standards, and the pier heads that
+would break the surface — and that is the whole of what a low bridge shows from
+a bank anyway.
+
+The crossings are worked out once (`bridge::crossings`) because three things
+need the same answer, and two of them were wrong before there was a list: the
+bank wall was being laid straight across every deck (Landshut's six bridges
+each carried two 0.9 m stone walls over the carriageway, colliderless, so the
+traffic drove through them and nothing complained), and the river's trampoline
+took `BOUNCE_LEVEL` from the canal — whose water is at sixty millimetres, not
+one — which stood a 0.95-restitution collider two centimetres *above* the road.
+Every crossing of the Isar was a launch ramp.
 
 ### The traps
 

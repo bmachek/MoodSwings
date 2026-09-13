@@ -215,14 +215,31 @@ fn culverted(layout: &CityLayout, width: f32, from: Vec2, to: Vec2) -> bool {
 
 /// Raises a town's real rivers.
 ///
-/// Nothing here looks for a bridge and nothing needs to. The water is laid at
+/// The water itself still needs no bridge found for it. It is laid at
 /// [`super::layer::WATER`], one millimetre off the grass and thirteen under the
 /// lowest carriageway, so every street that crosses it is already drawn over
-/// it. A bridge is a road that was going to be there anyway. What it does look
-/// for is a stream running *along* a street — see [`CULVERT_WIDTH`].
+/// it — a bridge is a road that was going to be there anyway, and
+/// `world::bridge` only adds what stands *on* that road.
+///
+/// The two things that did need the crossings are the two below, and both were
+/// wrong before there was a list of them to ask:
+///
+/// * The **bank wall** was laid along every segment of every river and never
+///   asked whether a carriageway was on top of it. Each of Landshut's six
+///   bridges carried two nine-hundred-millimetre stone walls across it. No
+///   collider, so the traffic drove through them and nothing complained.
+/// * The **trampoline** took [`BOUNCE_LEVEL`] from the canal, whose water sits
+///   at sixty millimetres. These rivers lay theirs at one, which put the
+///   collider's top twenty millimetres up — over the ground collider, over the
+///   drawn road, and carrying restitution 0.95. Every crossing of the Isar was
+///   a launch ramp. It sits at the ground plane now, and stops at a deck.
+///
+/// What it still looks for itself is a stream running *along* a street — see
+/// [`CULVERT_WIDTH`].
 pub fn spawn_waters(
     commands: &mut Commands,
     layout: &CityLayout,
+    bridges: &[super::bridge::Crossing],
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
@@ -289,8 +306,9 @@ pub fn spawn_waters(
             surfaces += 1;
 
             // The two walls. Only for water wide enough to have banks rather
-            // than sides: a two-metre mill race in a culvert has none.
-            if arm.width < 8.0 {
+            // than sides: a two-metre mill race in a culvert has none — and
+            // never across a bridge deck, which is what a wall there would be.
+            if arm.width < 8.0 || super::bridge::on_a_deck(bridges, middle) {
                 continue;
             }
             for side in [-1.0f32, 1.0] {
@@ -321,12 +339,22 @@ pub fn spawn_waters(
                 continue;
             }
             let middle = from.midpoint(to);
+            // Not under a bridge. A car crossing the Isar is driving on
+            // asphalt, and a 0.95 restitution under that asphalt is a launch
+            // ramp with a Max combine rule.
+            if super::bridge::on_a_deck(bridges, middle) {
+                continue;
+            }
             commands.spawn((
                 Name::new("Water body"),
                 RigidBody::Static,
                 Collider::cuboid(arm.width, 0.4, from.distance(to)),
                 Restitution::new(WATER_RESTITUTION).with_combine_rule(CoefficientCombine::Max),
-                Transform::from_xyz(middle.x, BOUNCE_LEVEL - 0.2, middle.y)
+                // Its top at the ground plane, not at `BOUNCE_LEVEL`: that
+                // constant belongs to the canal, whose water is sixty
+                // millimetres up, and here it stood the collider two
+                // centimetres over the ground everything else drives on.
+                Transform::from_xyz(middle.x, -0.2, middle.y)
                     .with_rotation(Quat::from_rotation_y(direction.x.atan2(direction.y))),
             ));
         }

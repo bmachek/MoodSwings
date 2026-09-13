@@ -1,6 +1,7 @@
 //! The world: procedural city, physics, streaming, and the day/night cycle.
 
 pub mod atlas;
+pub mod bridge;
 pub mod buildings;
 pub mod bunting;
 pub mod church;
@@ -189,8 +190,20 @@ fn generate_city(
         &mut materials,
         &mut images,
     ));
+    // Where a street crosses a river. Worked out once, because three things
+    // need the same answer: the bridge that stands there, the bank wall that
+    // must not be laid across it, and the water's trampoline, which must not
+    // be under the asphalt a car is driving on.
+    let bridges = bridge::crossings(&layout);
     river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
-    river::spawn_waters(&mut commands, &layout, &mut meshes, &mut materials);
+    river::spawn_waters(
+        &mut commands,
+        &layout,
+        &bridges,
+        &mut meshes,
+        &mut materials,
+    );
+    bridge::spawn(&mut commands, &bridges, &mut meshes, &mut materials);
 
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
