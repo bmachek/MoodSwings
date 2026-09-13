@@ -108,13 +108,42 @@ pub struct VehicleSpec {
     /// soft for a road car and deliberately so.
     pub suspension_rest: f32,
     pub spring_strength: f32,
-    /// Resistance to the spring's own motion, in newtons per m/s.
+    /// Resistance to the spring being *compressed*, in newtons per m/s.
     ///
-    /// Set at roughly a fifth of critical, which on a real car would be a
-    /// fault. Here it is the point: the suspension is meant to give the body
-    /// back most of what a kerb puts into it, so that a car crossing a junction
-    /// at speed leaves the ground and lands like everything else in this city.
+    /// This was set at roughly a fifth of critical, on the grounds that a car
+    /// giving back most of what a kerb puts into it is in keeping with a city
+    /// made of rubber. Driving it said otherwise: at a fifth of critical a sedan
+    /// dropped a metre and a half takes four and a half seconds to stop moving,
+    /// and nothing in this city gives a driver four and a half seconds — so the
+    /// body was never still between one junction and the next, and aiming the
+    /// car became a matter of waiting for the nose to come back down. The joke
+    /// is the *crash* — see `vehicle::impact`, which is untouched — not the
+    /// ride.
+    ///
+    /// So it is a third of critical now, which is a firm road car, and the
+    /// rebound stroke is damped harder still: see
+    /// [`rebound_damping`](Self::rebound_damping). Everything that made a car
+    /// leave the ground still does; what it no longer does is keep leaving it
+    /// afterwards. [`damping_ratio`](Self::damping_ratio) is what these numbers
+    /// actually mean, and a test holds every class inside the band.
     pub damping: f32,
+    /// How much firmer the damper is on the way out than on the way in.
+    ///
+    /// A damper that resists compression and extension equally has to choose
+    /// between swallowing a kerb and holding the body down afterwards, and the
+    /// hop is the second job: a wheel that has just been shoved up is a spring
+    /// with the kerb's energy stored in it, and a symmetric damper lets most of
+    /// that back out. Real dampers are asymmetric for exactly this reason —
+    /// two to three times as much rebound as bump — and it is the single
+    /// change that stops a car bouncing without also making it ride like a
+    /// bench.
+    ///
+    /// The one thing it cannot do is pull: the load clamp in
+    /// `controller::drive_vehicles` floors the suspension force at zero, so
+    /// rebound damping spends the spring's own force and stops when that runs
+    /// out. That is the right limit, and it is why this is a multiplier on a
+    /// modest bump figure rather than a big number in its own right.
+    pub rebound_damping: f32,
     /// Resists body roll by coupling the two wheels on an axle.
     pub anti_roll: f32,
 
@@ -200,6 +229,32 @@ impl VehicleSpec {
         self.wheel_mass_share() * 9.81 / self.spring_strength
     }
 
+    /// Damping that would bring one corner back with no overshoot at all.
+    ///
+    /// The textbook `2·sqrt(k·m)` for the quarter-car this suspension model
+    /// actually is: one spring, one corner's share of the mass, the wheel taken
+    /// as massless because a raycast has no mass to give it. It exists so the
+    /// damping figures can be read as a *ratio* rather than as a number of
+    /// newton-seconds per metre that means nothing on its own and drifts the
+    /// moment a spring rate or a kerb weight changes.
+    pub fn critical_damping(&self) -> f32 {
+        2.0 * (self.spring_strength * self.wheel_mass_share()).sqrt()
+    }
+
+    /// Where this car's bump damping sits between free and dead.
+    ///
+    /// 1.0 is critical. Not capped there, and it should not be: the dev panel's
+    /// damping slider runs to 12 000, which is 1.79 of critical on a sedan, and
+    /// a setting past 1 is overdamped rather than invalid.
+    pub fn damping_ratio(&self) -> f32 {
+        self.damping / self.critical_damping()
+    }
+
+    /// The same for the rebound stroke, which is the firmer of the two.
+    pub fn rebound_ratio(&self) -> f32 {
+        self.damping * self.rebound_damping / self.critical_damping()
+    }
+
     /// Height the body origin settles at once the springs balance the weight.
     pub fn resting_height(&self) -> f32 {
         (self.max_ray_length() - self.rest_compression()) - self.axle_height
@@ -260,7 +315,8 @@ impl VehicleSpec {
             axle_height: -0.145,
             suspension_rest: 0.32,
             spring_strength: 32_000.0,
-            damping: 1_280.0,
+            damping: 2_140.0,
+            rebound_damping: 2.1,
             anti_roll: 9_000.0,
             engine_force: 13_500.0,
             brake_force: 26_000.0,
@@ -296,7 +352,8 @@ impl VehicleSpec {
             axle_height: -0.185,
             suspension_rest: 0.34,
             spring_strength: 34_000.0,
-            damping: 1_240.0,
+            damping: 2_375.0,
+            rebound_damping: 2.1,
             anti_roll: 8_000.0,
             engine_force: 22_000.0,
             brake_force: 25_000.0,
@@ -332,7 +389,8 @@ impl VehicleSpec {
             axle_height: -0.152,
             suspension_rest: 0.28,
             spring_strength: 36_000.0,
-            damping: 1_440.0,
+            damping: 2_445.0,
+            rebound_damping: 2.0,
             anti_roll: 14_000.0,
             engine_force: 19_000.0,
             brake_force: 30_000.0,
@@ -368,7 +426,8 @@ impl VehicleSpec {
             axle_height: -0.175,
             suspension_rest: 0.38,
             spring_strength: 44_000.0,
-            damping: 1_760.0,
+            damping: 3_020.0,
+            rebound_damping: 2.3,
             anti_roll: 11_000.0,
             engine_force: 18_000.0,
             brake_force: 32_000.0,
@@ -404,7 +463,8 @@ impl VehicleSpec {
             axle_height: -0.185,
             suspension_rest: 0.40,
             spring_strength: 62_000.0,
-            damping: 2_480.0,
+            damping: 4_225.0,
+            rebound_damping: 2.4,
             anti_roll: 16_000.0,
             engine_force: 24_000.0,
             brake_force: 42_000.0,
@@ -458,6 +518,51 @@ mod tests {
                 "{}: rest compression {compression:.3}m is not sane for {}m of travel",
                 spec.display_name,
                 spec.suspension_rest
+            );
+        }
+    }
+
+    #[test]
+    fn no_car_is_underdamped_enough_to_pogo() {
+        // The bug this is here to stop coming back: every class used to run at
+        // about a fifth of critical, which puts four and a half seconds between
+        // a sedan landing and a sedan being still, and what that felt like from
+        // the driver's seat was a car that would not settle between one
+        // junction and the next.
+        //
+        // A ratio rather than a raw figure, because a raw figure is only
+        // meaningful next to the spring rate and the kerb weight it belongs
+        // to — and both of those are feel knobs that move.
+        for class in VehicleClass::ALL {
+            let spec = class.spec();
+            let bump = spec.damping_ratio();
+            assert!(
+                (0.25..=0.45).contains(&bump),
+                "{}: bump damping is {bump:.3} of critical",
+                spec.display_name
+            );
+            let rebound = spec.rebound_ratio();
+            assert!(
+                (0.55..=0.85).contains(&rebound),
+                "{}: rebound damping is {rebound:.3} of critical",
+                spec.display_name
+            );
+        }
+    }
+
+    #[test]
+    fn the_damper_is_firmer_coming_out_than_going_in() {
+        // Symmetric is the setting that cannot do both jobs — swallow the kerb
+        // and then hold the body down. Real dampers run two to three times as
+        // much rebound as bump; past that the suspension packs down over a
+        // series of bumps and stops being suspension at all.
+        for class in VehicleClass::ALL {
+            let spec = class.spec();
+            assert!(
+                (1.8..=3.0).contains(&spec.rebound_damping),
+                "{}: rebound is {:.2}x bump",
+                spec.display_name,
+                spec.rebound_damping
             );
         }
     }

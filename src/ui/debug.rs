@@ -649,7 +649,16 @@ fn vehicle_panel(
             ui.separator();
             ui.label(egui::RichText::new("suspension").strong());
             ui.add(egui::Slider::new(&mut spec.spring_strength, 8_000.0..=90_000.0).text("spring"));
-            ui.add(egui::Slider::new(&mut spec.damping, 500.0..=12_000.0).text("damping"));
+            ui.add(egui::Slider::new(&mut spec.damping, 500.0..=12_000.0).text("bump damping"));
+            ui.add(egui::Slider::new(&mut spec.rebound_damping, 1.0..=4.0).text("rebound x bump"));
+            // The two figures above only mean something against the spring they
+            // damp, and the whole reason the cars used to pogo is that nobody
+            // reading them could tell. So the panel does the division.
+            ui.label(format!(
+                "   = {:.2} of critical bump, {:.2} rebound",
+                spec.damping_ratio(),
+                spec.rebound_ratio()
+            ));
             ui.add(egui::Slider::new(&mut spec.anti_roll, 0.0..=30_000.0).text("anti-roll"));
         });
 

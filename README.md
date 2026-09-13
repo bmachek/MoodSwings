@@ -1426,6 +1426,48 @@ component goes on at the moment the beam is spawned rather than being attached
 by `render::volumetrics` — a beam is born at dusk and dies at dawn, and that
 system attaches its lights once and then sleeps on a change detector.
 
+Under all of that the car rides on four raycasts. Each wheel is a ray down from
+its suspension mount; where it hits, a spring-damper pushes the body up and the
+tyre puts its forces down in the contact plane, clamped by a friction budget
+proportional to that wheel's load. The clamp is the whole handling model: grip
+is not a boolean and drift is not a mode, so exceeding the budget at a wheel
+simply stops it cancelling slip and the back steps out on its own — the
+handbrake drifts by cutting the rear budget to about a fifth of itself, not by
+switching anything on.
+
+The damping was the part that had to be argued twice. It was set at a fifth of
+critical on purpose — everything in this city bounces, so why not the suspension
+— and what that turned out to mean is a sedan that takes four and a half seconds
+to stop moving after a metre and a half of drop. Nothing in this city gives a
+driver four and a half seconds: the body was never still between one junction
+and the next, and aiming a car became a matter of waiting for the nose to come
+back down. It is about a third of critical now — three tenths on the heavy
+classes, nearer two fifths on the sports car — and asymmetric on top of that,
+because the two things a damper is asked for are opposites. Swallowing a kerb
+wants it soft; not handing the kerb straight back wants it firm. Real dampers
+resolve that by running two to three times as much rebound as bump and so does
+this one, and the asymmetry turns out to be worth as much as the firmer figure
+it rides on: the same drop settles in two and a half seconds on the new bump
+rate alone, and in one and a half with the rebound multiplier over it. The
+numbers live on `VehicleSpec` as a bump figure in newton-seconds per metre and a
+rebound multiplier, and the dev panel divides both by critical damping as you
+drag them — the reason nobody noticed a fifth of critical for so long is that
+`damping: 1_280.0` does not look like anything until you put the spring rate and
+the kerb weight next to it.
+
+The one place the bouncing is still the point is the crash. `vehicle::impact`
+reads impacts off sudden velocity changes rather than collision events and
+flings both parties apart harder than physics would, because a fender-bender
+where everyone leaves the scene backwards, airborne and spinning is the joke the
+game is built around. A firmer damper might have been expected to spike the load
+through a wheel on a hard landing and set that off more readily, and the honest
+answer is that it does not, because the peak is travel-limited rather than
+damper-limited: the same drop peaks at 18.2kN a corner under the old figures and
+18.6kN under the new. The velocity change that actually fires a fling goes the
+other way, from 5.24 to 4.82 metres per second — a drop like that was always
+over the 2.5 threshold and still is, which is intended. What changed is the
+landing afterwards, not the bang.
+
 ## Audio
 
 Every sound is a CC0 recording, fetched by `tools/fetch-materials.sh` into
