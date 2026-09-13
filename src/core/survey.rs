@@ -743,6 +743,69 @@ impl Walls {
     }
 }
 
+/// Is what lies behind this kerb *meant* to be open?
+///
+/// The gap list below is the one part of the scorecard that names places, and
+/// it is read as "go and look at these". It was naming the parks and the
+/// river. Both of the two longest unbuilt runs in every one of the five
+/// generated styles were the frontage of a `District::Park` block — the same
+/// edge, the same eighty-six metres, in all five — because a park is stamped
+/// with no buildings by construction and a ray cast off its kerb will never
+/// find a wall. In Landshut it was worse: the five longest runs were all
+/// embankment.
+///
+/// The percentage is deliberately left alone. It says what it always said —
+/// how much kerb has a wall behind it — and a park honestly has none. What is
+/// fixed is the list, which is supposed to point at holes.
+fn open_by_design(layout: &CityLayout, kerb: Vec2, outward: Vec2) -> bool {
+    [0.25f32, 0.5, 0.75].into_iter().any(|share| {
+        let at = kerb + outward * (WALL_REACH * share);
+        let park = layout.blocks.iter().any(|block| {
+            block.district == crate::world::citygen::District::Park
+                && at.x >= block.area.min.x
+                && at.x <= block.area.max.x
+                && at.y >= block.area.min.y
+                && at.y <= block.area.max.y
+        });
+        // And what a town read off a map calls open: its parks, its
+        // pitches, its allotments, its cemetery.
+        let ground = layout.grounds.iter().any(|ground| {
+            at.x >= ground.bounds.min.x
+                && at.x <= ground.bounds.max.x
+                && at.y >= ground.bounds.min.y
+                && at.y <= ground.bounds.max.y
+                && crate::world::vegetation::inside(&ground.points, at, 0.0)
+        });
+        // And the river, which is the reason for most of it in this town:
+        // the three longest runs in Landshut are all embankment. Tested
+        // along the same ray as the rest and not a metre further — a bank
+        // past the reach is not why the wall test came back empty, and
+        // widening the question here to rescue one more run would start
+        // swallowing real holes a street away from the water.
+        park || ground
+            || layout.waters.iter().any(|arm| {
+                let half = arm.width * 0.5;
+                arm.points.windows(2).any(|pair| {
+                    let (from, to) = (pair[0], pair[1]);
+                    if at.x < from.x.min(to.x) - half
+                        || at.x > from.x.max(to.x) + half
+                        || at.y < from.y.min(to.y) - half
+                        || at.y > from.y.max(to.y) + half
+                    {
+                        return false;
+                    }
+                    let span = to - from;
+                    let length = span.length_squared();
+                    if length < 1e-6 {
+                        return false;
+                    }
+                    let t = ((at - from).dot(span) / length).clamp(0.0, 1.0);
+                    at.distance(from + span * t) <= half
+                })
+            })
+    })
+}
+
 fn measure_closure(
     layout: &CityLayout,
     signs: &Signposts,
@@ -811,6 +874,11 @@ fn measure_closure(
                     let edge = segments[i].0;
                     let width = graph.edge(edge).width;
                     let across = Vec2::new(-segments[i].2.y, segments[i].2.x);
+                    let outward = across * side;
+                    let kerb = at + outward * (width * 0.5);
+                    if open_by_design(layout, kerb, outward) {
+                        return;
+                    }
                     gaps.push(Gap {
                         metres,
                         edge,
@@ -1034,16 +1102,31 @@ impl Survey {
             );
         }
         let _ = writeln!(out, "{line}   ({STOREY:.0} m a storey)");
-        let mut line = String::from("           roof      ");
-        for (i, (_, name)) in ROOFS.iter().enumerate() {
-            let _ = write!(line, " {name} {}", b.roofs[i]);
+        // The shapes only a map can name. `Building::roof` is the OSM
+        // `roof:shape` tag and nothing else ever sets it, so a generated city
+        // has one of every counter at zero — which printed as a row of noughts
+        // beside a parenthetical claiming a fifth of Minga's houses were
+        // gabled, on the same line, contradicting itself. What is true of a
+        // town with no map is the style's own share and nothing more.
+        if b.generated > 0 {
+            let _ = writeln!(
+                out,
+                "           roof       {:.0}% of low houses gabled   \
+                 (no map under this city: a roof shape is a tag)",
+                b.gables * 100.0
+            );
+        } else {
+            let mut line = String::from("           roof      ");
+            for (i, (_, name)) in ROOFS.iter().enumerate() {
+                let _ = write!(line, " {name} {}", b.roofs[i]);
+            }
+            let _ = writeln!(
+                out,
+                "{line}   unsaid {}   (style: {:.0}% of low houses gabled)",
+                b.roof_unsaid,
+                b.gables * 100.0
+            );
         }
-        let _ = writeln!(
-            out,
-            "{line}   unsaid {}   (style: {:.0}% of low houses gabled)",
-            b.roof_unsaid,
-            b.gables * 100.0
-        );
 
         match &self.coverage {
             Some(c) => {
@@ -1143,6 +1226,102 @@ impl Survey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kerb facing a park, a river or an open field is correctly bare, and
+    /// the gap list must not name it.
+    ///
+    /// Not a tautology over the predicate: it builds the three things a town
+    /// is allowed to have nothing behind, and the one thing it is not, and
+    /// checks the answer flips. Before this the two longest "unbuilt" runs in
+    /// all five generated styles were one park, named as the town's worst
+    /// frontage in every one of them.
+    #[test]
+    fn a_kerb_facing_a_park_or_a_river_is_not_a_hole() {
+        use crate::world::citygen::{Block, CityLayout, District, OpenGround, Rect, Waterway};
+        let bare = |blocks, grounds, waters| CityLayout {
+            seed: 1,
+            half_extent: 500.0,
+            x_streets: Vec::new(),
+            z_streets: Vec::new(),
+            blocks,
+            graph: Default::default(),
+            canal: None,
+            grounds,
+            waters,
+            relief: None,
+        };
+        let block = |district| Block {
+            area: Rect::new(Vec2::new(10.0, -30.0), Vec2::new(70.0, 30.0)),
+            paved: false,
+            district,
+            buildings: Vec::new(),
+            vacants: Vec::new(),
+            arterial: [false; 4],
+            quarter: None,
+        };
+        // The kerb is at the origin and the ground in question is out along +X.
+        let (kerb, outward) = (Vec2::ZERO, Vec2::X);
+
+        let park = bare(vec![block(District::Park)], Vec::new(), Vec::new());
+        assert!(open_by_design(&park, kerb, outward), "a park is not a hole");
+
+        // The same box, zoned for houses, is a hole: it should have had walls.
+        let houses = bare(vec![block(District::Residential)], Vec::new(), Vec::new());
+        assert!(
+            !open_by_design(&houses, kerb, outward),
+            "a residential block with no buildings on it is exactly the hole \
+             this list is for"
+        );
+
+        // A mapped town's open ground: a ring out along the ray.
+        let ring = vec![
+            Vec2::new(6.0, -20.0),
+            Vec2::new(30.0, -20.0),
+            Vec2::new(30.0, 20.0),
+            Vec2::new(6.0, 20.0),
+        ];
+        let meadow = bare(
+            Vec::new(),
+            vec![OpenGround {
+                kind: crate::world::atlas::GroundKind::Park,
+                bounds: Rect::new(Vec2::new(6.0, -20.0), Vec2::new(30.0, 20.0)),
+                points: ring,
+            }],
+            Vec::new(),
+        );
+        assert!(open_by_design(&meadow, kerb, outward));
+
+        // And a river running across the ray.
+        let isar = bare(
+            Vec::new(),
+            Vec::new(),
+            vec![Waterway {
+                name: "Isar".into(),
+                width: 40.0,
+                points: vec![Vec2::new(12.0, -50.0), Vec2::new(12.0, 50.0)],
+            }],
+        );
+        assert!(open_by_design(&isar, kerb, outward));
+
+        // Nothing out there at all is a hole.
+        assert!(!open_by_design(
+            &bare(Vec::new(), Vec::new(), Vec::new()),
+            kerb,
+            outward
+        ));
+        // And so is a river the ray cannot reach — the wall test could not see
+        // it either, so it is not the reason the sample came back empty.
+        let far = bare(
+            Vec::new(),
+            Vec::new(),
+            vec![Waterway {
+                name: "Isar".into(),
+                width: 10.0,
+                points: vec![Vec2::new(120.0, -50.0), Vec2::new(120.0, 50.0)],
+            }],
+        );
+        assert!(!open_by_design(&far, kerb, outward));
+    }
 
     /// The committed Landshut, at the code-default seed. `None` only when the
     /// checkout has no extract; a file that is there and does not load is a

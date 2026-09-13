@@ -406,6 +406,22 @@ pub mod body {
     pub const BACK_CENTRE: f32 = 0.16;
     pub const BACK_HEIGHT: f32 = 0.46;
     pub const BACK_BEHIND: f32 = 0.19;
+
+    /// Which way is *in front of* a figure, for anything carried there.
+    ///
+    /// Minus one, because a figure faces -Z — which is also why
+    /// [`BACK_BEHIND`] is a positive number. Every prop held out in front
+    /// multiplies its reach by this, so the sign is written down once rather
+    /// than at five use sites; the beggar's cup was the one that had it the
+    /// other way round, and it spent its whole life behind his back with a
+    /// comment over it saying "held out in front".
+    pub const AHEAD: f32 = -1.0;
+
+    // In front and behind are opposite sides. Checked at compile time rather
+    // than in a test, because both are constants and a test over two constants
+    // is a test that cannot fail at a time anybody is watching.
+    const _: () = assert!(AHEAD < 0.0);
+    const _: () = assert!(BACK_BEHIND > 0.0);
     /// The little front castors, whose bottoms rest on the same ground the
     /// big wheels do.
     pub const CASTOR_RADIUS: f32 = 0.085;
@@ -1114,7 +1130,7 @@ pub fn dress_person(
             Archetype::Beggar => {
                 // The cup, held out in front. It travels with the figure,
                 // which is not how begging works and exactly how comedy does.
-                let at = Vec3::new(0.0, -0.26, 0.22);
+                let at = Vec3::new(0.0, -0.26, body::AHEAD * 0.22);
                 parent.spawn((
                     Rest::at(at),
                     Mesh3d(assets.paper_cup.clone()),
@@ -1146,7 +1162,7 @@ pub fn dress_person(
                 // The guitar, slung across the chest with the neck rising
                 // past the left shoulder. The figure faces -Z, the way the
                 // castors say, so the instrument hangs on the minus side.
-                let strings = Vec3::new(0.03, body::TORSO_CENTRE - 0.06, -0.19);
+                let strings = Vec3::new(0.03, body::TORSO_CENTRE - 0.06, body::AHEAD * 0.19);
                 parent.spawn((
                     Rest::at(strings),
                     Mesh3d(assets.guitar_body.clone()),
@@ -1154,7 +1170,7 @@ pub fn dress_person(
                     Transform::from_translation(strings)
                         .with_rotation(Quat::from_rotation_z(-0.35)),
                 ));
-                let neck = Vec3::new(-0.17, body::TORSO_CENTRE + 0.16, -0.19);
+                let neck = Vec3::new(-0.17, body::TORSO_CENTRE + 0.16, body::AHEAD * 0.19);
                 parent.spawn((
                     Rest::at(neck),
                     Mesh3d(assets.guitar_neck.clone()),
@@ -1165,7 +1181,11 @@ pub fn dress_person(
             Archetype::Photographer => {
                 // The camera lives at the face, permanently raised: the
                 // figure *is* mid-shot, whatever else it is doing.
-                let camera = Vec3::new(0.0, body::HEAD_CENTRE - 0.04, -(body::HEAD_RADIUS + 0.10));
+                let camera = Vec3::new(
+                    0.0,
+                    body::HEAD_CENTRE - 0.04,
+                    body::AHEAD * (body::HEAD_RADIUS + 0.10),
+                );
                 parent.spawn((
                     Rest::at(camera),
                     Mesh3d(assets.camera_body.clone()),
@@ -1173,7 +1193,11 @@ pub fn dress_person(
                     Transform::from_translation(camera),
                 ));
                 // A cylinder stands on Y; a lens looks where the figure does.
-                let lens = Vec3::new(0.0, body::HEAD_CENTRE - 0.04, -(body::HEAD_RADIUS + 0.17));
+                let lens = Vec3::new(
+                    0.0,
+                    body::HEAD_CENTRE - 0.04,
+                    body::AHEAD * (body::HEAD_RADIUS + 0.17),
+                );
                 parent.spawn((
                     Rest::at(lens),
                     Mesh3d(assets.camera_lens.clone()),
@@ -1186,7 +1210,7 @@ pub fn dress_person(
                 // The tray, carried in front like the beggar's cup grown a
                 // business plan, with three unspecified wares on it in
                 // whatever colours the wardrobe was already holding.
-                let tray = Vec3::new(0.0, body::TORSO_CENTRE - 0.20, -0.26);
+                let tray = Vec3::new(0.0, body::TORSO_CENTRE - 0.20, body::AHEAD * 0.26);
                 parent.spawn((
                     Rest::at(tray),
                     Mesh3d(assets.tray.clone()),
@@ -1198,7 +1222,7 @@ pub fn dress_person(
                     (0.0, crest.clone()),
                     (0.14, assets.plastic.clone()),
                 ] {
-                    let ware = Vec3::new(slot, body::TORSO_CENTRE - 0.14, -0.26);
+                    let ware = Vec3::new(slot, body::TORSO_CENTRE - 0.14, body::AHEAD * 0.26);
                     parent.spawn((
                         Rest::at(ware),
                         Mesh3d(assets.ware.clone()),

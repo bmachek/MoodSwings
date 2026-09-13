@@ -1191,7 +1191,7 @@ pub fn spawn_hillside(
 /// Ray casting for the inside test and a distance-to-segment sweep for the
 /// margin. Both are O(edges) and a ring here is a few dozen points, run a few
 /// hundred times per chunk — which is nothing next to spawning one tree.
-fn inside(ring: &[Vec2], at: Vec2, margin: f32) -> bool {
+pub(crate) fn inside(ring: &[Vec2], at: Vec2, margin: f32) -> bool {
     let mut within = false;
     for i in 0..ring.len() {
         let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
