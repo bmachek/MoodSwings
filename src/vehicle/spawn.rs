@@ -601,7 +601,16 @@ pub fn update_wheel_visuals(
     // between ticks by the interpolation plugin, but these are plain state
     // fields, so drawn raw the meshes closest to the camera stair-step
     // against a smooth body over every bump. Blended at 30/s the lag is a
-    // frame or two — invisible under deliberately underdamped springs.
+    // frame or two.
+    //
+    // That used to be excused by the springs being deliberately underdamped —
+    // a wheel that never stops moving hides a frame of lag in it. They are not
+    // any more (see `VehicleSpec::damping`), so the excuse is gone and the
+    // blend is left at 30/s on its own merits: a third of critical still moves
+    // a wheel visibly over a kerb, and what the blend has to beat is the
+    // stair-step, which is a whole tick either way. If it ever reads as the
+    // wheels lagging the arch, this is the number, and raising it costs
+    // nothing but the smoothing it was added for.
     let blend = 1.0 - (-30.0 * time.delta_secs()).exp();
     for (state, spec, children) in &vehicles {
         let anchors = spec.wheel_anchors();

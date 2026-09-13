@@ -112,11 +112,11 @@ pub struct VehicleSpec {
     ///
     /// This was set at roughly a fifth of critical, on the grounds that a car
     /// giving back most of what a kerb puts into it is in keeping with a city
-    /// made of rubber. Driving it said otherwise: a fifth of critical is a
-    /// spring that rings for a dozen cycles, so the body was never still, every
-    /// junction set it pogoing, and aiming the car became a matter of waiting
-    /// for the nose to come back down. The joke is the *crash* — see
-    /// `vehicle::impact`, which is untouched — not the ride.
+    /// made of rubber. Driving it said otherwise: a fifth of critical overshoots
+    /// five times and takes three seconds to give it up, so the body was never
+    /// still between one junction and the next, and aiming the car became a
+    /// matter of waiting for the nose to come back down. The joke is the
+    /// *crash* — see `vehicle::impact`, which is untouched — not the ride.
     ///
     /// So it is a third of critical now, which is a firm road car, and the
     /// rebound stroke is damped harder still: see
@@ -519,9 +519,10 @@ mod tests {
     #[test]
     fn no_car_is_underdamped_enough_to_pogo() {
         // The bug this is here to stop coming back: every class used to run at
-        // about a fifth of critical, which rings for a dozen cycles, and what
-        // that felt like from the driver's seat was a car that would not settle
-        // between one junction and the next.
+        // about a fifth of critical, which overshoots five times and takes
+        // three seconds to give it up, and what that felt like from the
+        // driver's seat was a car that would not settle between one junction
+        // and the next.
         //
         // A ratio rather than a raw figure, because a raw figure is only
         // meaningful next to the spring rate and the kerb weight it belongs
