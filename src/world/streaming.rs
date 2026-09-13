@@ -207,6 +207,7 @@ pub struct StreetKits<'w> {
     pieces: Res<'w, crate::world::monument::MonumentKit>,
     /// Where the tarmac is, so nothing upright is stood on it.
     corridors: Res<'w, crate::world::streetside::Corridors>,
+    frontages: Res<'w, crate::world::streetside::Frontages>,
     /// The shape of the ground, for anything planted off a street.
     terrain: Res<'w, crate::world::terrain::Terrain>,
 }
@@ -397,6 +398,7 @@ pub fn update_streaming(
                     &mut commands,
                     &street.foliage,
                     &street.corridors,
+                    &street.frontages,
                     &mut planting,
                     edge,
                     // Which named street this is, so a whole street is an

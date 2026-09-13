@@ -41,7 +41,33 @@ use super::weather::Weather;
 /// Metres between street trees along a kerb.
 const SPACING: f32 = 17.0;
 /// How far in from the kerb line a trunk stands.
-const SET_BACK: f32 = 1.15;
+///
+/// A tree pit belongs at the kerb, not in the middle of the footway: what a
+/// street tree overhangs is the carriageway, because that is the side the
+/// light is on and the side nobody has to walk under. It stood at 1.15 m,
+/// which is most of a three-metre pavement, and every centimetre of that was
+/// taken off the only clearance that matters — see [`CROWN_ROOM`].
+///
+/// It cannot go below [`TRUNK_ROOM`]: the trunk is tested against its own
+/// carriageway like everything else on the pavement, and a set-back under the
+/// room the test asks for would refuse every tree in the city.
+const SET_BACK: f32 = 0.85;
+
+/// How far a street tree looks for the wall behind it.
+///
+/// Further than the widest crown this plants — a plane at the top of its size
+/// range reaches 4.3 m — because what is being looked for is the *nearest*
+/// wall, and stopping the search at the crown's own edge would find nothing
+/// exactly where there is nothing to worry about anyway.
+const CROWN_LOOK: f32 = 5.0;
+
+/// How little room there has to be before a pavement gets no tree at all.
+///
+/// A crown scaled to fit a metre of pavement is a shrub on a stick, and the
+/// place that has a metre is an Altstadt lane whose houses stand on the kerb.
+/// Such a lane has no trees, in this town or in the one it is drawn from, and
+/// saying so is better than planting a bonsai avenue down it.
+const CROWN_LEAST: f32 = 1.3;
 
 /// How much room a trunk needs to not be standing in a road, in metres.
 const TRUNK_ROOM: f32 = 0.55;
@@ -226,6 +252,28 @@ impl Species {
             Species::Cherry => &CHERRY,
             Species::Beech => &BEECH,
         }
+    }
+
+    /// How far the crown reaches from the trunk in one direction, at unit
+    /// scale, in the tree's own frame.
+    ///
+    /// A crown is a union of balls, so the furthest it gets in `dir` is the
+    /// furthest any one of them gets: the support function of the blobs. It is
+    /// asked in the tree's own frame because the yaw a tree is planted at is
+    /// what decides which part of an asymmetric crown faces the wall — which
+    /// is why two limes on the same pavement come out different sizes, and why
+    /// this is not simply the widest blob.
+    fn reach(self, dir: Vec2) -> f32 {
+        self.crown()
+            .iter()
+            // The blob as it is drawn, not as it is declared: `ball` carves the
+            // sphere about by [`CROWN_LUMP`], and a crown measured at its
+            // nominal radius came out a sixth of a metre inside the wall it had
+            // just been fitted to.
+            .map(|(centre, radius)| {
+                Vec2::new(centre.x, centre.z).dot(dir) + radius * (1.0 + CROWN_LUMP)
+            })
+            .fold(0.0f32, f32::max)
     }
 
     /// Whether this crown is a stack rather than a cluster.
@@ -506,7 +554,8 @@ const BOUGH_REACH: f32 = 0.78;
 /// Every limb on the tree used to be five, and the justification written here
 /// was that a branch is three pixels wide at the distance anybody looks at it.
 /// That is true of a branch and it is false of a trunk. A street tree stands
-/// 1.15 m in from the kerb of a pavement the player walks down, and a 0.24 m
+/// [`SET_BACK`] in from the kerb of a pavement the player walks down — closer
+/// now than the 1.15 m this was written against — and a 0.24 m
 /// pentagon seen from two metres shows three flat facets and two hard vertical
 /// creases running its whole height, seventy-two degrees apart, immediately
 /// under a crown that is smooth-shaded. That contrast — a faceted post holding
@@ -712,6 +761,38 @@ fn ball(radius: f32, variant: u32) -> Mesh {
     mesh
 }
 
+/// How big a tree may be, planted at `yaw` with a wall `room` metres off in
+/// the world direction `toward`, given the size it would otherwise have been.
+///
+/// Shrinking it rather than turning it, or dropping it: turning every crown to
+/// present its thin side to the wall would plant a row of trees all facing the
+/// same way, and dropping the ones that do not fit reads as an avenue somebody
+/// has been cutting down — the same reason [`avenue`] decides per street
+/// rather than per tree. A pavement that can only hold a small tree gets a
+/// small tree, which is what such a pavement has; the size varies down the row
+/// anyway, because the crown is asymmetric and the yaw is not the same twice.
+///
+/// Taken after both draws rather than instead of one, so the RNG stream is the
+/// same length whatever is standing behind the tree.
+fn fitted(species: Species, yaw: f32, wall: Option<(Vec2, f32)>, drawn: f32) -> f32 {
+    let Some((toward, room)) = wall else {
+        return drawn;
+    };
+    // The wall's direction in the tree's own frame. `Quat::from_rotation_y`
+    // turns local +X towards (cos, −sin) and local +Z towards (sin, cos), so
+    // this is that rotation run backwards.
+    let (sin, cos) = yaw.sin_cos();
+    let local = Vec2::new(
+        toward.x * cos - toward.y * sin,
+        toward.x * sin + toward.y * cos,
+    );
+    let reach = species.reach(local);
+    if reach <= 0.0 {
+        return drawn;
+    }
+    drawn.min(room / reach)
+}
+
 /// Plants one tree, and hands back the trunk so a caller can add to it.
 fn plant(
     commands: &mut Commands,
@@ -720,15 +801,29 @@ fn plant(
     at: Vec2,
     ground: f32,
     species: Species,
+    // The walls this tree has to keep its crown out of, for one planted on a
+    // pavement. `None` for anything planted in the open — a park, a meadow,
+    // the wood on the hill — which is most of them.
+    walls: Option<&super::streetside::Frontages>,
     rng: &mut ChaCha8Rng,
     range: f32,
 ) {
     let (trunk, bark) = &kit.trunk[species.index()];
     let (crown, leaves, clear) = &kit.crown[species.index()];
 
-    // One scale for the whole tree, so proportions stay the species' own.
-    let size = rng.random_range(0.82..1.24);
+    // One scale for the whole tree, so proportions stay the species' own, and
+    // the size it would have been is what the wall behind it argues down.
+    let drawn: f32 = rng.random_range(0.82..1.24);
     let yaw = rng.random_range(0.0..std::f32::consts::TAU);
+    // Held to every wall within reach, not just the nearest: the one that
+    // decides how big a tree on a corner may be is whichever the crown points
+    // its long side at.
+    let mut size = drawn;
+    if let Some(walls) = walls {
+        walls.near(at, CROWN_LOOK, |toward, off| {
+            size = size.min(fitted(species, yaw, Some((toward, off)), drawn));
+        });
+    }
     // A visibility range is *not* inherited: a crown without one of its own
     // would go on hanging in the air after its trunk stopped being drawn.
     let draw = VisibilityRange {
@@ -765,6 +860,7 @@ pub fn spawn_edge(
     commands: &mut Commands,
     kit: &FoliageKit,
     corridors: &super::streetside::Corridors,
+    frontages: &super::streetside::Frontages,
     rng: &mut ChaCha8Rng,
     edge: &RoadEdge,
     // Which named street this segment belongs to, if the extract said. A whole
@@ -815,6 +911,18 @@ pub fn spawn_edge(
             if corridors.in_the_road(at, TRUNK_ROOM) {
                 continue;
             }
+            // How much pavement there is between this trunk and the wall
+            // behind it, measured rather than assumed: see
+            // `streetside::Frontages`. A lane with no room for a crown gets no
+            // tree, which is a gap in a row and is meant to be — the
+            // alternative is the crown inside the first floor that this is
+            // here to stop.
+            if frontages
+                .room(at, CROWN_LOOK)
+                .is_some_and(|room| room < CROWN_LEAST)
+            {
+                continue;
+            }
             plant(
                 commands,
                 kit,
@@ -822,6 +930,7 @@ pub fn spawn_edge(
                 at,
                 SIDEWALK_HEIGHT,
                 species,
+                Some(frontages),
                 rng,
                 range,
             );
@@ -881,6 +990,7 @@ pub fn spawn_park(
                 cell + jitter,
                 SIDEWALK_HEIGHT,
                 species,
+                None,
                 rng,
                 range,
             );
@@ -1103,6 +1213,7 @@ pub fn spawn_ground(
                 point,
                 terrain.height(point),
                 species,
+                None,
                 rng,
                 range,
             );
@@ -1178,6 +1289,7 @@ pub fn spawn_hillside(
                 point,
                 terrain.height(point),
                 species,
+                None,
                 rng,
                 range,
             );
@@ -1436,6 +1548,69 @@ mod tests {
             seen.insert(Species::pick(&table, &mut rng));
         }
         assert_eq!(seen.len(), table.len());
+    }
+
+    /// The whole of what the fit is for: a street tree's crown may hang over
+    /// the carriageway all it likes and may not be inside the wall behind it.
+    ///
+    /// Checked against the crown measured in *world* space — every blob turned
+    /// by the tree's own yaw and grown by its own lump — rather than against
+    /// the arithmetic `fitted` does, so the inverse rotation inside it has
+    /// something to be wrong about. It was wrong about it once: a plane tree
+    /// fitted to a 2.35 m pavement stood a sixth of a metre inside a first
+    /// floor, because the blob radius it measured was the one declared and the
+    /// one drawn is [`CROWN_LUMP`] bigger.
+    #[test]
+    fn a_street_tree_keeps_its_crown_out_of_the_wall() {
+        for (species, _) in Species::on_streets() {
+            for step in 0..64 {
+                let yaw = step as f32 * std::f32::consts::TAU / 64.0;
+                for room in [CROWN_LEAST, 1.8, 2.35, 3.0, 4.0, 9.0] {
+                    for toward in [Vec2::X, Vec2::Y, -Vec2::X, Vec2::new(0.6, -0.8)] {
+                        let drawn = 1.24;
+                        let size = fitted(species, yaw, Some((toward, room)), drawn);
+                        assert!(size > 0.0 && size <= drawn, "{species:?}: {size}");
+                        // Where the crown actually gets to, along the wall's
+                        // own direction, with the tree standing at the origin.
+                        let (sin, cos) = yaw.sin_cos();
+                        let reach = species
+                            .crown()
+                            .iter()
+                            .map(|(centre, radius)| {
+                                let world = Vec2::new(
+                                    centre.x * cos + centre.z * sin,
+                                    -centre.x * sin + centre.z * cos,
+                                );
+                                (world.dot(toward) + radius * (1.0 + CROWN_LUMP)) * size
+                            })
+                            .fold(0.0f32, f32::max);
+                        assert!(
+                            reach <= room + 1.0e-4,
+                            "a {species:?} at {yaw:.2} reaches {reach:.3} m into a {room} m pavement"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// And a tree with nothing behind it is the size it was drawn. The open
+    /// ground, the parks and the wood on the hill all plant through the same
+    /// door and none of them has a wall to argue with.
+    #[test]
+    fn a_tree_in_the_open_is_not_cut_down_to_fit_anything() {
+        for species in Species::ALL {
+            assert_eq!(fitted(species, 1.2, None, 1.11), 1.11);
+        }
+    }
+
+    /// A pavement wide enough for the species leaves the tree alone; the fit
+    /// is a ceiling, not a resizing.
+    #[test]
+    fn a_wide_pavement_changes_nothing() {
+        for (species, _) in Species::on_streets() {
+            assert_eq!(fitted(species, 0.4, Some((Vec2::X, 20.0)), 0.9), 0.9);
+        }
     }
 
     /// Two chunks must not plant the same trees, and one chunk must plant the

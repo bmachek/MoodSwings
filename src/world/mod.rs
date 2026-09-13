@@ -212,6 +212,11 @@ fn generate_city(
     // them because it is a fact about the whole layout and it costs a pass over
     // the graph.
     let corridors = streetside::Corridors::build(&city);
+    // And one answer to "how much room is there before the wall", for the
+    // street trees. Built here beside the corridors because it is the same
+    // kind of fact about the same layout, and because the answer differs
+    // street by street in a town read off a map — see `streetside::Frontages`.
+    commands.insert_resource(streetside::Frontages::build(&city));
     // What the town keeps on its squares. Resolved here, once, because it
     // needs three things that are only all in scope at this line — the street
     // names, the whole layout and the corridors — and because a monument that
