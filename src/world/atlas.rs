@@ -668,7 +668,7 @@ pub fn footprints(
 
         let mut buildings = Vec::with_capacity(parts.len());
         let (mut low_corner, mut high_corner) = (Vec2::MAX, Vec2::MIN);
-        for part in parts {
+        for (part_index, part) in parts.iter().enumerate() {
             let centre = Vec2::new(part.centre.0, part.centre.1);
             // Which way it faces, which the bake cannot know and this can.
             //
@@ -696,6 +696,12 @@ pub fn footprints(
                 kind,
                 roof: part.roof,
                 ground,
+                // The bake emits a building's parts largest first, so the
+                // first one is the mass a person would point at and call the
+                // building. The rest are its wings, its back range and the
+                // slivers its outline was made of, and none of them is a
+                // second building — see `Building::annex`.
+                annex: part_index > 0,
             });
         }
         blocks.push(Block {

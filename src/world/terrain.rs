@@ -697,6 +697,7 @@ mod tests {
                 kind: citygen::BuildingKind::TownHall,
                 roof: None,
                 ground: 40.0,
+                annex: false,
             }],
             vacants: Vec::new(),
             arterial: [false; 4],

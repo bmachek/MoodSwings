@@ -1631,6 +1631,47 @@ pub(crate) fn district_at(at: Vec2, half_extent: f32, arterial: bool) -> Distric
     }
 }
 
+/// Is something `radius` across, standing at `at`, clear of every building?
+///
+/// The building's *rotated* box, which is why this lives here rather than at
+/// the caller: an atlas building's `footprint` is measured in its own street's
+/// frame and stands at whatever angle that street runs at, so an axis-aligned
+/// test against the rectangle is a test against a rectangle nothing is. The
+/// broad phase is the block's own `area`, which is the circumscribed box round
+/// the whole building and therefore never misses one.
+///
+/// Asked by `world::monument`, which has to stand a fountain on a pavement
+/// without standing it in somebody's front room.
+pub fn room_for(layout: &CityLayout, at: Vec2, radius: f32) -> bool {
+    let thing = Oblong {
+        centre: at,
+        axis: Vec2::X,
+        half: Vec2::splat(radius),
+    };
+    !layout.blocks.iter().any(|block| {
+        let near = Rect::new(
+            block.area.min - Vec2::splat(radius),
+            block.area.max + Vec2::splat(radius),
+        );
+        let inside =
+            at.x >= near.min.x && at.x <= near.max.x && at.y >= near.min.y && at.y <= near.max.y;
+        inside
+            && block.buildings.iter().any(|building| {
+                let yaw = building.facing.unwrap_or(0.0);
+                // The convention the whole of `buildings` reads: a yaw of
+                // theta sends the building's local +Z outward across the
+                // pavement, so its frontage runs along +X turned by theta.
+                let axis = Vec2::new(yaw.cos(), -yaw.sin());
+                Oblong {
+                    centre: building.footprint.center(),
+                    axis,
+                    half: building.footprint.size() * 0.5,
+                }
+                .clashes_with(&thing, 0.0)
+            })
+    })
+}
+
 /// A rectangle with a direction: a building's plot, or a road's corridor.
 ///
 /// Both are the same shape and neither is axis-aligned, which is the whole
@@ -2098,6 +2139,7 @@ pub fn lots(
                             kind: kind_for(&mut rng, district, terrace.arterial),
                             roof: None,
                             ground: 0.0,
+                            annex: false,
                         }],
                         vacants: Vec::new(),
                         arterial: [terrace.arterial; 4],
@@ -2160,6 +2202,7 @@ pub fn lots(
                                 kind: BuildingKind::Apartments,
                                 roof: None,
                                 ground: 0.0,
+                                annex: false,
                             }],
                             vacants: Vec::new(),
                             arterial: [false; 4],

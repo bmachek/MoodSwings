@@ -56,6 +56,17 @@ const PLINTH_PROUD: f32 = 0.11;
 /// on.
 const CASTLE_PALETTE: u8 = 2;
 
+/// How narrow a part of a mapped building has to be before it is a jog in a
+/// wall rather than a wing of the building — see `Building::annex`.
+///
+/// Two and a half metres. A room is three, a corridor is one and a half, and
+/// the bake's own floor is `MIN_SIDE = 1.5`. Below this nothing was ever
+/// *built* as a separate mass: it is the step in the frontage where the
+/// terrace was widened in 1740, and the thing that gave it away was its own
+/// gabled roof cap standing out of the side of the roof next to it, at the
+/// same ridge height, two metres wide.
+const SLIVER: f32 = 2.5;
+
 /// How far away the plinth stops being drawn, before `lod_scale`.
 ///
 /// It is eleven centimetres deep. Past a couple of hundred metres that is well
@@ -1332,6 +1343,19 @@ fn spawn_building(
     // on a pavement it does not have, no poster for traffic that never
     // passes.
     let uphill = building.ground > 0.0;
+    // And one part of a mapped building keeps its walls and nothing a
+    // building has exactly one of — see `Building::annex`. Everything below
+    // that is gated on this was, before it existed, being done once per
+    // rectangle the bake cut the polygon into.
+    let annex = building.annex;
+    // A sliver is narrower than a room. The bake carves a polygon into
+    // rectangles largest first and what is left along a wobbly wall is a
+    // jog two metres deep — 490 of the 4672 parts of Landshut have a side
+    // under three metres and 156 are at the bake's 1.5 m floor. It is a
+    // wall, so it keeps its wall; it is not a wing, so it does not grow a
+    // ridge of its own out of the side of the roof next to it, and nothing
+    // is hung on it that belongs on a frontage.
+    let sliver = annex && size.x.min(size.y) < SLIVER;
     // Nor a shopfront. What stands on the hill is the castle — Trausnitz is
     // a ring of whitewashed wings round two courtyards — and a wing drawn as
     // a parade of shops with flats over them, in whatever pastel its palette
@@ -1394,7 +1418,7 @@ fn spawn_building(
     // the scale axes swapped to match. A plain building keeps the unrotated
     // transform it always had; rotating it too would be free, but a diff
     // that moves every wall in the city to open a few doors is not.
-    let door_shell = if building.kind.enterable() && !uphill {
+    let door_shell = if building.kind.enterable() && !uphill && !annex {
         ctx.shells.door(class, variant)
     } else {
         None
@@ -1408,6 +1432,16 @@ fn spawn_building(
     // the sign over its mouth, and nothing else of a building's anatomy
     // applies: no shells, no roof slab, no plinth, no rooftop clutter.
     // The stadium owns its whole structure: bowl, stands, crowd, wave.
+    //
+    // So do the church, the gate, the tower and the garage below, and that is
+    // precisely why an *annex* of one of them is not drawn at all. A second
+    // nave beside the first is not a transept, a second bowl is not a stand,
+    // and a plain box carrying a gate's other half would be the one thing
+    // `world::gate` exists to keep off a carriageway. The principal part
+    // already raises the whole structure, which is what these kinds mean.
+    if annex && building.kind.owns_its_structure() {
+        return;
+    }
     if building.kind == super::citygen::BuildingKind::Stadium {
         super::stadium::spawn(
             commands,
@@ -1546,7 +1580,10 @@ fn spawn_building(
     // by rather than from `front` a second time, so the pipe cannot end up down
     // the back of a building whose door faces the street.
     let outward = Vec2::new(yaw.sin(), yaw.cos());
-    if !uphill {
+    // Nor on a jog in the wall: a downpipe, a window box and a roller shutter
+    // on a two-metre recess are a frontage's worth of clutter hung on
+    // something that is not a frontage.
+    if !uphill && !sliver {
         super::frontage::spawn(
             commands,
             ctx.frontage,
@@ -1708,14 +1745,24 @@ fn spawn_building(
     let storey = height / class.grid().1;
     let core = matches!(district, District::Downtown | District::Midtown);
     let rolls = super::roof::Rolls::from_seed(seed);
-    let roof = super::roof::decide(
-        ctx.style.roofs(),
-        class,
-        building.kind,
-        core,
-        building.roof,
-        rolls,
-    );
+    let roof = if sliver {
+        // The one override of the roof rule, and it is about geometry rather
+        // than about taste: what stands over a jog in a wall is the roof of
+        // the building the jog is in. A ridge of its own — which the map's
+        // own `roof:shape` asks for, because the tag is on the whole polygon
+        // and the bake copies it onto every part — comes out as a two-metre
+        // gable growing sideways out of a forty-metre one.
+        super::roof::Roof::Flat
+    } else {
+        super::roof::decide(
+            ctx.style.roofs(),
+            class,
+            building.kind,
+            core,
+            building.roof,
+            rolls,
+        )
+    };
     let wall = assets.plain_for(district, site.quarter, palette);
     let pitch = match roof {
         super::roof::Roof::Flat => None,
@@ -1844,18 +1891,23 @@ fn spawn_building(
     }
 
     // The sign, for any kind that hangs one, centred on the fascia band the
-    // facade painter reserves over the ground storey.
-    hang_sign(
-        commands,
-        ctx,
-        building,
-        sign_variant,
-        site,
-        yaw,
-        frontage,
-        floor + storey * 0.875,
-        chunk,
-    );
+    // facade painter reserves over the ground storey. Once per building, not
+    // once per part: the four wings of the one hotel in the Altstadt were
+    // advertising four different hotels, because the plaque is picked by the
+    // part's own seed and each part has its own.
+    if !annex {
+        hang_sign(
+            commands,
+            ctx,
+            building,
+            sign_variant,
+            site,
+            yaw,
+            frontage,
+            floor + storey * 0.875,
+            chunk,
+        );
+    }
 
     // An advertising poster on a blind side wall, for the anonymous kinds
     // only. A supermarket advertising over its own sign is clutter; a block
@@ -1868,6 +1920,7 @@ fn spawn_building(
         BuildingKind::Apartments | BuildingKind::Offices
     ) && height >= 12.0
         && !uphill
+        && !annex
         && (seed >> 27) & 0b111 < ctx.style.advert_appetite()
     {
         let (mesh, material, poster) = ctx.signs.advert((seed >> 33) as u32);
@@ -1909,7 +1962,7 @@ fn spawn_building(
     // just proud of the wall — under the sign, over the shop glass the
     // class would otherwise paint there. It clears the plinth's band by
     // starting above it, and stops under the fascia the sign hangs on.
-    if let Some((mesh, material)) = ctx.signs.frontage(building.kind) {
+    if let Some((mesh, material)) = ctx.signs.frontage(building.kind).filter(|_| !annex) {
         let at = site.in_front(0.14);
         let foot = floor + PLINTH_HEIGHT + 0.02;
         let top = floor + storey * texture::FASCIA.0 - 0.05;
@@ -1935,7 +1988,9 @@ fn spawn_building(
     // buried in it and nothing floats over it — and not at all under a pitch,
     // which has no deck and would carry its air handling inside its own
     // rafters.
-    if pitch.is_some() {
+    // Nor on a sliver: a two-metre deck does not carry an air handler, and
+    // its plan is the wrong shape to lay one out on.
+    if pitch.is_some() || sliver {
         return;
     }
     rooftop::spawn(

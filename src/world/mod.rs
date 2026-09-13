@@ -19,6 +19,7 @@ pub mod lots;
 pub mod markings;
 pub mod material;
 pub mod mayhem;
+pub mod monument;
 pub mod plume;
 pub mod props;
 pub mod river;
@@ -183,8 +184,6 @@ fn generate_city(
         &mut materials,
         &mut images,
     ));
-    commands.insert_resource(signs);
-
     river::spawn(&mut commands, &layout, &mut meshes, &mut materials);
     river::spawn_waters(&mut commands, &layout, &mut meshes, &mut materials);
 
@@ -194,7 +193,18 @@ fn generate_city(
     // something upright beside a street. Built here rather than inside each of
     // them because it is a fact about the whole layout and it costs a pass over
     // the graph.
-    commands.insert_resource(streetside::Corridors::build(&city));
+    let corridors = streetside::Corridors::build(&city);
+    // What the town keeps on its squares. Resolved here, once, because it
+    // needs three things that are only all in scope at this line — the street
+    // names, the whole layout and the corridors — and because a monument that
+    // moved when its chunk was walked back into would be a monument on wheels.
+    // A generated city gets an empty list: the register is about real places.
+    commands.insert_resource(match town.as_ref() {
+        Some(atlas) => monument::place(&atlas.name, &city, &signs, &corridors),
+        None => monument::TownMonuments::default(),
+    });
+    commands.insert_resource(signs);
+    commands.insert_resource(corridors);
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(litter::build_assets(&mut meshes, &mut materials));
@@ -221,6 +231,11 @@ fn generate_city(
     ));
     commands.insert_resource(lots::build_assets(&mut meshes, &mut materials, &mut images));
     commands.insert_resource(statues::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
+    commands.insert_resource(monument::build_assets(
         &mut meshes,
         &mut materials,
         &mut images,

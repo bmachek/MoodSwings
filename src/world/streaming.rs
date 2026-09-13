@@ -202,6 +202,9 @@ pub struct StreetKits<'w> {
     ribbons: Option<Res<'w, crate::world::streetside::Ribbons>>,
     plates: Res<'w, crate::world::streetname::StreetNameKit>,
     signs: Res<'w, crate::world::atlas::Signposts>,
+    /// The town's own monuments, and the stone they are cut from.
+    monuments: Res<'w, crate::world::monument::TownMonuments>,
+    pieces: Res<'w, crate::world::monument::MonumentKit>,
     /// Where the tarmac is, so nothing upright is stood on it.
     corridors: Res<'w, crate::world::streetside::Corridors>,
     /// The shape of the ground, for anything planted off a street.
@@ -287,6 +290,11 @@ pub fn update_streaming(
             crate::core::rng::stream::WEAR,
             (chunk.x, chunk.y),
         );
+
+        // What the town keeps on its squares, for the handful of chunks that
+        // have one. Resolved once at world build — see `world::monument` — so
+        // this is a walk down a list of three, not a search.
+        super::monument::spawn(&mut commands, &street.pieces, &street.monuments, chunk);
 
         if let Some(block_indices) = index.blocks_in(chunk) {
             for &i in block_indices {
