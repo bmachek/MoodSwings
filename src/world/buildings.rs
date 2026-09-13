@@ -1321,6 +1321,28 @@ pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, c
     }
 }
 
+/// Which shell a building wears: which balconies, and which phase the awnings
+/// over its shopfronts run in.
+///
+/// A style with no balconies has no roll to take — every wall in it is the
+/// bare one — which is fine for a shell and was not fine for everything else
+/// that was reading this number. See [`plaque_variant`].
+fn shell_variant(seed: u64, style: CityStyle) -> u32 {
+    if style.balconies() {
+        (seed >> 19) as u32
+    } else {
+        shell::BARE
+    }
+}
+
+/// Which of its kind's plaques a building hangs over the door.
+///
+/// Its own slice of the seed, bit 45 up — 19 is the shell's, 27 the advert's
+/// appetite, 33 the advert's own pick and 41 the wall it hangs on.
+fn plaque_variant(seed: u64) -> u32 {
+    (seed >> 45) as u32
+}
+
 fn spawn_building(
     commands: &mut Commands,
     ctx: &BlockContext,
@@ -1397,11 +1419,22 @@ fn spawn_building(
     // Which balconies and which awnings, from the building's own seed rather
     // than from a counter, for the same reason its roof is — unless the town
     // has no balconies, in which case the bare wall.
-    let variant = if ctx.style.balconies() {
-        (seed >> 19) as u32
-    } else {
-        shell::BARE
-    };
+    let variant = shell_variant(seed, ctx.style);
+    // Which of the kind's plaques the shop over the door hangs, off its own
+    // bits of the building's own seed.
+    //
+    // Its own bits, and that is the whole of this: the plaque used to be the
+    // shell variant, on the reasoning that one roll is cheaper than two. But
+    // the shell variant is not a roll in a town with no balconies — the line
+    // above pins it to `shell::BARE`, which is the number 2 — so in Landshüpf
+    // every signed building in the city hung plaque number two of its kind's
+    // list, forever. Twelve supermarket names and every supermarket in the
+    // town was the FRISCHE-ECK; thirteen restaurants and all of them the
+    // GASTHAUS ZUR BEULE; eighteen hotels and one HOTEL WEICHE LANDUNG on
+    // every corner. A dial about balconies was quietly deciding what the
+    // shops were called.
+    //
+    let plaque = plaque_variant(seed);
     // A quarter picks its restaurants' chain for them: every dining room in
     // Klein-Neapel is the Pizzeria, every one in the Fernost-Viertel is the
     // Wok — which is how real quarters advertise themselves, one cuisine
@@ -1410,7 +1443,7 @@ fn spawn_building(
     let sign_variant = match (site.quarter, building.kind) {
         (Some(Quarter::Italia), super::citygen::BuildingKind::Restaurant) => 1,
         (Some(Quarter::Fernost), super::citygen::BuildingKind::Restaurant) => 3,
-        _ => variant,
+        _ => plaque,
     };
 
     // An enterable kind gets the shell with the doorway carved into its +Z
@@ -2148,6 +2181,47 @@ fn enterable_collider(class: FacadeClass, width: f32, depth: f32, height: f32) -
 
 #[cfg(test)]
 mod tests {
+    /// The plaque over a shop door and the balconies on the wall above it are
+    /// two decisions, and they have to come off two slices of the seed.
+    ///
+    /// They came off one. A style with no balconies pins the shell variant to
+    /// `shell::BARE`, which is the constant 2, and the plaque was the shell
+    /// variant — so every supermarket in Landshüpf was the third name on the
+    /// list, every restaurant the third restaurant, every hotel the third
+    /// hotel, in a town with twelve, thirteen and eighteen of them to choose
+    /// from. Nothing was out of place and nothing crashed; the city just only
+    /// knew three shop names.
+    #[test]
+    fn a_town_with_no_balconies_still_knows_more_than_one_shop_name() {
+        let seeds: Vec<u64> = (0..400)
+            .map(|i| {
+                let at = Vec2::new((i % 20) as f32 * 17.0, (i / 20) as f32 * 23.0);
+                super::super::rooftop::seed_for(
+                    0xA17E_5EED,
+                    super::super::citygen::Rect::new(at, at + Vec2::splat(9.0)),
+                )
+            })
+            .collect();
+        // The old town wears the bare wall, which is exactly the case that
+        // made the plaque a constant.
+        assert!(!CityStyle::Landshuepf.balconies());
+        for &seed in &seeds {
+            assert_eq!(shell_variant(seed, CityStyle::Landshuepf), shell::BARE);
+        }
+        // And the plaque still reaches every name on the longest run there is.
+        let longest = 18;
+        let seen: std::collections::HashSet<u32> = seeds
+            .iter()
+            .map(|&seed| plaque_variant(seed) % longest)
+            .collect();
+        assert_eq!(
+            seen.len(),
+            longest as usize,
+            "400 buildings hung only {} of {longest} plaques",
+            seen.len()
+        );
+    }
+
     use super::*;
 
     /// A ray through the middle of the doorway passes; the same ray a door's
