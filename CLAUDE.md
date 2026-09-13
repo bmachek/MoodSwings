@@ -115,6 +115,46 @@ mix, resample, fade, normalise, seam-wrap), and the load pipeline itself is
 tested with fixture files. A register entry with no recording on disk prints
 as MISSING and plays in-game as a short silence with a warning.
 
+## The instruments have agents
+
+Every instrument above — the gate, the camera, the patrol, the survey, the
+audition — is also a subagent in `.claude/agents/`, because each one produces
+either thousands of lines of compiler output or a protocol that is easy to get
+subtly wrong, and both are better kept out of the main conversation. Delegate to
+them; they carry the discipline that the section above spends its length
+explaining.
+
+| Agent | Reach for it when |
+|---|---|
+| `rust-verify` | anything changed — fmt, clippy `-D warnings`, tests, the build CI does separately |
+| `code-explorer` | the question sweeps several of the 123 modules and you want the answer, not the files |
+| `trap-reviewer` | before offering a change: the diff against the traps below and the conventions that are rules |
+| `town-surveyor` | `world` moved — the numeric scorecard, the atlas and the bake; no window needed |
+| `render-shooter` | anything visible moved — the same framings before and after, and a look at the PNGs |
+| `patrol-warden` | it can only go wrong while running — the patrol, the Watch, `--film` |
+| `audio-keeper` | the bank — the audition, and `REGISTER` against both fetch scripts and `CREDITS.md` |
+| `perf-scout` | a frame-time claim, held to the protocol that keeps it from being noise |
+| `docs-steward` | the written record, starting with the `CLAUDE.md`/`AGENTS.md` twins |
+
+`/ship` runs the three that every change owes — verify, traps, docs — in
+parallel, and ends with what remains *unverified*. The rest are `/verify`,
+`/shot`, `/patrol`, `/survey`, `/audition`, `/traps`, `/perf`, `/docs-sync` and
+`/setup`.
+
+Two scripts hold up the parts that used to be discovered the hard way:
+
+```sh
+tools/dev-setup.sh          # the four things that stop a clone dead, none of them loudly
+tools/check-docs.sh         # CLAUDE.md and AGENTS.md are twins; --fix rewrites the second
+```
+
+`tools/dev-setup.sh` runs at session start (see `.claude/settings.json`) and
+reports the one fact that decides which instrument is even available: whether
+there is a GPU. `cargo test`, `--survey` and `--audition` never open a window and
+work anywhere; `--screenshot`, `--patrol`, `--film` and `--fps-log` need an
+adapter, and a container has none until something installs one. An unrun check is
+never a passed one — say which it was.
+
 ## Architecture
 
 Bevy 0.19 app; `main.rs` installs `DefaultPlugins` then one plugin per top-level

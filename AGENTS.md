@@ -115,6 +115,46 @@ mix, resample, fade, normalise, seam-wrap), and the load pipeline itself is
 tested with fixture files. A register entry with no recording on disk prints
 as MISSING and plays in-game as a short silence with a warning.
 
+## The instruments have agents
+
+Every instrument above — the gate, the camera, the patrol, the survey, the
+audition — is also a subagent in `.claude/agents/`, because each one produces
+either thousands of lines of compiler output or a protocol that is easy to get
+subtly wrong, and both are better kept out of the main conversation. Delegate to
+them; they carry the discipline that the section above spends its length
+explaining.
+
+| Agent | Reach for it when |
+|---|---|
+| `rust-verify` | anything changed — fmt, clippy `-D warnings`, tests, the build CI does separately |
+| `code-explorer` | the question sweeps several of the 123 modules and you want the answer, not the files |
+| `trap-reviewer` | before offering a change: the diff against the traps below and the conventions that are rules |
+| `town-surveyor` | `world` moved — the numeric scorecard, the atlas and the bake; no window needed |
+| `render-shooter` | anything visible moved — the same framings before and after, and a look at the PNGs |
+| `patrol-warden` | it can only go wrong while running — the patrol, the Watch, `--film` |
+| `audio-keeper` | the bank — the audition, and `REGISTER` against both fetch scripts and `CREDITS.md` |
+| `perf-scout` | a frame-time claim, held to the protocol that keeps it from being noise |
+| `docs-steward` | the written record, starting with the `CLAUDE.md`/`AGENTS.md` twins |
+
+`/ship` runs the three that every change owes — verify, traps, docs — in
+parallel, and ends with what remains *unverified*. The rest are `/verify`,
+`/shot`, `/patrol`, `/survey`, `/audition`, `/traps`, `/perf`, `/docs-sync` and
+`/setup`.
+
+Two scripts hold up the parts that used to be discovered the hard way:
+
+```sh
+tools/dev-setup.sh          # the four things that stop a clone dead, none of them loudly
+tools/check-docs.sh         # CLAUDE.md and AGENTS.md are twins; --fix rewrites the second
+```
+
+`tools/dev-setup.sh` runs at session start (see `.claude/settings.json`) and
+reports the one fact that decides which instrument is even available: whether
+there is a GPU. `cargo test`, `--survey` and `--audition` never open a window and
+work anywhere; `--screenshot`, `--patrol`, `--film` and `--fps-log` need an
+adapter, and a container has none until something installs one. An unrun check is
+never a passed one — say which it was.
+
 ## Architecture
 
 Bevy 0.19 app; `main.rs` installs `DefaultPlugins` then one plugin per top-level
@@ -129,7 +169,7 @@ bevy_egui, saves are RON.
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
 | `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
-| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself, the animals among their feet, pigeon flocks that scatter (`pigeon`), umbrellas when it rains (`brolly`), a citizen who has stopped to play and the ring the city's mood gathers round them (`busker`), the one point everything ambient is kept around (`focus`), somewhere to be (`errands`), and stepping off a kerb (`crossing`) |
+| `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself, the animals among their feet, pigeon flocks that scatter (`pigeon`), umbrellas when it rains (`brolly`), a citizen who has stopped to play and the ring the city's mood gathers round them (`busker`), the one point everything ambient is kept around (`focus`), somewhere to be (`errands`), standing in line for it and minding who pushes in (`queue`), and stepping off a kerb (`crossing`) |
 | `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
@@ -223,6 +263,30 @@ separating-axis test rather than a box overlap. Street names ride beside the
 layout in `atlas::Signposts` — a name is a fact about a street and an edge is
 one segment of one.
 
+The atlas also carries the town's real buildings, each polygon cut at bake time
+into the rectangles that cover it (`Footprint::group` gathers the parts of one
+building back into one `Block` sharing a height, a palette and a kind — an L is
+two parts, a courtyard block four, and `streetside::lots` files every part), the
+roof shape where the map recorded one (`Building::roof`), and the shape of the
+ground (`atlas::Relief`, two grids of metres above the valley floor off the
+Copernicus elevation model). The bake is `tools/bake-city.py`; it reads Overture
+Maps for the polygons and the DEM tile for the relief because Overpass cannot
+supply either, and a bake of its own output is its own output — `--from-ron`
+regenerates the buildings and the relief from a committed file, so do not add a
+step that measures something the previous bake already moved (the band tidy in
+`tidy_bands` is the model: it cuts a looped band to its spine and re-attaches
+the side streets, and a second pass finds no loop and nothing loose). The tests
+on the committed file fail when the file is there and does not load; they used
+to return early, which is how a bake that wrote `group: 0` where the runtime
+wanted `Some(0)` passed every test while the game quietly fell back to the
+generator.
+
+An OSM way can be a *loop* — the Altstadt is one closed way round the market —
+and after `merge_parallel` and the recentring both of its lanes lie on one
+centreline, so the runtime would draw every edge twice and lay a pavement
+across the carriageway at each turn-round. Look at the band's polyline before
+trusting a ribbon artefact to the renderer: `runs_of` in the bake is the test.
+
 ### The traps
 
 Six things here have bitten more than once and none of them fail loudly:
@@ -231,10 +295,18 @@ Six things here have bitten more than once and none of them fail loudly:
   and about thirty spawners write a world y directly (`SIDEWALK_HEIGHT`,
   `resting_height(spec)`, a bare `0.0`) meaning "the ground here is at zero".
   That stays true only because `Terrain::height` returns *exactly* zero inside
-  a corridor rasterised from the road graph. Anything new that places geometry
-  well away from a street has to ask `Terrain` for the height, and anything
-  that widens where the town builds has to widen `terrain::LEVEL_REACH` with
-  it. A test walks every edge in Landshut and asserts the corridor.
+  a corridor rasterised from the road graph — and, with a real relief under
+  Landshut, because `atlas::HILL` clips any street the map takes more than
+  twelve metres up the Hofberg rather than cutting the hill away round it.
+  Anything new that places geometry well away from a street has to ask
+  `Terrain` for the height (the hillside wood and the mapped open ground do),
+  and anything that widens where the town builds has to widen
+  `terrain::LEVEL_REACH` with it. The one thing built off the floor is a
+  landmark kept up on the hill: it carries `Building::ground`, every y in its
+  path is written off that, and the terrain holds a plateau at that height
+  under it — the level field carries a height as well as a weight for exactly
+  this. A test walks every edge of the committed Landshut and asserts the
+  corridor, and another asserts the plateau under the castle.
 - **Nothing flat may be laid at the same height as anything else flat.**
   `world::layer` owns the whole ground stack in whole millimetres, with a slot
   per instance. The depth buffer is not the constraint — it resolves microns —
