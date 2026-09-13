@@ -239,13 +239,22 @@ fn receive(
     time: Res<Time>,
     mut commands: Commands,
     mut clock: ResMut<crate::world::timeofday::TimeOfDay>,
-    mut locals: Query<&mut Transform, With<Player>>,
-    mut remotes: Query<(
-        Entity,
-        &Remote,
-        &mut Transform,
-        &mut crate::ai::figure::WalkCycle,
-    )>,
+    // Three mutable Transform queries in one system: Bevy checks disjointness
+    // from the filters alone, so the markers have to say out loud what is true
+    // by construction — the local body, a remote player's replica and a remote
+    // NPC/vehicle are three different entities and never share a marker. These
+    // Withouts therefore exclude nothing that was ever matched; without them
+    // the whole app panics at first run (B0001).
+    mut locals: Query<&mut Transform, (With<Player>, Without<Remote>, Without<RemoteActor>)>,
+    mut remotes: Query<
+        (
+            Entity,
+            &Remote,
+            &mut Transform,
+            &mut crate::ai::figure::WalkCycle,
+        ),
+        Without<RemoteActor>,
+    >,
     mut remotes_actor: Query<(Entity, &RemoteActor, &mut Transform)>,
     mut status: Query<&mut Text, With<Status>>,
     figures: Res<crate::ai::figure::FigureAssets>,
@@ -458,5 +467,29 @@ fn paint_remote_faces(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::IntoSystem;
+
+    // B0001 — conflicting component access between two params of one system —
+    // is a panic at first run, not a compile error, and nothing else here
+    // builds the app: this plugin's systems only ever run behind --connect, so
+    // the whole game would come up fine and die the moment a server answered.
+    // Initialising a system is enough to trip the check; the resources it reads
+    // need not exist.
+    fn initialises<M>(system: impl IntoSystem<(), (), M>) {
+        let mut world = bevy::ecs::world::World::new();
+        IntoSystem::into_system(system).initialize(&mut world);
+    }
+
+    #[test]
+    fn no_two_query_parameters_of_a_multiplayer_system_fight_over_a_component() {
+        initialises(receive);
+        initialises(publish);
+        initialises(paint_remote_faces);
     }
 }

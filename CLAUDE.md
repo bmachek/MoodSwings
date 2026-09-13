@@ -393,6 +393,12 @@ Six things here have bitten more than once and none of them fail loudly:
   builds the whole app — so the capture harness is the integration test for the
   schedule. It has caught this twice. Split the system or use a `ParamSet`; do
   not make the queries disjoint with a filter that quietly changes behaviour.
+  Capture cannot reach a system that only runs behind a flag, though, and
+  `multiplayer::receive` — three mutable `Transform` queries, local body,
+  remote replica, remote actor — died the moment a server answered. Where the
+  markers really are exclusive, spelling that out in `Without` is the honest
+  fix, and `multiplayer`'s test is the cheap way to prove it: initialising a
+  system is enough to trip the check, and needs none of the resources it reads.
 - **`figure::FigureAssets` is inserted by `pedestrian::setup` and read by the
   player spawn**, and `mood::face::FaceAssets` by both. The ordering is
   Startup → PostStartup and is silently load-bearing.
