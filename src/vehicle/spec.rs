@@ -112,11 +112,13 @@ pub struct VehicleSpec {
     ///
     /// This was set at roughly a fifth of critical, on the grounds that a car
     /// giving back most of what a kerb puts into it is in keeping with a city
-    /// made of rubber. Driving it said otherwise: a fifth of critical overshoots
-    /// five times and takes three seconds to give it up, so the body was never
-    /// still between one junction and the next, and aiming the car became a
-    /// matter of waiting for the nose to come back down. The joke is the
-    /// *crash* — see `vehicle::impact`, which is untouched — not the ride.
+    /// made of rubber. Driving it said otherwise: at a fifth of critical a sedan
+    /// dropped a metre and a half takes four and a half seconds to stop moving,
+    /// and nothing in this city gives a driver four and a half seconds — so the
+    /// body was never still between one junction and the next, and aiming the
+    /// car became a matter of waiting for the nose to come back down. The joke
+    /// is the *crash* — see `vehicle::impact`, which is untouched — not the
+    /// ride.
     ///
     /// So it is a third of critical now, which is a firm road car, and the
     /// rebound stroke is damped harder still: see
@@ -239,7 +241,11 @@ impl VehicleSpec {
         2.0 * (self.spring_strength * self.wheel_mass_share()).sqrt()
     }
 
-    /// Where this car's bump damping sits between free and dead, 0 to 1.
+    /// Where this car's bump damping sits between free and dead.
+    ///
+    /// 1.0 is critical. Not capped there, and it should not be: the dev panel's
+    /// damping slider runs to 12 000, which is 1.79 of critical on a sedan, and
+    /// a setting past 1 is overdamped rather than invalid.
     pub fn damping_ratio(&self) -> f32 {
         self.damping / self.critical_damping()
     }
@@ -519,10 +525,10 @@ mod tests {
     #[test]
     fn no_car_is_underdamped_enough_to_pogo() {
         // The bug this is here to stop coming back: every class used to run at
-        // about a fifth of critical, which overshoots five times and takes
-        // three seconds to give it up, and what that felt like from the
-        // driver's seat was a car that would not settle between one junction
-        // and the next.
+        // about a fifth of critical, which puts four and a half seconds between
+        // a sedan landing and a sedan being still, and what that felt like from
+        // the driver's seat was a car that would not settle between one
+        // junction and the next.
         //
         // A ratio rather than a raw figure, because a raw figure is only
         // meaningful next to the spring rate and the kerb weight it belongs

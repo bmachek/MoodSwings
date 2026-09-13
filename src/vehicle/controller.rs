@@ -151,13 +151,32 @@ pub fn drive_vehicles(
 
             let compression = max_ray - hit.distance;
             let vertical_speed = forces.velocity_at_point(anchor).dot(up);
-            // Positive is the anchor rising, which with the ground where it is
-            // means the spring getting longer: the rebound stroke. The damper
-            // is deliberately not the same in both directions — see
+            // The damper is deliberately not the same in both directions — see
             // `VehicleSpec::rebound_damping` — because swallowing a kerb wants
             // a soft damper and not handing the kerb straight back wants a firm
             // one, and a single figure has to be wrong about one of them.
-            let damping = if vertical_speed > 0.0 {
+            //
+            // Which stroke this is has two witnesses and they are not the same
+            // quantity. `vertical_speed` is the anchor rising, which is the
+            // spring extending only if the ground under the wheel is holding
+            // still; the change in compression is the stroke itself, but it is
+            // a finite difference of a raycast, and a wheel meeting a kerb
+            // moves it by a whole kerb in one tick. Differencing it for the
+            // *force* would put tens of kilonewtons through a car for touching
+            // a pavement — precisely the launch `KERB_DAYLIGHT` exists to stop
+            // — so the force stays on the smooth signal, and the noisy one is
+            // read for its sign alone.
+            //
+            // They agree on a road, which is flat. They disagree where the
+            // ground itself is rising under the car — the foot of a parking
+            // deck's ramp, before the body has pitched into it — and there the
+            // body is climbing while the spring is compressing. Requiring both
+            // means the firm figure is applied only to a stroke that really is
+            // a rebound, and every disagreement falls back to the soft figure,
+            // which is what this suspension did before the damper was split.
+            // A fallback that is the old behaviour cannot be a new bug.
+            let extending = vertical_speed > 0.0 && compression <= wheel.compression;
+            let damping = if extending {
                 spec.damping * spec.rebound_damping
             } else {
                 spec.damping
@@ -394,13 +413,28 @@ mod tests {
             Transform::from_xyz(0.0, -1.0, 0.0),
         ));
 
-        let size = spec.half_extents * 2.0;
+        // The same box the spawner fits, in the same place. A cuboid of the
+        // bodywork's own size centred on the body origin is not that box, and
+        // the difference is not cosmetic: it hangs below the origin by the
+        // body's half-height, which on the truck is *lower than the ride height
+        // its own springs settle at*. Built that way the truck lands on its
+        // collider at 0.950m, the suspension stops a centimetre short of the
+        // compression its weight calls for, and every test here measures a
+        // vehicle resting on a box instead of on four springs. It passed the
+        // ride-height test anyway, because 0.950 against 0.918 is inside that
+        // test's 0.12m tolerance. See `VehicleSpec::collider_half_extents`,
+        // which exists for this exact reason on the other side of the fence.
+        let box_half = spec.collider_half_extents();
         let car = app
             .world_mut()
             .spawn((
                 Transform::from_xyz(0.0, drop_height, 0.0),
                 RigidBody::Dynamic,
-                Collider::cuboid(size.x, size.y, size.z),
+                Collider::compound(vec![(
+                    Vec3::Y * spec.collider_offset(),
+                    Quat::IDENTITY,
+                    Collider::cuboid(box_half.x * 2.0, box_half.y * 2.0, box_half.z * 2.0),
+                )]),
                 Mass(spec.mass),
                 CenterOfMass(spec.center_of_mass),
                 SleepingDisabled,
@@ -462,33 +496,64 @@ mod tests {
         (low, high)
     }
 
+    /// Steps until the rays find the road, and says how many ticks that took.
+    ///
+    /// Guessed, this is the whole test: a sedan dropped from 2.5m is still in
+    /// the air 37 ticks later, so a window opened at tick 30 measures free fall
+    /// and passes at any damping at all, including a welded suspension. The
+    /// first version of the test below did exactly that. The five classes touch
+    /// down between tick 35 and tick 38 — they are different heights on
+    /// different springs — so there is no one number to hard-code either.
+    fn drop_until_landed(app: &mut App, car: Entity) -> usize {
+        for tick in 1..=180 {
+            step(app, 1);
+            let state = app.world().get::<VehicleState>(car).unwrap();
+            if state.grounded_wheels() == WHEEL_COUNT {
+                return tick;
+            }
+        }
+        panic!("never landed");
+    }
+
     #[test]
     fn a_car_that_lands_takes_the_landing_and_is_done_with_it() {
         // Both halves matter, and the second half is the one that changed. The
-        // suspension still has visible travel — a car that absorbs a two-metre
-        // drop without moving reads as a brick — but it is no longer allowed to
-        // spend ten seconds handing that drop back. The damping was a fifth of
-        // critical and the body never stopped moving between one junction and
-        // the next; it is a third of critical on the way in and two thirds on
-        // the way out now, which is about one overshoot.
-        let (mut app, car, _) = harness(VehicleClass::Sedan, 2.5);
-        step(&mut app, 30);
-        let (low, high) = ride_envelope(&mut app, car, 80);
-        assert!(
-            high - low > 0.02,
-            "landed and absorbed all of it: only {:.4}m of travel",
-            high - low
-        );
+        // suspension still has visible travel — a car that absorbs a
+        // metre-and-a-half drop without moving reads as a brick — but it is no
+        // longer allowed to spend three seconds handing that drop back. The
+        // damping was a fifth of critical and the body was never still between
+        // one junction and the next; it is a third of critical on the way in
+        // and two thirds on the way out now, which is about one overshoot.
+        //
+        // Every class, not just the sedan: the whole point of the ratio is that
+        // it means the same thing on a 1150kg sports car and a 3200kg truck,
+        // and a per-class figure is exactly the thing that drifts.
+        for class in VehicleClass::ALL {
+            let (mut app, car, spec) = harness(class, 2.5);
+            let landed = drop_until_landed(&mut app, car);
 
-        // A second and a half after touchdown, not ten. The old figures could
-        // not have passed this and that is the point of it.
-        step(&mut app, 100);
-        let (low, high) = ride_envelope(&mut app, car, 80);
-        assert!(
-            high - low < 0.01,
-            "still pogoing {:.4}m a second and a half after landing",
-            high - low
-        );
+            // The first half-second on the ground, measured from the ground.
+            let (low, high) = ride_envelope(&mut app, car, 32);
+            assert!(
+                high - low > 0.02,
+                "{}: landed on tick {landed} and absorbed all of it — only \
+                 {:.4}m of travel in the half-second after touchdown",
+                spec.display_name,
+                high - low
+            );
+
+            // A second and a half after touchdown, not three. Under the old
+            // fifth of critical the body is still moving five millimetres here,
+            // which is what this number is set to catch.
+            step(&mut app, 64);
+            let (low, high) = ride_envelope(&mut app, car, 64);
+            assert!(
+                high - low < 0.01,
+                "{}: still pogoing {:.4}m a second and a half after touchdown",
+                spec.display_name,
+                high - low
+            );
+        }
     }
 
     #[test]
