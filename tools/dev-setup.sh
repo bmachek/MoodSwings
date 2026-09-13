@@ -57,9 +57,30 @@ for arg in "$@"; do
     esac
 done
 
-# Notes collect the one-line summary; problems collect what is still wrong.
-NOTES=()
-PROBLEMS=()
+# NOTES builds the one-line summary, PROBLEMS what is still wrong. Both are
+# strings rather than arrays because `${#arr[@]}` under `set -u` is an error on
+# the bash 3.2 macOS still ships, and this is the first script a contributor
+# runs — it cannot be the one that needs a newer shell.
+NOTES=""
+PROBLEMS=""
+note() { NOTES="${NOTES:+$NOTES; }$1"; }
+problem() { PROBLEMS="${PROBLEMS}  - $1
+"; }
+
+# `sort -V` is GNU. awk is everywhere.
+ver_ge() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        na = split(a, x, "."); nb = split(b, y, ".")
+        n = na > nb ? na : nb
+        for (i = 1; i <= n; i++) {
+            ia = i <= na ? x[i] + 0 : 0
+            ib = i <= nb ? y[i] + 0 : 0
+            if (ia > ib) { exit 0 }
+            if (ia < ib) { exit 1 }
+        }
+        exit 0
+    }'
+}
 
 say() { [ "$MODE" = hook ] || printf '%s\n' "$*"; }
 step() { [ "$MODE" = hook ] || printf '  %s\n' "$*"; }
@@ -81,48 +102,52 @@ say "== rust toolchain =="
 WANT_RUSTC=$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' Cargo.toml | head -1)
 HAVE_RUSTC=$(rustc --version 2>/dev/null | awk '{print $2}')
 if [ -z "${HAVE_RUSTC:-}" ]; then
-    PROBLEMS+=("no rustc on PATH — install from https://rustup.rs")
-    NOTES+=("rustc: MISSING")
+    problem "no rustc on PATH — install from https://rustup.rs"
+    note "rustc: MISSING"
     step "no rustc on PATH"
-elif [ -n "$WANT_RUSTC" ] && [ "$(printf '%s\n%s\n' "$WANT_RUSTC" "$HAVE_RUSTC" | sort -V | head -1)" != "$WANT_RUSTC" ]; then
+elif [ -n "$WANT_RUSTC" ] && ! ver_ge "$HAVE_RUSTC" "$WANT_RUSTC"; then
     step "rustc $HAVE_RUSTC is older than the required $WANT_RUSTC"
     if [ "$MODE" != report ] && command -v rustup >/dev/null 2>&1; then
         step "updating the stable toolchain (a few minutes on a cold container)"
         rustup update stable >/dev/null 2>&1
         HAVE_RUSTC=$(rustc --version 2>/dev/null | awk '{print $2}')
     fi
-    if [ "$(printf '%s\n%s\n' "$WANT_RUSTC" "$HAVE_RUSTC" | sort -V | head -1)" != "$WANT_RUSTC" ]; then
-        PROBLEMS+=("rustc $HAVE_RUSTC < $WANT_RUSTC required — run: rustup update stable")
-        NOTES+=("rustc: $HAVE_RUSTC, TOO OLD for $WANT_RUSTC (nothing compiles)")
+    if ! ver_ge "$HAVE_RUSTC" "$WANT_RUSTC"; then
+        problem "rustc $HAVE_RUSTC < $WANT_RUSTC required — run: rustup update stable"
+        note "rustc: $HAVE_RUSTC, TOO OLD for $WANT_RUSTC (nothing compiles)"
     else
         step "rustc $HAVE_RUSTC"
-        NOTES+=("rustc: $HAVE_RUSTC")
+        note "rustc: $HAVE_RUSTC"
     fi
 else
     step "rustc $HAVE_RUSTC (needs $WANT_RUSTC)"
-    NOTES+=("rustc: $HAVE_RUSTC")
+    note "rustc: $HAVE_RUSTC"
 fi
 
 say "== linux build dependencies =="
 if [ "$(uname -s)" = Linux ]; then
-    MISSING=()
-    command -v pkg-config >/dev/null 2>&1 || MISSING+=(pkg-config)
-    pkg-config --exists alsa 2>/dev/null || MISSING+=(libasound2-dev)
-    pkg-config --exists libudev 2>/dev/null || MISSING+=(libudev-dev)
-    if [ ${#MISSING[@]} -eq 0 ]; then
+    MISSING=""
+    command -v pkg-config >/dev/null 2>&1 || MISSING="$MISSING pkg-config"
+    pkg-config --exists alsa 2>/dev/null || MISSING="$MISSING libasound2-dev"
+    pkg-config --exists libudev 2>/dev/null || MISSING="$MISSING libudev-dev"
+    MISSING="${MISSING# }"
+    if [ -z "$MISSING" ]; then
         step "alsa and libudev headers present"
     elif can_install; then
-        step "installing: ${MISSING[*]}"
-        apt_install "${MISSING[@]}"
+        step "installing: $MISSING"
+        # Deliberately unquoted: this is a list of package names, no spaces in
+        # any of them.
+        # shellcheck disable=SC2086
+        apt_install $MISSING
         if pkg-config --exists alsa 2>/dev/null && pkg-config --exists libudev 2>/dev/null; then
             step "installed"
         else
-            PROBLEMS+=("ALSA/libudev headers still missing — Bevy will not link")
-            NOTES+=("build deps: MISSING")
+            problem "ALSA/libudev headers still missing — Bevy will not link"
+            note "build deps: MISSING"
         fi
     else
-        PROBLEMS+=("missing ${MISSING[*]} — run: sudo apt-get install -y --no-install-recommends ${MISSING[*]}")
-        NOTES+=("build deps: MISSING (${MISSING[*]})")
+        problem "missing $MISSING — run: sudo apt-get install -y --no-install-recommends $MISSING"
+        note "build deps: MISSING ($MISSING)"
     fi
 else
     step "$(uname -s): nothing to install"
@@ -141,15 +166,15 @@ if [ "$HAVE_SOUND_COUNT" -eq 0 ]; then
         tools/fetch-materials.sh >/dev/null 2>&1
         HAVE_SOUND_COUNT=$(find assets/sounds -type f 2>/dev/null | wc -l | tr -d ' ')
         step "assets/sounds: $HAVE_SOUND_COUNT files"
-        NOTES+=("sounds: $HAVE_SOUND_COUNT/$WANT_SOUND_COUNT")
+        note "sounds: $HAVE_SOUND_COUNT/$WANT_SOUND_COUNT"
     else
         step "assets/sounds is empty — all $WANT_SOUND_COUNT sounds will play as silence"
         step "run: tools/fetch-materials.sh   (or tools/dev-setup.sh --sounds)"
-        NOTES+=("sounds: NONE of $WANT_SOUND_COUNT fetched (every sound is a warning + silence)")
+        note "sounds: NONE of $WANT_SOUND_COUNT fetched (every sound is a warning + silence)"
     fi
 else
     step "assets/sounds: $HAVE_SOUND_COUNT files for $WANT_SOUND_COUNT register entries"
-    NOTES+=("sounds: $HAVE_SOUND_COUNT/$WANT_SOUND_COUNT")
+    note "sounds: $HAVE_SOUND_COUNT/$WANT_SOUND_COUNT"
 fi
 
 say "== scanned materials (optional) =="
@@ -181,22 +206,22 @@ case "$GPU" in
         step "run: tools/dev-setup.sh --gpu   (installs llvmpipe, slow but real)"
         ;;
 esac
-NOTES+=("gpu: $GPU")
+note "gpu: $GPU"
 
 if [ "$MODE" = hook ]; then
     # One line of context for the session, with nothing in it that needs
     # escaping. What an agent needs to know before it picks an instrument.
-    SUMMARY=$(printf '%s; ' "${NOTES[@]}" | sed 's/; $//' | tr -d '"\\')
+    SUMMARY=$(printf '%s' "$NOTES" | tr -d '"\\' | tr -d '\n')
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Project setup (tools/dev-setup.sh): %s. Window-free instruments (cargo test, --survey, --audition) work regardless; --screenshot/--patrol/--film need the gpu line above."}}\n' "$SUMMARY"
     exit 0
 fi
 
 echo
-if [ ${#PROBLEMS[@]} -eq 0 ]; then
+if [ -z "$PROBLEMS" ]; then
     echo "Ready: cargo test, cargo clippy, cargo run -- --survey, cargo run -- --audition."
     [ "$GPU" = none ] && echo "Not ready: anything that renders — see the gpu section above."
     exit 0
 fi
 echo "Still to do:"
-for p in "${PROBLEMS[@]}"; do echo "  - $p"; done
+printf '%s' "$PROBLEMS"
 exit 1
