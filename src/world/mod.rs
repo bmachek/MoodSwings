@@ -143,11 +143,15 @@ fn generate_city(
     // fills it is not blocks — a real block is not a rectangle — but frontages
     // marched down each side of each street; see `world::streetside`.
     let mut frontage = streetside::Frontage::default();
+    // What the map calls the buildings it names — empty for a generated city,
+    // where the plaques are the joke ones. Spent by `signage::build_assets`
+    // further down, which paints one board per name.
+    let mut landmarks = atlas::Landmarks::default();
     if layout.blocks.is_empty() {
         // What the map actually knows: the town's own buildings, where they
         // really stand and at the angle they really stand at. The marcher then
         // fills the rest — see `streetside::lots`.
-        let real = town
+        let (real, named) = town
             .as_ref()
             .map(|atlas| {
                 atlas::footprints(
@@ -159,6 +163,7 @@ fn generate_city(
                 )
             })
             .unwrap_or_default();
+        landmarks = named;
         let (blocks, holes) = streetside::lots(&layout, config.world_seed, config.city, real);
         layout.blocks = blocks;
         frontage = holes;
@@ -228,6 +233,7 @@ fn generate_city(
         &mut images,
         &mut materials,
         &mut meshes,
+        &landmarks,
     ));
     commands.insert_resource(lots::build_assets(&mut meshes, &mut materials, &mut images));
     commands.insert_resource(statues::build_assets(

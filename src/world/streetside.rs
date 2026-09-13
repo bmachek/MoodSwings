@@ -2030,6 +2030,18 @@ pub fn lots(
         if kept.is_empty() {
             continue;
         }
+        // The building it is now, not the building it was.
+        //
+        // Parts are dropped one at a time, and for seventeen of Landshut's
+        // buildings the one that goes is the *first* — the largest part, the
+        // one the bake emitted as the building and everything a building has
+        // exactly one of hangs off. What is left standing is its wings, and
+        // wings carry `annex`, so the survivor had no door, no sign, no room
+        // behind the door and nowhere to hang its own name. Whatever is left
+        // of a building, the largest piece of it is the building.
+        if kept.iter().all(|building| building.annex) {
+            kept[0].annex = false;
+        }
         block.buildings = kept;
         blocks.push(block);
         mapped += 1;
@@ -2140,6 +2152,7 @@ pub fn lots(
                             roof: None,
                             ground: 0.0,
                             annex: false,
+                            name: None,
                         }],
                         vacants: Vec::new(),
                         arterial: [terrace.arterial; 4],
@@ -2203,6 +2216,7 @@ pub fn lots(
                                 roof: None,
                                 ground: 0.0,
                                 annex: false,
+                                name: None,
                             }],
                             vacants: Vec::new(),
                             arterial: [false; 4],
@@ -2724,6 +2738,49 @@ fn kind_for(rng: &mut ChaCha8Rng, district: District, arterial: bool) -> Buildin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whatever survives of a mapped building, one part of it is the building.
+    ///
+    /// Parts are dropped one at a time, and the one that goes is often the
+    /// first — the largest, the one the bake emitted as *the* building. What is
+    /// left is its wings, and a wing is an `annex`: no door, no sign, no room
+    /// behind the door, nowhere to hang the name the map gave it. Seventeen of
+    /// Landshut's buildings were standing like that, which is a shop with no
+    /// sign on it and a museum nobody can walk into.
+    #[test]
+    fn a_building_that_loses_its_largest_part_is_still_a_building() {
+        let path = crate::core::assets::root().join("cities/landshut.ron");
+        let town = super::super::atlas::load("landshut");
+        assert!(
+            town.is_some() || !path.exists(),
+            "{} is on disk and does not load as an atlas",
+            path.display()
+        );
+        let Some(town) = town else { return };
+
+        let (layout, _) = super::super::atlas::layout(&town, 1, 1_000.0);
+        let (real, _) = super::super::atlas::footprints(
+            &town,
+            &layout.graph,
+            1,
+            1_000.0,
+            CityStyle::Landshuepf,
+        );
+        let before = real.len();
+        let (blocks, _) = lots(&layout, 1, CityStyle::Landshuepf, real);
+        assert!(
+            before > 2_000 && blocks.len() > before,
+            "{blocks:?} is not a town"
+        );
+
+        for block in &blocks {
+            assert!(
+                block.buildings.iter().any(|building| !building.annex),
+                "a building at {:?} is all wings and no building",
+                block.area.center()
+            );
+        }
+    }
 
     /// A fan of arms leaving one node, sorted the way [`fans`] sorts them.
     fn fan_of(arms: &[(f32, f32)]) -> Vec<Arm> {

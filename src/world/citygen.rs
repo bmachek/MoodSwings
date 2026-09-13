@@ -357,6 +357,20 @@ pub struct Building {
     /// six identical RATHAUS plaques and the one hotel in the Altstadt
     /// advertised itself under four different names, one per wing.
     pub annex: bool,
+    /// What this building is called, if the map calls it anything.
+    ///
+    /// An index into `atlas::Landmarks`, not a string: a `Building` is `Copy`,
+    /// there are four thousand of them, and eighty-six of Landshut's are named
+    /// while the rest are the houses in between. `None` for everything the
+    /// generator invents and for every anonymous mapped house.
+    ///
+    /// What it buys is the difference between a town and a town plan. The
+    /// generic plaque is a joke written for an invented city — every church in
+    /// it is SANKT BOING and every civic building is RATHAUS — and hanging that
+    /// on the Basilika Sankt Martin, or on the Regierung von Niederbayern, is
+    /// the one place the joke reads as a mistake. A building the map names
+    /// wears its own name instead; see `signage::SignKit::landmark`.
+    pub name: Option<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -776,6 +790,9 @@ fn lay_out_buildings(
             // A stamped building is one rectangle and that rectangle is all
             // of it. Only a mapped polygon arrives in parts.
             annex: false,
+            // And nothing the generator invents has a name: the joke plaques
+            // are what an invented town is called by.
+            name: None,
         });
     }
     (buildings, vacants)

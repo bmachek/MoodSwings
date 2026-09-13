@@ -597,7 +597,12 @@ fn raise(commands: &mut Commands, kit: &MonumentKit, standing: &Standing, chunk:
                         .with_rotation(facing)
                         .with_scale(Vec3::new(side, 1.0, side)),
                     RigidBody::Static,
-                    Collider::cuboid(side, COLUMN_STEP_HEIGHT, side),
+                    // A metre square, because Avian scales a collider by its
+                    // transform and the transform above is already doing the
+                    // widening — see the trap in CLAUDE.md. Written out at
+                    // `side` this was `side` squared, which for the bottom
+                    // step is a block of stone nearly seven metres across.
+                    Collider::cuboid(1.0, COLUMN_STEP_HEIGHT, 1.0),
                     range.clone(),
                 ));
                 top += COLUMN_STEP_HEIGHT;
@@ -691,7 +696,7 @@ mod tests {
         let Some(town) = town else { return };
 
         let (mut layout, signs) = super::super::atlas::layout(&town, 1, 1_000.0);
-        let real = super::super::atlas::footprints(
+        let (real, _) = super::super::atlas::footprints(
             &town,
             &layout.graph,
             1,

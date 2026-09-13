@@ -1514,6 +1514,25 @@ fn spawn_building(
             chunk,
             ctx.lod_scale,
         );
+        // A tower says nothing in an invented city — it was there six hundred
+        // years before anybody thought a building should have a name on it,
+        // and `plaques_for` gives it none. A tower the map names is a
+        // different matter: the Hungerturm, the Falkenturm and the Münzturm
+        // are half of why anybody walks up the Hofberg, and an unlabelled
+        // brick box is not one of them.
+        if building.name.is_some() {
+            hang_sign(
+                commands,
+                ctx,
+                building,
+                sign_variant,
+                site,
+                yaw,
+                frontage,
+                floor + (height * 0.22).clamp(2.6, 4.2),
+                chunk,
+            );
+        }
         return;
     }
     // The church replaces its box the same way the garage does: the whole
@@ -2026,7 +2045,20 @@ fn hang_sign(
     fascia: f32,
     chunk: IVec2,
 ) {
-    let Some((mesh, material, board)) = ctx.signs.get(building.kind, variant) else {
+    // What the map calls it, where the map calls it anything, and the kind's
+    // own plaque otherwise.
+    //
+    // The generic plaques are written for an invented city: every church in it
+    // is SANKT BOING and every civic building is RATHAUS, BITTE ZIEHEN SIE EINE
+    // NUMMER. That is the joke, and the one place it reads as a mistake rather
+    // than as a joke is on a building somebody can look up — Landshut's six
+    // town-hall-shaped buildings are a palace, a ministry and three courts, and
+    // not one of them is the Rathaus.
+    let Some((mesh, material, board)) = building
+        .name
+        .and_then(|name| ctx.signs.landmark(name))
+        .or_else(|| ctx.signs.get(building.kind, variant))
+    else {
         return;
     };
     // Out in front of the middle of the face, whichever way the face looks.

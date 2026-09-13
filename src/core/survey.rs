@@ -376,7 +376,7 @@ pub fn survey(request: &SurveyRequest) -> Survey {
     if marched {
         let real = town
             .as_ref()
-            .map(|atlas| atlas::footprints(atlas, &layout.graph, seed, half_extent, city))
+            .map(|atlas| atlas::footprints(atlas, &layout.graph, seed, half_extent, city).0)
             .unwrap_or_default();
         lap("footprints", &mut clock);
         mapped = real.len();

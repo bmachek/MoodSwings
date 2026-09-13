@@ -554,7 +554,7 @@ pub fn footprints(
     seed: u64,
     half_extent: f32,
     style: CityStyle,
-) -> Vec<Block> {
+) -> (Vec<Block>, Landmarks) {
     use crate::core::rng::{stream, stream_for};
     use rand::RngExt;
 
@@ -566,6 +566,7 @@ pub fn footprints(
     let relief = atlas.relief.as_ref();
     let mut blocks = Vec::new();
     let mut uphill = 0usize;
+    let mut landmarks = Landmarks::default();
 
     // Gather the parts of each building. They are emitted together, largest
     // first, so a group is a run of consecutive footprints; an atlas from
@@ -665,6 +666,12 @@ pub fn footprints(
             });
         let palette = rng.random_range(0..super::citygen::PALETTE_SIZE);
         let kind = first.kind.unwrap_or(BuildingKind::Apartments);
+        // A name gets a plate painted for it, once per distinct name — the
+        // same arithmetic the street plates are built on, and for the same
+        // reason: the names are the closed list. Two buildings that really do
+        // share a name (Landshut has two Alte Post and two Torhaus) share the
+        // plate, which is right: they are called the same thing.
+        let name = (!first.name.is_empty()).then(|| landmarks.intern(&first.name, kind));
 
         let mut buildings = Vec::with_capacity(parts.len());
         let (mut low_corner, mut high_corner) = (Vec2::MAX, Vec2::MIN);
@@ -696,6 +703,7 @@ pub fn footprints(
                 kind,
                 roof: part.roof,
                 ground,
+                name,
                 // The bake emits a building's parts largest first, so the
                 // first one is the mass a person would point at and call the
                 // building. The rest are its wings, its back range and the
@@ -720,7 +728,39 @@ pub fn footprints(
         info!("{uphill} of the town's buildings stand up on the hill and are left to it");
     }
     level_the_courtyards(&mut blocks);
-    blocks
+    (blocks, landmarks)
+}
+
+/// Every name the map puts on a building in this town, and what the building
+/// turned out to be.
+///
+/// Indexed the way [`Signposts`] indexes street names, and for the same
+/// reason: one plate is painted per distinct name and a `Building` carries the
+/// index rather than the string. The kind rides along because it is what
+/// decides the plate's colours — a church's plate is the dark one the church
+/// plaques already use, a civic building's the cream one — so a landmark's
+/// board looks like the board its kind hangs, with its own name on it.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct Landmarks {
+    pub names: Vec<String>,
+    pub kinds: Vec<BuildingKind>,
+}
+
+impl Landmarks {
+    /// The index of a name, adding it if this is the first building to carry
+    /// it. Linear: a town has fewer than a hundred named buildings and this
+    /// runs once at world build.
+    fn intern(&mut self, name: &str, kind: BuildingKind) -> u16 {
+        if let Some(known) = self.names.iter().position(|had| had == name) {
+            return known as u16;
+        }
+        self.names.push(name.to_owned());
+        self.kinds.push(kind);
+        // A town with more than sixty-five thousand named landmarks is not a
+        // town, and `Building::name` is a `u16` because a `Building` is
+        // `Copy` and there are four thousand of them.
+        (self.names.len() - 1) as u16
+    }
 }
 
 /// How close two hill landmarks stand before they share one ground, and how
@@ -957,6 +997,73 @@ mod tests {
             path.display()
         );
         town
+    }
+
+    /// Reads `KNOWN_LANDMARKS` out of the bake script.
+    ///
+    /// The register is Python and the atlas is data, and the only thing that
+    /// keeps them agreeing is `tools/bake-city.py --relabel`, which somebody
+    /// has to remember to run. This is the same mechanical check the sound
+    /// bank puts on its two fetch scripts, pointed at the other half of this
+    /// pipeline: parse the table, and let the test below say whether the
+    /// committed file has had the register applied to it.
+    fn register() -> Vec<(String, Option<String>)> {
+        let script = std::fs::read_to_string("tools/bake-city.py")
+            .expect("the bake script is part of the repo");
+        let start = script
+            .find("KNOWN_LANDMARKS = {")
+            .expect("the bake script still keeps a register");
+        let body = &script[start..];
+        let end = body.find("\n}").expect("the register is a dict literal");
+        body[..end]
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let line = line.trim().strip_suffix(',')?;
+                let (name, kind) = line.split_once(": ")?;
+                let name = name.trim().trim_matches('"').to_owned();
+                let kind = (kind != "None").then(|| kind.trim_matches('"').to_owned());
+                Some((name, kind))
+            })
+            .collect()
+    }
+
+    /// The committed atlas has had the register applied to it.
+    ///
+    /// A name arriving on `KNOWN_LANDMARKS` with a kind against it is a
+    /// decision about a real building — the LANDSHUTmuseum is a museum, the
+    /// Wasserturm is a water tower — and it means nothing at all until the
+    /// file carries it. Before `--relabel` existed the only way to apply one
+    /// was a full re-bake, so the register quietly ran ahead of the data and
+    /// thirty-six parts of Landshut were drawn as blocks of flats.
+    ///
+    /// Only `None` is checked, not equality: the register is a *fallback* in
+    /// the bake — `kind_of(tags) or KNOWN_LANDMARKS.get(name)` — so a building
+    /// whose tags said something else is entitled to keep what they said.
+    #[test]
+    fn the_committed_landshut_carries_the_registers_kinds() {
+        let Some(town) = committed() else { return };
+        let register = register();
+        assert!(
+            register.len() > 50,
+            "only {} names came out of the bake script",
+            register.len()
+        );
+        for plot in &town.buildings {
+            if plot.name.is_empty() || plot.kind.is_some() {
+                continue;
+            }
+            let listed = register
+                .iter()
+                .find(|(name, _)| *name == plot.name)
+                .and_then(|(_, kind)| kind.as_deref());
+            assert!(
+                listed.is_none(),
+                "{} is a {listed:?} in the register and a nameless box in the \
+                 atlas; run tools/bake-city.py --relabel assets/cities/landshut.ron",
+                plot.name
+            );
+        }
     }
 
     /// A band's centreline goes one way.
@@ -1383,7 +1490,7 @@ mod tests {
             levels: None,
         };
         hill.buildings = vec![part("", 200.0), part("Burg", 200.0), part("", -200.0)];
-        let blocks = footprints(&hill, &layout.graph, 1, 1000.0, CityStyle::Landshuepf);
+        let (blocks, _) = footprints(&hill, &layout.graph, 1, 1000.0, CityStyle::Landshuepf);
         assert_eq!(blocks.len(), 2, "a house was built on the hill");
         let castle = blocks
             .iter()
@@ -1423,7 +1530,7 @@ mod tests {
             part(1, 40.0, 12.0, 14.0),
         ];
         let (layout, _) = layout(&corner, 1, 1000.0);
-        let blocks = footprints(&corner, &layout.graph, 1, 1000.0, CityStyle::Landshuepf);
+        let (blocks, _) = footprints(&corner, &layout.graph, 1, 1000.0, CityStyle::Landshuepf);
         assert_eq!(blocks.len(), 2);
         let l = &blocks[0];
         assert_eq!(l.buildings.len(), 2);
@@ -1453,7 +1560,7 @@ mod tests {
                 ..part(0, 40.0, 12.0, 14.0)
             },
         ];
-        let blocks = footprints(&corner, &layout.graph, 1, 1000.0, CityStyle::Landshuepf);
+        let (blocks, _) = footprints(&corner, &layout.graph, 1, 1000.0, CityStyle::Landshuepf);
         assert_eq!(blocks.len(), 2);
     }
 
@@ -1472,7 +1579,7 @@ mod tests {
             return;
         };
         let (layout, _) = layout(&town, 1, 1_000.0);
-        let blocks = footprints(&town, &layout.graph, 1, 1_000.0, CityStyle::Landshuepf);
+        let (blocks, _) = footprints(&town, &layout.graph, 1, 1_000.0, CityStyle::Landshuepf);
         assert!(blocks.len() > 2_000, "{} buildings", blocks.len());
 
         let mut faced = 0usize;

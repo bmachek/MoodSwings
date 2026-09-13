@@ -1060,6 +1060,19 @@ memorial to the inventor of the bollard (unbreakable, keeping the family
 promise), and an empty plinth in progress since 1874 — each with a painted
 bronze plaque.
 
+A real town keeps a different kind. The bake cannot see these — a fountain is
+an OSM node, the fetch asks only for `way["building"]`, and Overture carries no
+street furniture at all — so `world::monument` holds a short register anchored
+to a street the atlas *does* know the shape of, and puts what the town is known
+for on the broadest part of its own square: the Narrenbrunnen on the
+Ländtorplatz, the column the Dreifaltigkeitsplatz is named after, and a market
+fountain on the Altstadt, which is a rule about market towns rather than a
+record of one. Each is walked sideways off the centreline until it is clear of
+every carriageway and every wall, or left out with a warning; none is ever
+stood in the road. And the buildings the map names now wear their own names
+rather than the invented city's jokes — the Basilika Sankt Martin is not SANKT
+BOING, and the Stadtresidenz is not the Rathaus.
+
 Then came the skyline: churches with naves, towers and four-sided spires;
 a museum, schools, market lots with scatterable crates; one stadium whose
 seated crowd does die Welle forever over an eternal nil-nil; and a canal —

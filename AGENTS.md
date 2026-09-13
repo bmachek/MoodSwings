@@ -14,6 +14,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 tools/fetch-materials.sh       # CC0 assets: PBR sets (optional) and the recorded sound bank (REQUIRED — see below)
 tools/fetch-materials.bat      # the same for Windows — KEEP THE TWO IN SYNC (see below)
+tools/bake-city.py --relabel assets/cities/landshut.ron   # re-apply the landmark register
 cargo run -- --audition shots/audio   # write the whole sound bank out as WAVs
 ```
 
@@ -164,7 +165,8 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its
+own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -286,6 +288,43 @@ and after `merge_parallel` and the recentring both of its lanes lie on one
 centreline, so the runtime would draw every edge twice and lay a pavement
 across the carriageway at each turn-round. Look at the band's polyline before
 trusting a ribbon artefact to the renderer: `runs_of` in the bake is the test.
+
+### One mapped building is several boxes
+
+The bake cuts a real building's polygon into up to six rectangles sharing a
+`group` — an L is two, a courtyard block four — and `atlas::footprints` emits
+every one of them as a `Building`, because every one of them is a wall that has
+to be drawn. Only one of them is *the* building, and `Building::annex` says
+which: the first part the bake emits is the largest, and everything a building
+has exactly one of hangs off that. The sign over the door, the door, the room
+behind it, the painted civic ground storey, the advert on the blind flank, and
+the whole structure of a kind that owns one (`BuildingKind::owns_its_structure`
+— church, gate, tower, stadium, garage). Before that existed the Stadtresidenz
+wore six identical RATHAUS plaques and the one hotel in the Altstadt advertised
+itself under four names, one per wing.
+
+Two rules ride with it. A part thinner than `buildings::SLIVER` is a jog in a
+wall rather than a wing — 490 of Landshut's 4672 parts have a side under three
+metres — so it keeps its wall and takes a flat deck instead of growing its own
+gable out of the side of the roof next to it. And `streetside::lots` drops parts
+one at a time, so whatever survives, the largest survivor is promoted back out
+of `annex`: a building whose principal part stood in a road was otherwise left
+as wings with no door and no name.
+
+A named landmark wears its own name (`signage::SignKit::landmark`), not its
+kind's plaque. The generic plaques are written for an invented city — every
+church in it is SANKT BOING, every civic building is RATHAUS — and Landshut's
+six town-hall-shaped buildings are a palace, a ministry and three courts, none
+of which is the Rathaus.
+
+What a landmark *is* comes from `KNOWN_LANDMARKS` in `tools/bake-city.py`, and
+that register is a decision rather than a measurement: it changes more often
+than the map does. `--relabel` re-applies it to the committed atlas by line
+surgery — filling a `kind` the source left blank, overriding a height that has
+a citation, touching nothing else — so a name arriving on the list costs one
+diff hunk rather than a re-download of Overpass, Overture and a DEM tile. It is
+idempotent, it measures nothing (see the `tidy_bands` rule above), and a Rust
+test fails if the committed file has not had it run.
 
 ### The traps
 
