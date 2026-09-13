@@ -86,6 +86,7 @@ fn agent_panel(
     observations: Res<crate::ai::observe::AgentObservations>,
     residents: Res<crate::ai::resident::Residents>,
     giveway: Res<crate::ai::giveway::GiveWay>,
+    junctions: Res<crate::ai::junction::Junctions>,
     queues: Res<crate::ai::queue::Queues>,
     focus: Res<crate::ai::focus::SimFocus>,
     mut config: ResMut<GameConfig>,
@@ -134,6 +135,13 @@ fn agent_panel(
                 giveway.occupied_runs(),
                 giveway.longest_wait,
                 giveway.stood_aside
+            ));
+            ui.label(format!(
+                "junctions: {} waiting at a line · {} crossings claimed · longest {:.0}s ·                  {} yielded",
+                junctions.waiting,
+                junctions.claimed(),
+                junctions.longest_wait,
+                junctions.yielded
             ));
             let mut nearby: Vec<_> = observations.agents.iter().collect();
             nearby.sort_by(|(id_a, a), (id_b, b)| {

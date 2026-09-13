@@ -737,11 +737,11 @@ pub fn spawn_junction(
     kit: &WearKit,
     rng: &mut ChaCha8Rng,
     at: Vec2,
-    arms: &[(Vec2, f32)],
+    arms: &[(super::roadgraph::NodeId, Vec2, f32)],
     chunk: IVec2,
     draw: f32,
 ) {
-    for &(towards, width) in arms {
+    for &(_, towards, width) in arms {
         let Ok(direction) = Dir2::new(towards - at) else {
             continue;
         };

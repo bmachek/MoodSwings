@@ -46,13 +46,91 @@ pub enum TurnKind {
     UTurn,
 }
 
-/// Conservative conflict rule for two movements sharing a junction. It is
-/// intentionally geometry-free until lane connectors exist: a straight or
-/// turning movement reserves the crossing, while two same-direction straight
-/// movements can share it. This gives signals and pedestrian gates one common
-/// policy to build on.
-pub fn movements_conflict(a: TurnKind, b: TurnKind) -> bool {
-    !(a == TurnKind::Straight && b == TurnKind::Straight)
+/// One vehicle's way across a junction: in along `from -> at`, out along
+/// `at -> to`.
+///
+/// Three nodes rather than two edges, because a U-turn uses one edge twice
+/// and a pair of edges cannot say which way round it was driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Movement {
+    pub from: NodeId,
+    pub at: NodeId,
+    pub to: NodeId,
+}
+
+/// Whether two movements through the same junction want the same tarmac.
+///
+/// This was a table over [`TurnKind`] alone, and it could not be right. A turn
+/// kind is named relative to the car making it, so two cars arriving at a
+/// crossroads from *perpendicular* arms and carrying straight on are both
+/// `Straight` — and they meet in the middle. The old rule said they could
+/// share it, which is the single commonest conflict at any crossing in the
+/// town. Its own comment knew the shape of the hole — "two *same-direction*
+/// straight movements can share it" — and had no way to say so, because
+/// nothing in a pair of turn kinds names an arm.
+///
+/// So the rule now reads the geometry it was always waiting for. Each
+/// movement is the straight line from where it enters the junction, in its
+/// own travel lane, to where it leaves, in its own; two of them conflict when
+/// those lines cross. That is not an approximation of the priority rules, it
+/// *is* them — an oncoming straight crosses a left turn and not a right one,
+/// which is why left turns wait and right ones do not — and it falls out of
+/// the lane offsets rather than being written down and kept in step by hand.
+///
+/// Two cases the crossing test cannot see on its own:
+///
+/// * **Same approach arm.** Two cars in one queue share an entry point and so
+///   read as crossing. They are following each other, the obstacle ray in
+///   `traffic::drive_traffic` owns that, and reserving it here would stop
+///   every queue at every junction for good.
+/// * **Same exit arm.** Their lines *meet* at the far end rather than crossing
+///   anywhere, and two coincident endpoints are not something an `f32` can be
+///   relied on to report as an intersection. A merge is a conflict.
+pub fn movements_conflict(graph: &RoadGraph, a: Movement, b: Movement) -> bool {
+    debug_assert_eq!(a.at, b.at, "two movements at different junctions");
+    if a.from == b.from {
+        return false;
+    }
+    if a.to == b.to {
+        return true;
+    }
+    let (a0, a1) = graph.movement_chord(a);
+    let (b0, b1) = graph.movement_chord(b);
+    segments_cross(a0, a1, b0, b1)
+}
+
+/// Do two closed segments share a point?
+///
+/// The orientation test, with every degenerate case resolved towards *yes*.
+/// A junction that is occasionally too cautious costs somebody a second of
+/// their afternoon; one that is occasionally not is two cars in the middle of
+/// a crossroads, which is the failure this whole module exists to stop.
+fn segments_cross(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> bool {
+    // In metres squared of cross product. The endpoints are lane offsets on a
+    // town whose coordinates run to 1700 m, where the spacing between
+    // representable floats is 200 um — see the layer table in CLAUDE.md for
+    // the other place that number decides something — so exact zero is not an
+    // answer this arithmetic ever gives.
+    const FLAT: f32 = 1e-4;
+    let side = |p: Vec2, q: Vec2, r: Vec2| {
+        let d = (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+        if d > FLAT {
+            1
+        } else if d < -FLAT {
+            -1
+        } else {
+            0
+        }
+    };
+    let (d1, d2) = (side(a0, a1, b0), side(a0, a1, b1));
+    let (d3, d4) = (side(b0, b1, a0), side(b0, b1, a1));
+    if d1 == 0 || d2 == 0 || d3 == 0 || d4 == 0 {
+        // Collinear, or one endpoint lying on the other line. Touching only
+        // if the two actually reach each other: two movements down the same
+        // infinite line but a hundred metres apart share nothing.
+        return a0.min(a1).cmple(b0.max(b1)).all() && b0.min(b1).cmple(a0.max(a1)).all();
+    }
+    d1 != d2 && d3 != d4
 }
 
 #[derive(Debug, Clone, Default)]
@@ -227,6 +305,85 @@ impl RoadGraph {
             TurnKind::Left
         }
     }
+
+    /// The edge joining two nodes, if they are joined at all.
+    pub fn edge_between(&self, from: NodeId, to: NodeId) -> Option<EdgeId> {
+        self.neighbors(from)
+            .find(|(node, _)| *node == to)
+            .map(|(_, edge)| edge)
+    }
+
+    /// How wide the road between two nodes is.
+    pub fn width_between(&self, from: NodeId, to: NodeId) -> Option<f32> {
+        self.edge_between(from, to)
+            .map(|edge| self.edge(edge).width)
+    }
+
+    /// Whether anything actually crosses at this node.
+    ///
+    /// A town read off a map is mostly *bends*. The bake keeps a node at every
+    /// vertex of every polyline, so a curved street carries one every few
+    /// metres, and two edges meeting at one is a corner rather than a
+    /// crossing: 1191 of Landshut's 1565 nodes are that. Holding cars at them
+    /// would stop the traffic at a thousand places where there is nothing to
+    /// give way to, and it is the distinction `LIVING_CITY.md` asks for under
+    /// "polyline bend nodes".
+    pub fn is_junction(&self, at: NodeId) -> bool {
+        self.node(at).edges.len() >= 3
+    }
+
+    /// How far out from a node the junction reaches.
+    ///
+    /// Half the widest arm is the crossing's own radius — where the kerb line
+    /// of the side street meets the through one. Floored, because a junction
+    /// of three Gassen is still several metres across and a chord shorter than
+    /// a car says nothing; capped, because the market band runs to 22 m and a
+    /// chord that long would have movements conflicting a lane's width outside
+    /// the junction they are in.
+    pub fn junction_reach(&self, at: NodeId) -> f32 {
+        let widest = self
+            .node(at)
+            .edges
+            .iter()
+            .map(|&e| self.edge(e).width)
+            .fold(0.0, f32::max);
+        (widest * 0.5).clamp(3.0, 11.0)
+    }
+
+    /// The straight line a vehicle draws across a junction making `movement`,
+    /// from its own travel lane on the way in to its own on the way out.
+    ///
+    /// A lane connector without the arc. The arc is what the car actually
+    /// drives and it is the wrong thing to test against: two arcs that miss
+    /// each other by a metre still have to be driven one at a time, because
+    /// the arcs are lines and the cars on them are two metres wide. The chord
+    /// is the honest summary of "this movement has the middle of the junction".
+    ///
+    /// Both ends come from [`steering::lane_point`](crate::ai::steering::lane_point),
+    /// which is what `traffic::drive_traffic` steers down, so the chord starts
+    /// where the car is rather than in the middle of the road — and the side
+    /// it picks cannot drift out of step with the side the cars use, which is
+    /// the one error here that a screenshot would never show.
+    pub fn movement_chord(&self, movement: Movement) -> (Vec2, Vec2) {
+        use crate::ai::steering::lane_point;
+
+        let at = self.node(movement.at).pos;
+        let from = self.node(movement.from).pos;
+        let to = self.node(movement.to).pos;
+        let reach = self.junction_reach(movement.at);
+        // A leg shorter than the junction is its own radius clamps to its far
+        // end, which is the right answer: the chord then spans the whole of a
+        // stub too short to hold a stop line anyway.
+        let (into, out_of) = (from.distance(at).max(0.01), at.distance(to).max(0.01));
+        let in_width = self
+            .width_between(movement.from, movement.at)
+            .unwrap_or(4.0);
+        let out_width = self.width_between(movement.at, movement.to).unwrap_or(4.0);
+        (
+            lane_point(from, at, in_width, ((into - reach) / into).clamp(0.0, 1.0)),
+            lane_point(at, to, out_width, (reach / out_of).clamp(0.0, 1.0)),
+        )
+    }
 }
 
 fn reconstruct(came_from: &HashMap<NodeId, NodeId>, goal: NodeId) -> Vec<NodeId> {
@@ -269,6 +426,7 @@ impl PartialOrd for Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::atlas::Surface;
 
     fn cross() -> RoadGraph {
         let mut graph = RoadGraph::default();
@@ -326,11 +484,166 @@ mod tests {
         );
     }
 
+    /// A four-armed crossing of median Landshut streets, with the arms named
+    /// for where they lie: west, south, east, north around a centre at the
+    /// origin. `+y` here is `+z` in the world, which is the side `right_of`
+    /// points to for a car heading east — see `turn_kind`.
+    fn crossroads() -> RoadGraph {
+        let mut graph = RoadGraph::default();
+        let centre = graph.add_node(Vec2::ZERO, (1, 1));
+        for (i, pos) in [
+            Vec2::new(-40.0, 0.0),
+            Vec2::new(0.0, 40.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(0.0, -40.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let arm = graph.add_node(pos, (i as u16, 9));
+            graph.connect(centre, arm, 7.5, false, Surface::Asphalt);
+        }
+        graph
+    }
+
+    const CENTRE: NodeId = NodeId(0);
+    const WEST: NodeId = NodeId(1);
+    const SOUTH: NodeId = NodeId(2);
+    const EAST: NodeId = NodeId(3);
+    const NORTH: NodeId = NodeId(4);
+
+    fn movement(from: NodeId, to: NodeId) -> Movement {
+        Movement {
+            from,
+            at: CENTRE,
+            to,
+        }
+    }
+
     #[test]
-    fn conflict_rule_allows_only_parallel_straight_flow() {
-        assert!(!movements_conflict(TurnKind::Straight, TurnKind::Straight));
-        assert!(movements_conflict(TurnKind::Straight, TurnKind::Left));
-        assert!(movements_conflict(TurnKind::Right, TurnKind::Right));
-        assert!(movements_conflict(TurnKind::UTurn, TurnKind::Straight));
+    fn two_straights_on_crossing_arms_conflict() {
+        // The case the old turn-kind table got wrong, and the commonest
+        // conflict at any crossing in the town: both cars are `Straight` and
+        // they are ninety degrees apart.
+        let graph = crossroads();
+        assert_eq!(
+            graph.turn_kind(WEST, CENTRE, EAST),
+            TurnKind::Straight,
+            "the east-west movement is straight on"
+        );
+        assert_eq!(
+            graph.turn_kind(NORTH, CENTRE, SOUTH),
+            TurnKind::Straight,
+            "and so is the north-south one"
+        );
+        assert!(movements_conflict(
+            &graph,
+            movement(WEST, EAST),
+            movement(NORTH, SOUTH)
+        ));
+    }
+
+    #[test]
+    fn two_straights_facing_each_other_pass() {
+        // Each keeps to its own side, so the chords are parallel and a metre
+        // and a half apart. This is the case the old rule was written for and
+        // the only one it got right.
+        let graph = crossroads();
+        assert!(!movements_conflict(
+            &graph,
+            movement(WEST, EAST),
+            movement(EAST, WEST)
+        ));
+    }
+
+    #[test]
+    fn a_left_turn_waits_for_the_oncoming_straight() {
+        // Nobody wrote this rule down. It is the lane offsets: turning across
+        // the oncoming lane means crossing the line the oncoming car is on.
+        let graph = crossroads();
+        assert_eq!(graph.turn_kind(WEST, CENTRE, NORTH), TurnKind::Left);
+        assert!(movements_conflict(
+            &graph,
+            movement(WEST, NORTH),
+            movement(EAST, WEST)
+        ));
+    }
+
+    #[test]
+    fn a_right_turn_does_not() {
+        // The other half of the same arithmetic, and the half that makes the
+        // rule worth having: a right turn hugs the nearside kerb and never
+        // reaches the oncoming lane, so it should not be made to wait.
+        let graph = crossroads();
+        assert_eq!(graph.turn_kind(WEST, CENTRE, SOUTH), TurnKind::Right);
+        assert!(!movements_conflict(
+            &graph,
+            movement(WEST, SOUTH),
+            movement(EAST, WEST)
+        ));
+    }
+
+    #[test]
+    fn one_queue_on_one_arm_is_not_a_junction_conflict() {
+        // Two cars nose to tail share an entry point, which reads as a
+        // crossing to any geometric test. They are following each other.
+        let graph = crossroads();
+        assert!(!movements_conflict(
+            &graph,
+            movement(WEST, EAST),
+            movement(WEST, SOUTH)
+        ));
+    }
+
+    #[test]
+    fn two_movements_merging_into_one_arm_conflict() {
+        // Their chords meet at the exit rather than crossing before it, which
+        // is not something coincident f32 endpoints can be relied on to say.
+        let graph = crossroads();
+        assert!(movements_conflict(
+            &graph,
+            movement(WEST, SOUTH),
+            movement(EAST, SOUTH)
+        ));
+    }
+
+    #[test]
+    fn a_bend_in_a_street_is_not_a_junction() {
+        // 1191 of Landshut's 1565 nodes are this: a vertex in a polyline, not
+        // a crossing. Holding cars at them would stop the town dead.
+        let graph = crossroads();
+        assert!(graph.is_junction(CENTRE), "four arms is a junction");
+        assert!(!graph.is_junction(WEST), "one arm is the end of a street");
+
+        let mut bend = RoadGraph::default();
+        let corner = bend.add_node(Vec2::ZERO, (0, 0));
+        let a = bend.add_node(Vec2::new(-20.0, 0.0), (1, 0));
+        let b = bend.add_node(Vec2::new(0.0, 20.0), (2, 0));
+        bend.connect(corner, a, 6.0, false, Surface::Asphalt);
+        bend.connect(corner, b, 6.0, false, Surface::Asphalt);
+        assert!(!bend.is_junction(corner), "two arms is a corner");
+    }
+
+    #[test]
+    fn a_movement_starts_and_ends_in_its_own_lane() {
+        // The one error here a screenshot would never show. If the chord were
+        // built on the wrong side of the centreline every conflict above would
+        // still pass — mirrored — so this ties it to the side the cars use.
+        let graph = crossroads();
+        let (entry, exit) = graph.movement_chord(movement(WEST, EAST));
+        // Heading east, the travel lane is at +y.
+        assert!(entry.y > 0.0, "entry {entry:?} is in the oncoming lane");
+        assert!(exit.y > 0.0, "exit {exit:?} is in the oncoming lane");
+        assert!(entry.x < 0.0 && exit.x > 0.0, "the chord crosses the node");
+        let lane = crate::ai::steering::lane_point(
+            Vec2::new(-40.0, 0.0),
+            Vec2::ZERO,
+            7.5,
+            (40.0 - 3.75) / 40.0,
+        );
+        assert!(
+            entry.distance(lane) < 1e-3,
+            "entry {entry:?} is not where the car steers, {lane:?}"
+        );
     }
 }

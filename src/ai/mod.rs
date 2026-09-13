@@ -13,6 +13,7 @@ pub mod errands;
 pub mod figure;
 pub mod focus;
 pub mod giveway;
+pub mod junction;
 pub mod observe;
 pub mod pedestrian;
 pub mod pigeon;
@@ -28,22 +29,27 @@ pub struct AiPlugin;
 
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<traffic::Impatient>().add_plugins((
-            focus::FocusPlugin,
-            observe::AgentObserverPlugin,
-            traffic::TrafficPlugin,
-            giveway::GiveWayPlugin,
-            pedestrian::PedestrianPlugin,
-            social::SocialPlugin,
-            errands::ErrandPlugin,
-            queue::QueuePlugin,
-            crossing::CrossingPlugin,
-            captain::CaptainPlugin,
-            cyclist::CyclistPlugin,
-            animal::AnimalPlugin,
-            pigeon::PigeonPlugin,
-            brolly::BrollyPlugin,
-            busker::BuskerPlugin,
-        ));
+        app.add_message::<traffic::Impatient>()
+            .add_plugins((
+                focus::FocusPlugin,
+                observe::AgentObserverPlugin,
+                traffic::TrafficPlugin,
+                giveway::GiveWayPlugin,
+                pedestrian::PedestrianPlugin,
+                social::SocialPlugin,
+                errands::ErrandPlugin,
+                queue::QueuePlugin,
+                crossing::CrossingPlugin,
+                captain::CaptainPlugin,
+                cyclist::CyclistPlugin,
+                animal::AnimalPlugin,
+                pigeon::PigeonPlugin,
+                brolly::BrollyPlugin,
+                busker::BuskerPlugin,
+            ))
+            // A second call rather than a longer tuple: `Plugins` is implemented
+            // up to a fixed arity and the tuple above is at it. The same reason
+            // `world::WorldPlugin` has two.
+            .add_plugins(junction::JunctionPlugin);
     }
 }

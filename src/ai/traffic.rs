@@ -82,9 +82,10 @@ pub enum DriverObservation {
     Clear,
     Following(Entity),
     Obstacle(Entity),
-    /// Standing at the mouth of a street it has been told to wait for.
-    /// Somebody else's right of way is a reason to be stopped, and a reason
-    /// the recovery timer has no business acting on — see [`ai::giveway`].
+    /// Standing at the mouth of a street, or at the line of a crossing, it
+    /// has been told to wait for. Somebody else's right of way is a reason to
+    /// be stopped, and a reason the recovery timer has no business acting on
+    /// — see [`ai::giveway`] and [`ai::junction`].
     Yielding,
 }
 
@@ -111,7 +112,9 @@ impl Default for TrafficTimer {
 }
 
 /// The traffic systems, as a set, so anything that has to decide something
-/// *before* a car is driven can say so. `ai::giveway` is the first of them.
+/// *before* a car is driven can say so. `ai::giveway` was the first of them
+/// and `ai::junction` is the second: one owns the street a car is about to
+/// enter, the other the crossing at the end of it.
 #[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Driving;
 
@@ -341,6 +344,7 @@ fn drive_traffic(
     city: Res<City>,
     spatial: SpatialQuery,
     giveway: Res<super::giveway::GiveWay>,
+    junctions: Res<super::junction::Junctions>,
     mut rng: ResMut<TrafficRng>,
     mut horns: MessageWriter<Impatient>,
     mut cars: Query<(
@@ -378,7 +382,19 @@ fn drive_traffic(
         // The stop line is 3.6 m short of the node and the arrival radius
         // reaches nine, so without this the car books itself in from the
         // queue and the street it was waiting for is its own.
-        let held = giveway.hold(entity);
+        // Two rules can hold one car: the Gasse it is about to enter belongs
+        // to the other direction, or the crossing at the end of it belongs to
+        // somebody crossing. Both answer in the same currency — the junction
+        // to stop short of — so brake to whichever is nearer, which is the one
+        // actually constraining this car.
+        let held = [giveway.hold(entity), junctions.hold(entity)]
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| {
+                position
+                    .distance_squared(*a)
+                    .total_cmp(&position.distance_squared(*b))
+            });
         if held.is_none() && position.distance(end) < arrival_radius(start.distance(end)) {
             driver.from = driver.to;
             driver.to = driver.after;
@@ -469,9 +485,10 @@ fn drive_traffic(
         }
 
         // Being held is a *reason*, and it outranks whatever the ray happened
-        // to find: a car waiting its turn at a mouth has not failed to get
-        // anywhere. It is also what keeps the recovery timer off it, which is
-        // why the hold has a life of its own — see `ai::giveway`.
+        // to find: a car waiting its turn at a mouth or a stop line has not
+        // failed to get anywhere. It is also what keeps the recovery timer off
+        // it, which is why both holds have a life of their own — see
+        // `ai::giveway` and `ai::junction`.
         if held.is_some() {
             driver.observation = DriverObservation::Yielding;
         }

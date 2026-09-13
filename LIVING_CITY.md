@@ -192,6 +192,33 @@ Two findings the width arithmetic turned up, both recorded rather than acted on:
    movements, right of way, traffic lights, downstream space and pedestrian/
    cyclist interaction. Add recovery for actual deadlocks. A normal queue must
    not be solved by removing its cars.
+
+   Partly landed. `ai::junction` reserves a crossing per *movement* and holds
+   the cars whose movements conflict with one already granted, at the same
+   stop line `ai::giveway` uses; `world::signals` drives the masts that have
+   stood dark since they were built, and a car may only claim a signalled
+   crossing on a green. Conflict is geometric rather than a turn-kind table —
+   see the note below — and priority is main road, then *rechts vor links*,
+   then the longest wait, then the entity id.
+
+   What is **not** done from this increment: downstream space (nothing checks
+   there is room on the far side before letting a car in, only that the
+   claimant has not stopped short for three seconds), pedestrian and cyclist
+   interaction with the phase (nothing on foot reads a signal), predictive
+   following, and deadlock recovery beyond the twenty-two-second timeout that
+   takes a crossing back from a wreck. The reservation is also a point rather
+   than a set of lane connectors: two movements whose arcs miss each other are
+   still made to take turns if their chords cross.
+
+   The conflict rule is worth recording, because the version it replaces was
+   wrong in a way that read as reasonable. `movements_conflict` was a table
+   over `TurnKind`, and a turn kind is named relative to the car making it —
+   so two cars arriving from perpendicular arms and going straight on are both
+   `Straight`, and the table let them share the junction. They meet in the
+   middle of it. The rule now tests whether the two movements' chords across
+   the junction cross, each drawn in its own travel lane, which gets the
+   perpendicular case right and gives "a left turn waits for the oncoming
+   straight and a right turn does not" for free rather than as another table.
 4. **One complete day.** Needs and commitments select goals; small action plans
    execute them. Start with home/work/shop/cafe, queues, parking and walking to
    the entrance. Interrupted activities can resume or choose a valid alternate.

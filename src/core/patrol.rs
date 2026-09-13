@@ -360,13 +360,26 @@ pub struct Watch {
     complaints: Vec<String>,
 }
 
+/// The three readouts nothing else in this watch can see.
+///
+/// Bundled into one parameter because a Bevy system takes sixteen of them and
+/// this one is at the limit — but they belong together anyway. Somebody
+/// standing in a queue, waiting at the mouth of a Gasse or held at a stop
+/// line is *waiting*, which is not blocked, not recovered and not stopped for
+/// no reason, so not one of the three shows up in any other count here.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Rules<'w> {
+    giveway: Res<'w, crate::ai::giveway::GiveWay>,
+    junctions: Res<'w, crate::ai::junction::Junctions>,
+    queues: Res<'w, crate::ai::queue::Queues>,
+}
+
 fn keep_watch(
     time: Res<Time>,
     patrol: Res<Patrol>,
     mut watch: ResMut<Watch>,
     agents: Res<crate::ai::observe::AgentObservations>,
-    giveway: Res<crate::ai::giveway::GiveWay>,
-    queues: Res<crate::ai::queue::Queues>,
+    rules: Rules,
     entities: Query<()>,
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
@@ -428,12 +441,12 @@ fn keep_watch(
              {} standing in {} queues ({:?})",
             agents.agents.len(),
             agents.blocked_episodes,
-            giveway.waiting,
-            giveway.occupied_runs(),
-            giveway.stood_aside,
-            queues.standing(),
-            queues.lines(),
-            queues.tally(),
+            rules.giveway.waiting,
+            rules.giveway.occupied_runs(),
+            rules.giveway.stood_aside,
+            rules.queues.standing(),
+            rules.queues.lines(),
+            rules.queues.tally(),
         );
     }
     let at = patrol.elapsed;
@@ -573,10 +586,25 @@ fn keep_watch(
     // asking to move — and nothing else would ever mention it. So the watch
     // asks directly. Well past the alternation a busy Gasse produces, and well
     // under the minute a five-hundred-metre run legitimately takes.
-    if giveway.longest_wait > 40.0 {
+    if rules.giveway.longest_wait > 40.0 {
         complain(format!(
             "a car has given way for {:.0}s, with {} waiting",
-            giveway.longest_wait, giveway.waiting
+            rules.giveway.longest_wait, rules.giveway.waiting
+        ));
+    }
+
+    // And the same again for a crossing. A car held at a stop line is
+    // yielding, which is neither blocked nor recovered nor counted, so a
+    // junction that has stopped handing itself over reads as a perfectly
+    // healthy town from every other instrument here. Well past the couple of
+    // seconds a crossing takes and past `junction::STUCK`, which is what takes
+    // a claim back from a wreck — so this only fires when that has not helped.
+    if rules.junctions.longest_wait > 30.0 {
+        complain(format!(
+            "a car has waited {:.0}s at a crossing, with {} held at {} claimed junctions",
+            rules.junctions.longest_wait,
+            rules.junctions.waiting,
+            rules.junctions.claimed()
         ));
     }
 
@@ -588,12 +616,12 @@ fn keep_watch(
     // the failure a human would walk past. Well past the longest honest
     // service — see `ai::queue::SERVICE` — and past the patience that empties
     // a line that is merely slow.
-    if queues.longest_stall() > 75.0 {
+    if rules.queues.longest_stall() > 75.0 {
         complain(format!(
             "a queue has not moved for {:.0}s, with {} standing in {} lines",
-            queues.longest_stall(),
-            queues.standing(),
-            queues.lines()
+            rules.queues.longest_stall(),
+            rules.queues.standing(),
+            rules.queues.lines()
         ));
     }
 
