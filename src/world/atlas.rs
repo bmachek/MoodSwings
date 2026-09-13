@@ -335,6 +335,27 @@ pub struct Street {
     /// measure wall to wall rather than to the nearest kerb.
     #[serde(default)]
     pub band: bool,
+    /// Whether the way runs under something rather than over it.
+    ///
+    /// Defaulted like [`Self::band`] — and unlike `band`, the game reads this
+    /// one: see [`Street::is_covered`].
+    #[serde(default)]
+    pub covered: bool,
+}
+
+impl Street {
+    /// Whether this way is a tunnel.
+    ///
+    /// The flag if the file carries one, and the way `tools/bake-city.py`
+    /// decides it otherwise — a name with "tunnel" in it. That is the bake's
+    /// own rule (`covered` there is `tags["tunnel"] in (...) or "tunnel" in
+    /// name`), applied here because the bake computes the answer, uses it for
+    /// its own band widening and width capping, and then never wrote it to the
+    /// file. A file baked after it does will carry the flag and the name will
+    /// stop mattering.
+    pub fn is_covered(&self) -> bool {
+        self.covered || self.name.to_lowercase().contains("tunnel")
+    }
 }
 
 /// How close two points have to be to be the same junction, in metres.
@@ -874,7 +895,28 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
 
     let mut clipped = 0usize;
     let mut uphill = 0usize;
+    let mut buried = 0usize;
     for street in &atlas.streets {
+        // A tunnel is not a street this game can build, and half of one is
+        // worse than none. The ground is held at exactly zero wherever a
+        // street runs, so a bore under the Hofberg would be a flat trench with
+        // the hill cut away round it; [`HILL`] already drops the part of it
+        // the map takes above twelve metres, which is right — what you should
+        // see there is the hill.
+        //
+        // What was left was the *rest* of it. The Josef-Deimer-Tunnel runs a
+        // kilometre under the Hofberg, and the elevation model is a *surface*
+        // model: it reads the hill on top of the bore, up to forty metres, so
+        // fifteen of the way's thirty-nine points were thrown away for being
+        // up a hill the road is actually under. What survived came out as
+        // twenty edges in four stubs with five dead ends — roads that run into
+        // a hillside and stop — and five mapped buildings were dropped for
+        // standing on a carriageway a hundred metres over their heads. None of
+        // it is a surface street. All of it goes.
+        if street.is_covered() {
+            buried += 1;
+            continue;
+        }
         let name = (!street.name.is_empty()).then(|| {
             *named.entry(street.name.as_str()).or_insert_with(|| {
                 signs.names.push(street.name.clone());
@@ -929,7 +971,8 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
 
     info!(
         "{}: {} streets under {} names, {} junctions, {} roads \
-         ({clipped} runs clipped at the edge, {uphill} points left to the hill) \
+         ({clipped} runs clipped at the edge, {uphill} points left to the hill, \
+         {buried} ways left underground) \
          — map data (c) OpenStreetMap contributors, ODbL 1.0",
         atlas.name,
         atlas.streets.len(),
@@ -987,6 +1030,7 @@ mod tests {
             surface: Surface::Asphalt,
             points: points.to_vec(),
             band: false,
+            covered: false,
         }
     }
 
@@ -1076,6 +1120,53 @@ mod tests {
                 plot.name
             );
         }
+    }
+
+    /// A tunnel is not a street, and half of one is worse than none.
+    ///
+    /// The Josef-Deimer-Tunnel runs a kilometre under the Hofberg. The DEM is
+    /// a *surface* model, so it reads the hill on top of the bore — up to
+    /// forty metres — and [`HILL`] threw away fifteen of the way's
+    /// thirty-nine points for being up a hill the road is actually under. What
+    /// was left was twenty edges in four stubs with five dead ends, and five
+    /// mapped buildings dropped for standing on a carriageway a hundred metres
+    /// over their heads.
+    #[test]
+    fn the_committed_landshut_leaves_its_tunnel_underground() {
+        let Some(town) = committed() else { return };
+        let named: Vec<&Street> = town
+            .streets
+            .iter()
+            .filter(|street| street.is_covered())
+            .collect();
+        assert!(
+            !named.is_empty(),
+            "Landshut has a tunnel and the extract has stopped carrying it"
+        );
+
+        let (layout, signs) = layout(&town, 1, 1_000.0);
+        for (index, name) in signs.names.iter().enumerate() {
+            assert!(
+                !name.to_lowercase().contains("tunnel"),
+                "{name} is still painted on a plate at index {index}"
+            );
+        }
+        // And nothing in the graph stands where the bore does. The middle of
+        // the longest covered way is under the hill by any reading.
+        let bore = named
+            .iter()
+            .max_by(|a, b| a.points.len().cmp(&b.points.len()))
+            .expect("a covered way");
+        let middle = Vec2::from(bore.points[bore.points.len() / 2]);
+        let nearest = layout
+            .graph
+            .nodes()
+            .map(|(_, node)| node.pos.distance(middle))
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest > 20.0,
+            "a road node stands {nearest:.1} m from the middle of the tunnel"
+        );
     }
 
     /// A band's centreline goes one way.

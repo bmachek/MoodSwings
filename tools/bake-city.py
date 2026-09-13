@@ -2225,7 +2225,8 @@ POINT = re.compile(r"\(([-\d.]+),([-\d.]+)\)")
 STREET = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), '
     r"arterial: (?P<arterial>true|false), surface: (?P<surface>\w+), "
-    r"points: \[(?P<points>.*)\](?:, band: (?P<band>true|false))?\),?$"
+    r"points: \[(?P<points>.*)\](?:, band: (?P<band>true|false))?"
+    r"(?:, covered: (?P<covered>true|false))?\),?$"
 )
 WATER = re.compile(
     r'^\(name: "(?P<name>[^"]*)", width: (?P<width>[-\d.]+), points: \[(?P<points>.*)\]\),?$'
@@ -2288,7 +2289,12 @@ def read_ron(path):
             # A file that says which ways it folded was written by a bake
             # that had already put its bands between their walls.
             "recentred": m["band"] is not None,
-            "covered": "tunnel" in m["name"].lower(),
+            # The flag if the file carries one, and the way it was decided
+            # otherwise. Same rule as `streets_from_overpass`, and the same one
+            # `atlas::Street::is_covered` applies at load.
+            "covered": m["covered"] == "true"
+            if m["covered"]
+            else "tunnel" in m["name"].lower(),
         })
     waters = []
     for line in sections.get("waters", []):
@@ -2355,6 +2361,11 @@ def write_ron(path, name, centre, streets, buildings, waters, grounds, relief, p
                 f'surface: {street["surface"]}, '
                 f'points: {ron_points(street["points"])}'
                 + (", band: true" if street.get("band") else "")
+                # The runtime reads this one: a covered way is not a street the
+                # game can build, and half a tunnel is worse than none. It was
+                # computed here and used here and never written down, so the
+                # runtime had to guess it back off the name.
+                + (", covered: true" if street.get("covered") else "")
                 + "),\n"
             )
         out.write("    ],\n")
