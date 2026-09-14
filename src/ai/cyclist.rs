@@ -100,6 +100,40 @@ struct BikeKit {
     frame: Handle<Mesh>,
     bars: Handle<Mesh>,
     steel: Handle<StandardMaterial>,
+    /// Every coat a rider can wear, built once.
+    ///
+    /// A cyclist used to get a fresh `StandardMaterial` mixed from three draws,
+    /// and `maintain_cyclists` spawns and despawns riders for as long as the
+    /// player keeps moving — so the count only ever climbed, which is the
+    /// unbounded asset growth the patrol's `Watch` exists to notice. The crowd
+    /// solved this long ago: `pedestrian::PedestrianAssets` holds a palette and
+    /// hands out handles.
+    ///
+    /// `COAT_BINS` levels per channel rather than one flat list, because the
+    /// three draws are kept (see [`COAT_BINS`]) and a bin per channel is what
+    /// uses all three.
+    coats: Vec<Handle<StandardMaterial>>,
+}
+
+/// Levels per colour channel in [`BikeKit::coats`], so the palette is
+/// `COAT_BINS³` coats.
+///
+/// Four is the smallest number that still reads as "everyone dressed
+/// differently" at the distance a cyclist is seen from: sixty-four coats down
+/// one street does not obviously repeat, and the eye is being asked about a
+/// torso two metres tall going past at six metres a second.
+const COAT_BINS: usize = 4;
+
+/// The centre of bin `i`, inside the `0.2..0.8` the three draws span.
+fn coat_channel(i: usize) -> f32 {
+    let width = 0.6 / COAT_BINS as f32;
+    0.2 + width * (i as f32 + 0.5)
+}
+
+/// Which bin a draw from `0.2..0.8` falls in.
+fn coat_bin(draw: f32) -> usize {
+    let t = ((draw - 0.2) / 0.6).clamp(0.0, 0.999_9);
+    (t * COAT_BINS as f32) as usize
 }
 
 pub struct CyclistPlugin;
@@ -137,6 +171,19 @@ fn setup(
             metallic: 0.55,
             ..default()
         }),
+        coats: (0..COAT_BINS * COAT_BINS * COAT_BINS)
+            .map(|i| {
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(
+                        coat_channel(i / (COAT_BINS * COAT_BINS)),
+                        coat_channel((i / COAT_BINS) % COAT_BINS),
+                        coat_channel(i % COAT_BINS),
+                    ),
+                    perceptual_roughness: 0.85,
+                    ..default()
+                })
+            })
+            .collect(),
     });
 }
 
@@ -148,7 +195,6 @@ fn maintain_cyclists(
     city: Res<City>,
     kit: Res<BikeKit>,
     figures: Res<super::figure::FigureAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut rng: ResMut<CyclistRng>,
     mut tempers: ResMut<MoodRng>,
     mix: Res<Tempers>,
@@ -206,15 +252,15 @@ fn maintain_cyclists(
         let mood = temper.baseline;
         let level = crate::mood::face::level_of(mood);
         let pitch = tempers.0.random_range(0.82..1.28);
-        let coat = materials.add(StandardMaterial {
-            base_color: Color::srgb(
-                rng.0.random_range(0.2..0.8),
-                rng.0.random_range(0.2..0.8),
-                rng.0.random_range(0.2..0.8),
-            ),
-            perceptual_roughness: 0.85,
-            ..default()
-        });
+        // Still three draws from the same range, and deliberately so: a fixed
+        // answer is not a skipped question, and taking one draw instead of
+        // three would move every cyclist position downstream of this one. What
+        // changed is where they land — a bin per channel in `kit.coats` rather
+        // than a new material each time.
+        let red = coat_bin(rng.0.random_range(0.2..0.8));
+        let green = coat_bin(rng.0.random_range(0.2..0.8));
+        let blue = coat_bin(rng.0.random_range(0.2..0.8));
+        let coat = kit.coats[red * COAT_BINS * COAT_BINS + green * COAT_BINS + blue].clone();
 
         let mut rider = commands.spawn((
             Name::new("Cyclist"),
@@ -523,6 +569,54 @@ mod tests {
         assert!(
             at.x.abs() < parked,
             "the bike is riding through the parked cars: {at:?}"
+        );
+    }
+
+    /// Every draw the spawner can make indexes a coat that exists.
+    ///
+    /// The index is `red * BINS² + green * BINS + blue` and it is used to
+    /// subscript a `Vec` — so a bin off the end is not a wrong colour, it is a
+    /// panic in the middle of a street. `coat_bin` clamps for that reason, and
+    /// this is the check that it does.
+    #[test]
+    fn every_draw_picks_a_coat_that_exists() {
+        let coats = COAT_BINS * COAT_BINS * COAT_BINS;
+        // The open range the spawner draws from, its ends, and a little past
+        // both in case the range ever moves.
+        let draws = [0.0, 0.1999, 0.2, 0.2001, 0.5, 0.7999, 0.8, 0.9, 1.0];
+        for &r in &draws {
+            for &g in &draws {
+                for &b in &draws {
+                    let i =
+                        coat_bin(r) * COAT_BINS * COAT_BINS + coat_bin(g) * COAT_BINS + coat_bin(b);
+                    assert!(
+                        i < coats,
+                        "draw ({r}, {g}, {b}) indexes coat {i} of {coats}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Bins tile the range the spawner draws from, in order and without gaps.
+    #[test]
+    fn the_bins_cover_the_draw_range_in_order() {
+        let seen: Vec<_> = (0..COAT_BINS).map(|i| coat_bin(coat_channel(i))).collect();
+        assert_eq!(seen, (0..COAT_BINS).collect::<Vec<_>>());
+
+        for i in 0..COAT_BINS {
+            let mid = coat_channel(i);
+            assert!(
+                (0.2..0.8).contains(&mid),
+                "bin {i} centres on {mid}, outside the 0.2..0.8 the spawner draws"
+            );
+        }
+
+        assert_eq!(coat_bin(0.2), 0, "the bottom of the range is the first bin");
+        assert_eq!(
+            coat_bin(0.7999),
+            COAT_BINS - 1,
+            "the top of the range is the last bin"
         );
     }
 }

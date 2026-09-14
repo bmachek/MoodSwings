@@ -43,11 +43,54 @@ const SPRINT_SPEED: f32 = 7.6;
 /// Fraction of top speed used when not sprinting.
 const JOG_PACE: f32 = 0.62;
 
+/// One coat per archetype, plus the default red, built once.
+///
+/// Not a micro-optimisation. `redress_player` runs on every click of the
+/// Charakter screen and `spawn_player` on every start, and both used to call
+/// `materials.add` — a fresh `StandardMaterial` each time, which nothing ever
+/// frees. Sixteen archetypes and a default is a closed set, so the honest
+/// shape is the one `ai::pedestrian::PedestrianAssets` already uses for the
+/// crowd: build the wardrobe at startup and hand out handles.
+#[derive(Resource)]
+pub struct PlayerCoats {
+    /// Indexed by the archetype's position in [`Archetype::ALL`].
+    by_archetype: Vec<Handle<StandardMaterial>>,
+    /// For an archetype with no coat of its own.
+    default: Handle<StandardMaterial>,
+}
+
+impl PlayerCoats {
+    fn for_character(
+        &self,
+        character: crate::ai::archetype::Archetype,
+    ) -> Handle<StandardMaterial> {
+        crate::ai::archetype::Archetype::ALL
+            .iter()
+            .position(|&a| a == character)
+            .and_then(|i| self.by_archetype.get(i))
+            .cloned()
+            .unwrap_or_else(|| self.default.clone())
+    }
+}
+
+fn build_player_coats(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
+    commands.insert_resource(PlayerCoats {
+        by_archetype: crate::ai::archetype::Archetype::ALL
+            .iter()
+            .map(|&a| materials.add(player_coat(a)))
+            .collect(),
+        default: materials.add(player_coat(crate::ai::archetype::Archetype::default())),
+    });
+}
+
 pub struct OnFootPlugin;
 
 impl Plugin for OnFootPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<CharacterChosen>()
+            // Startup, because `spawn_player` is PostStartup and reads it —
+            // the same silently load-bearing ordering `FigureAssets` has.
+            .add_systems(Startup, build_player_coats)
             .add_systems(PostStartup, spawn_player)
             .add_systems(
                 Update,
@@ -73,7 +116,7 @@ fn spawn_player(
     mut commands: Commands,
     config: Res<GameConfig>,
     city: Res<City>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    coats: Res<PlayerCoats>,
     figures: Res<crate::ai::figure::FigureAssets>,
     keybindings: Res<KeyBindings>,
 ) {
@@ -119,7 +162,7 @@ fn spawn_player(
     // The same figure the crowd wears, dressed as whoever the player chose to
     // be — in a third-person game the player is on screen more than anything
     // else, so the archetype's costume matters most on this body of all.
-    let coat = materials.add(player_coat(config.character));
+    let coat = coats.for_character(config.character);
     let mut rng = player_wardrobe_rng(&config);
     crate::ai::figure::dress(
         &mut player,
@@ -158,7 +201,7 @@ fn redress_player(
     mut commands: Commands,
     config: Res<GameConfig>,
     figures: Res<crate::ai::figure::FigureAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    coats: Res<PlayerCoats>,
     players: Query<(Entity, &Mood), With<Player>>,
 ) {
     if chosen.is_empty() {
@@ -170,7 +213,7 @@ fn redress_player(
     };
     let level = crate::mood::face::level_of(mood.value);
     commands.entity(player).despawn_related::<Children>();
-    let coat = materials.add(player_coat(config.character));
+    let coat = coats.for_character(config.character);
     let mut rng = player_wardrobe_rng(&config);
     let mut player = commands.entity(player);
     crate::ai::figure::dress(
