@@ -75,8 +75,10 @@ pub struct Temperament {
     pub recovery: f32,
     /// How much of the neighbourhood's mood they pick up.
     pub contagion: f32,
-    /// How likely they are to go after whoever did it. Nothing reads this yet;
-    /// retaliation is the next stage.
+    /// How likely they are to go after whoever did it. Read by
+    /// `grudge::bears_a_grudge`, which rolls against it once per provocation:
+    /// about one citizen in ten takes it personally, goes red, remembers who,
+    /// and hops after them.
     pub grudge: f32,
 }
 
