@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/bmachek/MoodSwings/security/advisories/new
+    about: Anything that would let one player affect another player's machine, or a server's host. Private, not a public issue — see SECURITY.md.
+  - name: How this codebase works
+    url: https://github.com/bmachek/MoodSwings/blob/main/CLAUDE.md
+    about: The module tour, the schedule, and the six traps that have bitten more than once.
