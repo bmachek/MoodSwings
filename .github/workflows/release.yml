@@ -39,9 +39,35 @@ jobs:
             exit 1
           fi
 
+  gate:
+    # `ci.yml` triggers on `push: branches: [main]` and on pull requests. A tag
+    # push is neither, so before this job existed a release was built, packaged
+    # and drafted without fmt, clippy or a single test having run on the commit
+    # being shipped. The cross-platform matrix is not repeated — it ran on main
+    # before the tag was cut, and the tag points at that same commit — but the
+    # gate itself must run here, because "it passed on main" is a claim about a
+    # different workflow run and nothing checks that they agree.
+    name: gate (fmt + clippy + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - run: tools/check-docs.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+
   build:
     name: build (${{ matrix.target }})
-    needs: [version]
+    needs: [version, gate]
     # `needs` would otherwise skip this job whenever `version` is skipped,
     # which is exactly the workflow_dispatch case.
     if: ${{ !cancelled() && !failure() }}
@@ -126,6 +152,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # One file listing every archive's digest, so a download can be checked
+      # without trusting the page it came from. Generated here rather than per
+      # build job because a checksum file per platform is four files nobody
+      # concatenates.
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+          cat SHA256SUMS
       # Draft on purpose: the generated notes get a once-over and the publish
       # button is the human sign-off.
       - uses: softprops/action-gh-release@v2

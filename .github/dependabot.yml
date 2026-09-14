@@ -1,0 +1,68 @@
+# Dependabot watches the three manifests this repository actually has. There is
+# deliberately no Python entry: `tools/bake-city.py` imports numpy, shapely,
+# pyarrow and tifffile, but nothing in the tree pins them, and a
+# requirements.txt invented here would be a manifest nobody has ever installed
+# from. Write one when a bake has been reproduced from it, not before.
+version: 2
+
+updates:
+  # One cargo entry covers the whole workspace. `crates/multiplayer` has its own
+  # manifest but shares the root Cargo.lock, so a second entry would open two
+  # pull requests for one lockfile change and they would conflict.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Bevy and everything versioned against it. This is not tidiness: Bevy is
+      # ~40 crates released together, and `avian3d`, `bevy_egui` and
+      # `leafwing-input-manager` each pin a Bevy minor — 0.7, 0.42 and 0.21 all
+      # mean "Bevy 0.19". Ungrouped, a Bevy point release arrives as forty pull
+      # requests that only compile together, and an `avian3d` minor arriving
+      # alone is a build that does not link. One pull request, or none.
+      bevy-ecosystem:
+        patterns:
+          - "bevy*"
+          - "avian3d"
+          - "leafwing-input-manager"
+      # Everything else, patch bumps only, in one pull request — because
+      # reviewing those one at a time is how a repository stops reviewing them.
+      patch:
+        update-types:
+          - patch
+    ignore:
+      # `rodio` is declared directly only so `audio::files` can reach its
+      # decoders, and it is pinned to the version `bevy_audio` already uses so
+      # nothing is compiled twice (see the comment in Cargo.toml). A bump that
+      # is not the one Bevy moved to would compile rodio a second time, so it
+      # rides with the Bevy upgrade or not at all.
+      - dependency-name: rodio
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # The dedicated server image, `Dockerfile.server` — matched because
+  # Dependabot's filename test is an unanchored /dockerfile|containerfile/i,
+  # not an exact name. Its `rust:1.95-bookworm` must not drift ahead of the
+  # `rust-version` in Cargo.toml on its own; CI's container job is what catches
+  # that, and it runs on every pull request including these.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"

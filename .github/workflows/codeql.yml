@@ -1,0 +1,67 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, before the working week. A scheduled run is not redundant with
+    # the pull-request one: CodeQL ships new queries continuously, so the same
+    # unchanged code is worth re-analysing against a newer ruleset.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # Uploading results to the Security tab needs more than the read-only
+      # default token.
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `build-mode: none` is the whole reason this workflow is affordable.
+          # CodeQL's Rust support builds its database from source without
+          # compiling, and compiling this project is an hour of Bevy — a
+          # build-mode: manual job would cost more runner time than every other
+          # workflow here put together and would time out as often as it passed.
+          - language: rust
+            build-mode: none
+          # No `build-mode` below this line, deliberately. The input is defined
+          # for compiled languages; for these it is left empty, which the action
+          # reads as "not provided". Setting it to `none` here would be passing
+          # a value whose meaning for an interpreted language is undocumented.
+          #
+          # `tools/bake-city.py` is 3,264 lines and the largest single file in
+          # the repository, Rust included, and nothing else looks at it: no
+          # linter, no formatter, no test. This is the only automated reader it
+          # has.
+          - language: python
+          # The workflows analyse themselves. Worth having because everything
+          # here is `pull_request`-triggered, where a careless expression
+          # interpolated into a `run:` block is a script injection from a fork.
+          - language: actions
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
