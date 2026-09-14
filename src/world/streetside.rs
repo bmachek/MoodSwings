@@ -1707,6 +1707,15 @@ impl Oblong {
         self.half.x * self.axis.dot(n).abs() + self.half.y * self.across().dot(n).abs()
     }
 
+    /// The point on this rectangle nearest `at` — `at` itself if it is inside
+    /// one. The measurement a distance to a wall is made of.
+    fn nearest(&self, at: Vec2) -> Vec2 {
+        let half = self.half.abs();
+        let away = at - self.centre;
+        let local = Vec2::new(away.dot(self.axis), away.dot(self.across())).clamp(-half, half);
+        self.centre + self.axis * local.x + self.across() * local.y
+    }
+
     /// Do the two overlap by more than `margin` in every direction?
     ///
     /// The separating-axis test: two convex shapes miss each other if there is
@@ -1830,6 +1839,89 @@ impl Corridors {
                 })
             })
         })
+    }
+}
+
+/// Every wall in the town, filed by cell, so something standing on a pavement
+/// can ask how much room it has before the building behind it.
+///
+/// The sibling of [`Corridors`] and built beside it, for the same reason: it
+/// is a fact about the whole layout, and re-deriving it inside a spawner that
+/// sees one street at a time is how a spawner ends up guessing.
+///
+/// Guessing is exactly what went wrong. A pavement is [`SIDEWALK_WIDTH`] wide
+/// by the layout's own rule — `corridors` reserves it either side of every
+/// carriageway and no *generated* building may stand on it — so the room in
+/// front of a wall looks like a constant, and a constant is what the street
+/// trees used. A town read off a map keeps its real houses where the map put
+/// them: [`lots`] only refuses a mapped building that stands more than a metre
+/// into the *carriageway*, so along the Altstadt the wall is at the kerb and
+/// there is no pavement to have room on. The constant said 2.35 m and the
+/// Neustadt said none, and the difference was a plane tree inside a first
+/// floor.
+#[derive(Resource)]
+pub struct Frontages(HashMap<(i32, i32), Vec<Oblong>>);
+
+impl Frontages {
+    pub fn build(layout: &CityLayout) -> Self {
+        let mut filed: HashMap<(i32, i32), Vec<Oblong>> = HashMap::default();
+        for block in &layout.blocks {
+            for building in &block.buildings {
+                // The convention the whole of `buildings` reads: `facing` turns
+                // +Z out towards the street, so local +X — the frontage — is
+                // the axis. A block's own buildings have no `facing` and their
+                // footprint is a rectangle on the map, which is what a yaw of
+                // nought gives.
+                let yaw = building.facing.unwrap_or(0.0);
+                file(
+                    &mut filed,
+                    Oblong {
+                        centre: building.footprint.center(),
+                        axis: Vec2::new(yaw.cos(), -yaw.sin()),
+                        half: building.footprint.size() * 0.5,
+                    },
+                );
+            }
+        }
+        Self(filed)
+    }
+
+    /// Every wall within `limit` of `at`: which way it lies and how far off it
+    /// stands, handed one at a time to `each`.
+    ///
+    /// Every one of them rather than the nearest, because a tree on a corner
+    /// has two and the one that decides how big it may be is not always the
+    /// closer: a crown is not round, and it can reach further towards the wall
+    /// behind it than towards the one beside it. A point *inside* a building
+    /// comes back at nought with no direction to speak of.
+    pub fn near(&self, at: Vec2, limit: f32, mut each: impl FnMut(Vec2, f32)) {
+        let (low, high) = (
+            cell_of(at - Vec2::splat(limit)),
+            cell_of(at + Vec2::splat(limit)),
+        );
+        for x in low.0..=high.0 {
+            for z in low.1..=high.1 {
+                for wall in self.0.get(&(x, z)).into_iter().flatten() {
+                    let away = wall.nearest(at) - at;
+                    let off = away.length();
+                    if off <= limit {
+                        each(away.normalize_or_zero(), off);
+                    }
+                }
+            }
+        }
+    }
+
+    /// How far off the nearest wall is, looking no further than `limit`.
+    ///
+    /// `None` where there is nothing that near, which is the answer on a
+    /// bridge, along a park and out in the fields.
+    pub fn room(&self, at: Vec2, limit: f32) -> Option<f32> {
+        let mut nearest = None::<f32>;
+        self.near(at, limit, |_, off| {
+            nearest = Some(nearest.map_or(off, |best: f32| best.min(off)));
+        });
+        nearest
     }
 }
 
@@ -2747,6 +2839,91 @@ fn kind_for(rng: &mut ChaCha8Rng, district: District, arterial: bool) -> Buildin
 mod tests {
     use super::*;
 
+    /// The nearest point on a rectangle, which is the whole of what a distance
+    /// to a wall is made of — and the one piece of it that is easy to get
+    /// wrong, because the rectangle is turned onto its own street and the
+    /// point is not.
+    #[test]
+    fn the_nearest_point_on_a_wall_is_on_the_wall() {
+        // Four metres by two, lying along +X, centred on the origin.
+        let flat = Oblong {
+            centre: Vec2::ZERO,
+            axis: Vec2::X,
+            half: Vec2::new(2.0, 1.0),
+        };
+        assert_eq!(flat.nearest(Vec2::new(0.0, 5.0)), Vec2::new(0.0, 1.0));
+        assert_eq!(flat.nearest(Vec2::new(9.0, 0.0)), Vec2::new(2.0, 0.0));
+        // A point inside is its own nearest point: there is no room there at
+        // all, which is what the caller has to hear.
+        assert_eq!(flat.nearest(Vec2::new(0.5, 0.2)), Vec2::new(0.5, 0.2));
+        // And the same rectangle stood on end answers across the other axis.
+        let upright = Oblong {
+            centre: Vec2::ZERO,
+            axis: Vec2::Y,
+            half: Vec2::new(2.0, 1.0),
+        };
+        let near = upright.nearest(Vec2::new(5.0, 0.0));
+        assert!(
+            (near - Vec2::new(1.0, 0.0)).length() < 1.0e-5,
+            "turned by a quarter and it still answered across its length: {near:?}"
+        );
+    }
+
+    /// And the index over them. The grid is the part that can be wrong — a
+    /// wall filed under one cell and looked for in another is a wall that is
+    /// not there — so it is checked against looking at every building in the
+    /// town, which is what the grid exists to avoid doing.
+    #[test]
+    fn the_wall_index_answers_what_a_look_at_every_building_would() {
+        let city =
+            super::super::citygen::generate(7, 600.0, crate::core::config::CityStyle::Generisch);
+        let frontages = Frontages::build(&city);
+        let every = |at: Vec2| {
+            city.blocks
+                .iter()
+                .flat_map(|block| &block.buildings)
+                .map(|building| {
+                    let yaw = building.facing.unwrap_or(0.0);
+                    Oblong {
+                        centre: building.footprint.center(),
+                        axis: Vec2::new(yaw.cos(), -yaw.sin()),
+                        half: building.footprint.size() * 0.5,
+                    }
+                    .nearest(at)
+                    .distance(at)
+                })
+                .fold(f32::INFINITY, f32::min)
+        };
+        // A ladder of probes across the whole square, kerbs and open ground
+        // and the middles of blocks alike.
+        let mut found = 0;
+        for x in -6..=6 {
+            for z in -6..=6 {
+                let at = Vec2::new(x as f32 * 95.0, z as f32 * 95.0);
+                let brute = every(at);
+                match frontages.room(at, 8.0) {
+                    Some(room) => {
+                        found += 1;
+                        assert!(
+                            (room - brute).abs() < 1.0e-3,
+                            "at {at:?} the index says {room:.3} m and the town says {brute:.3} m"
+                        );
+                    }
+                    None => assert!(
+                        brute > 8.0,
+                        "at {at:?} the index found nothing and the town has a wall {brute:.3} m off"
+                    ),
+                }
+            }
+        }
+        assert!(found > 20, "only {found} of 169 probes were near a wall");
+        // And far outside the square there is nothing to find.
+        assert!(
+            frontages.room(Vec2::splat(4000.0), 5.0).is_none(),
+            "a wall found in open country"
+        );
+    }
+
     /// Whatever survives of a mapped building, one part of it is the building.
     ///
     /// Parts are dropped one at a time, and the one that goes is often the
@@ -3279,6 +3456,7 @@ mod tests {
                 arterial,
                 surface,
                 length: 20.0,
+                rules: Default::default(),
             };
         // A churchyard path off the market: no kerb.
         assert!(flush(&lane(4.0, false, Surface::Sett)));

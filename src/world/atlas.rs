@@ -341,9 +341,39 @@ pub struct Street {
     /// one: see [`Street::is_covered`].
     #[serde(default)]
     pub covered: bool,
+    /// Which way the traffic may go: +1 along the points, −1 against them,
+    /// 0 for an ordinary two-way street.
+    ///
+    /// Relative to the point order because that is the only frame the file
+    /// has. An `i8` rather than an enum so the RON stays the one-line-per-
+    /// street dialect `tools/bake-city.py` writes and reads back; it is turned
+    /// into a [`roadgraph::Oneway`] the moment the graph is built.
+    #[serde(default)]
+    pub oneway: i8,
+    /// A Fussgaengerzone. Defaulted, so an atlas baked before
+    /// `bake-city.py --reflag` existed still loads as the town it was: open
+    /// to traffic everywhere, which is how it has always been played.
+    #[serde(default)]
+    pub pedestrian: bool,
 }
 
 impl Street {
+    /// What the traffic law says about this street, in the graph's own terms.
+    pub fn rules(&self) -> super::roadgraph::Rules {
+        use super::roadgraph::Oneway;
+        super::roadgraph::Rules {
+            oneway: match self.oneway {
+                1 => Oneway::Along,
+                -1 => Oneway::Against,
+                // Anything else is a file saying something this build does
+                // not know; a street nobody can drive is worse than a street
+                // driven both ways.
+                _ => Oneway::Both,
+            },
+            pedestrian: self.pedestrian,
+        }
+    }
+
     /// Whether this way is a tunnel.
     ///
     /// The flag if the file carries one, and the way `tools/bake-city.py`
@@ -962,7 +992,18 @@ pub fn layout(atlas: &Atlas, seed: u64, half_extent: f32) -> (CityLayout, Signpo
                 && from != node
                 && before.distance(at) >= SHORTEST
             {
-                graph.connect(from, node, street.width, street.arterial, street.surface);
+                // The edges of a street are laid down in its own point
+                // order, which is the order the `oneway` sign is written
+                // against — so `Along` here means along the polyline, and
+                // every edge of one street says the same thing.
+                graph.connect_under(
+                    from,
+                    node,
+                    street.width,
+                    street.arterial,
+                    street.surface,
+                    street.rules(),
+                );
                 signs.per_edge.push(name);
             }
             previous = Some((at, node));
@@ -1031,6 +1072,8 @@ mod tests {
             points: points.to_vec(),
             band: false,
             covered: false,
+            oneway: 0,
+            pedestrian: false,
         }
     }
 
@@ -1395,10 +1438,21 @@ mod tests {
             Some(crate::world::citygen::BuildingKind::Church)
         );
 
-        // And the rest of what a person walks across town to look at. Only a
-        // landmark is named — the five hundred listed townhouses that make up
-        // an Altstadt street wall are not, because a name here means the
-        // height is believed as it stands.
+        // And the rest of what the map puts a name on.
+        //
+        // This used to say that only a landmark is named, because a name is
+        // what made the bake believe a height as it stands and leave a box
+        // uncut. That is still true of the *bake*, and it is no longer all a
+        // name means in this file: `bake-city.py --rename` writes the names
+        // and the kinds off the OSM building tags, which the Overture source
+        // the footprints were cut from does not carry, and it writes them
+        // onto boxes that were already cut. So the Finanzamt, the Galeria,
+        // the Edeka and a hairdresser called HAARMONIE are named here, and
+        // none of them moved a millimetre for it.
+        //
+        // What the bar is still guarding is the other end: the five hundred
+        // listed townhouses of an Altstadt street wall must not each become a
+        // landmark, and a town with no names at all is a failed read.
         let named = town.buildings.iter().filter(|plot| !plot.name.is_empty());
         let mut kinds = std::collections::HashMap::new();
         for plot in named {
@@ -1411,8 +1465,8 @@ mod tests {
         }
         let total: usize = kinds.values().sum();
         assert!(
-            (40..400).contains(&total),
-            "{total} named landmarks, which is either a town with none or one \
+            (40..900).contains(&total),
+            "{total} named parts, which is either a town with none or one \
              where every listed house counts as one"
         );
 
@@ -1775,6 +1829,135 @@ mod tests {
         for edge in layout.graph.edges() {
             assert!(edge.length < 200.0, "an edge crossed the whole town");
         }
+    }
+
+    /// A street may be one-way, and which way is said against its own points.
+    #[test]
+    fn a_one_way_street_may_be_driven_one_way() {
+        use super::super::roadgraph::Oneway;
+        let mut up = street(&[(0.0, 0.0), (60.0, 0.0)]);
+        up.oneway = 1;
+        let (up, _) = layout(&town(vec![up]), 1, 1000.0);
+        let edge = up.graph.edge(super::super::roadgraph::EdgeId(0));
+        assert_eq!(edge.rules.oneway, Oneway::Along);
+        assert!(edge.drivable_from(edge.a) && !edge.drivable_from(edge.b));
+
+        let mut down = street(&[(0.0, 0.0), (60.0, 0.0)]);
+        down.oneway = -1;
+        let (down, _) = layout(&town(vec![down]), 1, 1000.0);
+        let edge = down.graph.edge(super::super::roadgraph::EdgeId(0));
+        assert_eq!(edge.rules.oneway, Oneway::Against);
+        assert!(!edge.drivable_from(edge.a) && edge.drivable_from(edge.b));
+    }
+
+    /// A Fussgaengerzone is closed to traffic from either end, and nothing
+    /// parks on it.
+    #[test]
+    fn a_pedestrian_street_is_closed_to_traffic_from_both_ends() {
+        let mut quiet = street(&[(0.0, 0.0), (60.0, 0.0)]);
+        quiet.pedestrian = true;
+        let (quiet, _) = layout(&town(vec![quiet]), 1, 1000.0);
+        let edge = quiet.graph.edge(super::super::roadgraph::EdgeId(0));
+        assert!(!edge.drivable_from(edge.a) && !edge.drivable_from(edge.b));
+        assert!(!edge.parkable());
+    }
+
+    /// And the town still hangs together once the law is on it.
+    ///
+    /// This is the one that could go badly. Closing three kilometres of
+    /// Landshut to traffic and making four more one-way is exactly the change
+    /// that can quarter the drivable network without anything failing to
+    /// compile — the traffic would simply spend the game turning round. So:
+    /// walk the graph the way a driver may, from the busiest junction there
+    /// is, and insist that most of the town is still reachable.
+    ///
+    /// The bar is deliberately not "all of it". A real extract has stubs
+    /// behind a pedestrian street and driveways clipped at the square's edge,
+    /// and the generated town it is compared against cannot reach everything
+    /// either.
+    #[test]
+    fn the_committed_landshut_is_still_drivable_once_its_law_is_read() {
+        let Some(town) = load("landshut") else {
+            return;
+        };
+        let (built, _) = layout(&town, 1, 1000.0);
+        let graph = &built.graph;
+        // The largest piece the traffic can reach, rather than whatever one
+        // node happens to be on: the busiest junction in the town is in the
+        // middle of the Altstadt, where every arm is closed to cars, and a
+        // walk from there proves only that.
+        let mut seen = vec![false; graph.node_count()];
+        let (mut reached, mut driven) = (0usize, 0.0f32);
+        for (from, _) in graph.nodes() {
+            if seen[from.0 as usize] {
+                continue;
+            }
+            let mut queue = vec![from];
+            seen[from.0 as usize] = true;
+            let (mut nodes, mut metres) = (0usize, 0.0f32);
+            while let Some(at) = queue.pop() {
+                nodes += 1;
+                for (node, edge) in graph.neighbors(at) {
+                    if !graph.edge(edge).drivable_from(at) {
+                        continue;
+                    }
+                    metres += graph.edge(edge).length;
+                    if !seen[node.0 as usize] {
+                        seen[node.0 as usize] = true;
+                        queue.push(node);
+                    }
+                }
+            }
+            if nodes > reached {
+                (reached, driven) = (nodes, metres);
+            }
+        }
+        let total: f32 = graph.edges().map(|edge| edge.length).sum();
+        // The same walk with the law switched off, so the bar is against the
+        // town this change found rather than against a perfect one.
+        let mut seen = vec![false; graph.node_count()];
+        let mut open = 0usize;
+        for (from, _) in graph.nodes() {
+            if seen[from.0 as usize] {
+                continue;
+            }
+            let mut queue = vec![from];
+            seen[from.0 as usize] = true;
+            let mut nodes = 0usize;
+            while let Some(at) = queue.pop() {
+                nodes += 1;
+                for (node, _) in graph.neighbors(at) {
+                    if !seen[node.0 as usize] {
+                        seen[node.0 as usize] = true;
+                        queue.push(node);
+                    }
+                }
+            }
+            open = open.max(nodes);
+        }
+        // Against the same walk with the law switched off, so the bar is about
+        // what the law cost rather than about a perfect town.
+        //
+        // The Landshut graph is already in pieces before any of this: it welds
+        // only where two OSM ways shared a node, and the square's edge and the
+        // Hofberg cut the rest, so the largest piece of it is 415 of 1568
+        // nodes. Measured one rule at a time, closed streets take that to 266
+        // and one-way streets to 234; together they leave 138 nodes and eight
+        // and a half of the town's thirty-four kilometres.
+        //
+        // A third of what there was is the bar, and it is low on purpose: the
+        // number it guards against is nought. A sign read the wrong way round,
+        // or a rule applied to every street instead of the ones the map named,
+        // closes the town to traffic, and nothing else in the suite would
+        // notice — the cars would simply all be somewhere else.
+        assert!(
+            reached * 100 / open >= 30,
+            "the law left {reached} of {open} drivable junctions"
+        );
+        assert!(
+            driven >= 6_000.0 && driven <= total,
+            "{driven:.0} m drivable out of the town's {total:.0} m"
+        );
     }
 
     /// Points too close together do not become an edge.

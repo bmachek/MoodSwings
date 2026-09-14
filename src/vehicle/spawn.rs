@@ -737,6 +737,15 @@ pub fn spawn_parked_vehicles(
         if parking == Parking::None {
             continue;
         }
+        // And a Fussgaengerzone is not a car park. It is wide enough for two
+        // rows — the Altstadt is fifteen metres across — so the width rule
+        // above parked it like a boulevard, and the postcard street had
+        // forty cars standing down the middle of it. The delivery van stays:
+        // that is what a pedestrian zone has on it at nine in the morning,
+        // and `vehicle::delivery` places its own rather than through here.
+        if !edge.parkable() {
+            continue;
+        }
 
         let a = city.graph.node(edge.a).pos;
         let b = city.graph.node(edge.b).pos;

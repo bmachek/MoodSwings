@@ -165,7 +165,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`) and the enamel plates on their corners (`streetname`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -324,6 +324,34 @@ a citation, touching nothing else — so a name arriving on the list costs one
 diff hunk rather than a re-download of Overpass, Overture and a DEM tile. It is
 idempotent, it measures nothing (see the `tidy_bands` rule above), and a Rust
 test fails if the committed file has not had it run.
+
+`--relabel` is one of three line-surgery modes, and they share that contract:
+each writes one kind of fact onto a committed atlas, fills rather than
+overrules, measures nothing that is written down, and writes the same file
+twice.
+
+```sh
+tools/bake-city.py --relabel assets/cities/landshut.ron
+tools/bake-city.py --reflag  assets/cities/landshut.ron roads.json
+tools/bake-city.py --rename  assets/cities/landshut.ron built.json
+```
+
+The other two exist because the bake has always held tags it never wrote down.
+`--reflag` takes the roads dump's `oneway` and `highway=pedestrian`: nine per
+cent of Landshut's road length is one-way and 4.8 km of it is a
+Fussgaengerzone, the Altstadt included, and `roadgraph::Rules` is what
+`ai::traffic`, `vehicle::spawn` and `world::roadsign` read. `--rename` takes
+the buildings dump's `name` and its `kind_of` tags, which Overture — where the
+footprints come from — does not carry: 81 named buildings became 171, and the
+Finanzamt, the Galeria and the Sparkasse wear their own names.
+
+Both match by geometry rather than by identity, because the bake keeps no OSM
+ids: a street by walking its polyline and letting the samples vote, a building
+by containment with a size guard in *both* directions — a forty-square-metre
+`man_made=tower` next door will otherwise hand its tags to the six-hundred-
+metre hall whose middle lands beside it, and the runtime draws a thirty-seven-
+metre pyramid of brick. A name or a kind is written per *building*, never per
+part: one wing named and its siblings blank is two buildings that touch.
 
 ### A bridge cannot be raised
 
