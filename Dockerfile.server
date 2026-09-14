@@ -1,4 +1,4 @@
-FROM rust:1.95-bookworm AS build
+FROM rust:1.98-bookworm AS build
 WORKDIR /build
 # Isolated context: the dedicated server has no Bevy, GPU or audio dependency.
 COPY crates/multiplayer/Cargo.toml ./Cargo.toml
