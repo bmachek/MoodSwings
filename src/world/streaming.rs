@@ -372,6 +372,23 @@ pub fn update_streaming(
                 crate::core::rng::stream::BUNTING,
                 (chunk.x, chunk.y),
             );
+            // Steam out of a gully, on the odd street. Its own draw rather than
+            // one inside `decals`, because a plume is geometry and the manholes
+            // are decals — they only share a hole in the ground.
+            //
+            // Built here rather than inside the loop, with the other four, and
+            // that is a fix rather than tidying. A chunk stream is a pure
+            // function of `(seed, key, chunk)`, so one constructed per edge is
+            // the *same* stream every time: every street in a chunk drew the
+            // same 0.09 and the same `along`, and the chunk came out with steam
+            // on all of its streets or on none, each plume the same fraction of
+            // the way down. One stream walked once over the edge list is what
+            // the other four already do.
+            let mut steaming = crate::core::rng::stream_for_chunk(
+                config.world_seed,
+                crate::core::rng::stream::PLUMES,
+                (chunk.x, chunk.y),
+            );
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
@@ -453,14 +470,6 @@ pub fn update_streaming(
                     to,
                     chunk,
                     works_range,
-                );
-                // Steam out of a gully, on the odd street. Its own draw rather
-                // than one inside `decals`, because a plume is geometry and the
-                // manholes are decals — they only share a hole in the ground.
-                let mut steaming = crate::core::rng::stream_for_chunk(
-                    config.world_seed,
-                    crate::core::rng::stream::PLUMES,
-                    (chunk.x, chunk.y),
                 );
                 if steaming.random_range(0.0..1.0) < 0.09 {
                     let along = steaming.random_range(0.2..0.8);

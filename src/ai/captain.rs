@@ -105,6 +105,11 @@ struct CaptainAssets {
     shell: Handle<StandardMaterial>,
     ink: Handle<StandardMaterial>,
     bubble: Handle<StandardMaterial>,
+    /// His coat. Here rather than built where he is spawned, because `haunt`
+    /// puts him back every time the player wanders off and returns, and a
+    /// material added per spawn is a material nothing ever frees — the
+    /// unbounded growth the patrol's asset check exists to catch.
+    coat: Handle<StandardMaterial>,
 }
 
 pub struct CaptainPlugin;
@@ -197,6 +202,12 @@ fn setup(
             perceptual_roughness: 0.5,
             ..default()
         }),
+        // A long anonymous coat, the colour of something best walked past.
+        coat: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.23, 0.24, 0.18),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
         bubble: materials.add(StandardMaterial {
             base_color_texture: Some(bubble),
             unlit: true,
@@ -221,7 +232,7 @@ fn haunt(
     config: Res<GameConfig>,
     city: Res<City>,
     figures: Res<FigureAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Res<CaptainAssets>,
     mut rng: ResMut<AudioRng>,
     players: Query<&Transform, With<Player>>,
     captains: Query<(Entity, &Transform), With<CaptainErdnuss>>,
@@ -281,12 +292,7 @@ fn haunt(
         grudge: 0.0,
     };
     let level = crate::mood::face::level_of(temper.baseline);
-    // A long anonymous coat, the colour of something best walked past.
-    let coat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.23, 0.24, 0.18),
-        perceptual_roughness: 0.9,
-        ..default()
-    });
+    let coat = assets.coat.clone();
 
     let mut captain = commands.spawn((
         Name::new("Captain Erdnuss"),

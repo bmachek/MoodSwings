@@ -38,6 +38,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # `raytracing` gates one `#[cfg(feature)]` block that probes the GPU for
+      # the wgpu features `bevy_solari` needs. Nothing else in the tree compiles
+      # it, so a Bevy point release that moves `SolariPlugins::required_wgpu_features`
+      # would break that build with nobody watching. `check` rather than
+      # `build`, because the question is whether it still compiles, not whether
+      # it links — and `bevy_solari` is not cheap.
+      #
+      # No `dlss` counterpart: it needs the vendor SDK, which is not on a
+      # runner and cannot be put there. That one stays unverified, and
+      # CLAUDE.md says so.
+      - run: cargo check --locked --features raytracing
 
   test:
     name: build + test (${{ matrix.os }})

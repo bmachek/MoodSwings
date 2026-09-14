@@ -1,0 +1,33 @@
+# One maintainer, so this file is not about routing. It exists so that the
+# files with a rule attached to them cannot be changed without the rule's
+# author seeing it — the twins that drift, the lists that are contracts, and
+# the things CI cannot check.
+
+# Everything, by default.
+*                           @bmachek
+
+# CLAUDE.md and AGENTS.md must stay identical from line 4 down, and
+# `tools/check-docs.sh` is what says so. A change to the checker is a change to
+# the only thing holding the twins together.
+/CLAUDE.md                  @bmachek
+/AGENTS.md                  @bmachek
+/tools/check-docs.sh        @bmachek
+
+# The two fetch scripts are twins as well: the material and sound lists are the
+# contract and only the shell plumbing may differ between them.
+/tools/fetch-materials.sh   @bmachek
+/tools/fetch-materials.bat  @bmachek
+
+# The one non-CC0 asset in the tree. ODbL, and CREDITS.md carries the
+# attribution the licence requires.
+/assets/cities/             @bmachek
+/CREDITS.md                 @bmachek
+/LICENSE                    @bmachek
+
+# Determinism lives here: the RNG streams and the chunk index. A shared stream
+# or a reused key silently reshuffles the whole city.
+/src/core/rng.rs            @bmachek
+/src/world/streaming.rs     @bmachek
+
+# CI and release. A change here changes what "it passed" means.
+/.github/                   @bmachek

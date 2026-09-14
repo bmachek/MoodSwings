@@ -411,6 +411,15 @@ fn drive_capture(
     time: Res<Time<Real>>,
     mut exit: MessageWriter<AppExit>,
     drawables: Query<(), With<Mesh3d>>,
+    // Split the same count by whether the streamer owns the entity. README's
+    // frame section records 377,334 meshes at `--stream-radius 200` and
+    // 467,949 at 900 and says outright that it cannot explain the first
+    // number — but the two together already answer it, because resident chunks
+    // go as `π(r + 176.8)² / 62500`: 7.1 against 58.3. Fit a line through the
+    // pair and about 365,000 of those meshes do not depend on the radius at
+    // all. That is a claim from two data points and a bit of geometry; this is
+    // the reading that settles it, and it costs one query and a comma.
+    streamed: Query<(), (With<Mesh3d>, With<crate::world::buildings::ChunkOf>)>,
     cameras: Query<&Transform, With<CameraRig>>,
     subjects: Query<&Transform, With<Player>>,
 ) {
@@ -474,11 +483,12 @@ fn drive_capture(
             .single()
             .map(|t| format!("{:?}", t.translation))
             .unwrap_or_else(|_| "<none>".into());
+        let meshes = drawables.iter().count();
+        let streamed = streamed.iter().count();
         info!(
-            "capturing: {} meshes, camera at {}, player at {}",
-            drawables.iter().count(),
-            camera,
-            player
+            "capturing: {meshes} meshes ({streamed} streamed, {} resident regardless), \
+             camera at {camera}, player at {player}",
+            meshes - streamed,
         );
 
         let flag = progress.saved.clone();

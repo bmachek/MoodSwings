@@ -9,7 +9,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::render::quality::GraphicsSettings;
 
+/// Every block below carries `#[serde(default)]`, and it is load-bearing rather
+/// than tidy — the same argument [`GraphicsSettings`] already makes for itself.
+/// This whole tree is written into `saves/options.ron`, and the loader's answer
+/// to a file it cannot parse is to throw all of it away and start from
+/// defaults, so *one* field added anywhere in here without a default silently
+/// resets the player's city, costume and keybindings on their next launch. That
+/// is not hypothetical; it happened when `contact_shadow_length` and
+/// `sharpening` arrived in `GraphicsSettings`.
+///
+/// The per-field `#[serde(default)]` attributes further down are the older
+/// answer — one remembered each time a field arrived — and they are left in
+/// place because their doc comments record when each dial appeared. The
+/// block-level attribute is what actually holds now, and it cannot be
+/// forgotten.
 #[derive(Resource, Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GameConfig {
     /// Everything about world layout derives from this. Same seed, same city.
     pub world_seed: u64,
@@ -418,6 +433,7 @@ impl Gait {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct WindowConfig {
     /// Only meaningful in windowed mode; fullscreen takes the screen's own
     /// size, and the settings screen greys this out accordingly.
@@ -477,6 +493,7 @@ impl Resolution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WorldConfig {
     /// Half-extent of the city, in metres.
     pub half_extent: f32,
@@ -514,6 +531,7 @@ pub struct WorldConfig {
 /// which in this city means hopping. A player who bounces off a wall harder
 /// than they can hop is a player who has lost control of the game.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BounceConfig {
     /// Fraction of closing speed returned by a collision, 0 to 1.
     pub restitution: f32,
@@ -595,6 +613,7 @@ fn default_crash_spin() -> f32 {
 /// varies from one citizen to the next and a global dial cannot express "most
 /// people are fine, one in ten is a menace".
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MoodConfig {
     /// How far a mood carries to the neighbours, in metres.
     ///
@@ -655,6 +674,7 @@ pub struct MoodConfig {
 /// and the pavement offset are geometry, and a slider on geometry is a way to
 /// clip a crowd through a wall from a panel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CrowdConfig {
     /// How many pedestrians are kept walking around the player.
     pub population: usize,
@@ -750,6 +770,7 @@ impl Default for TrafficConfig {
 /// The mixer. Three numbers rather than one, because the background bed and
 /// the things that happen in front of it want independent control.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AudioConfig {
     /// Scales everything below it.
     pub master: f32,
@@ -930,6 +951,35 @@ impl Default for GameConfig {
     }
 }
 
+// Each config block's `Default` is its slice of `GameConfig::default()`, the
+// way `CameraConfig`'s below already was. Delegating rather than repeating the
+// literals is the point: one list of numbers, and `#[serde(default)]` on every
+// block can lean on it. Building the whole config to take one field is a cost
+// paid once per missing block at load, which is never in a normal run.
+impl Default for WorldConfig {
+    fn default() -> Self {
+        GameConfig::default().world
+    }
+}
+
+impl Default for BounceConfig {
+    fn default() -> Self {
+        GameConfig::default().bounce
+    }
+}
+
+impl Default for MoodConfig {
+    fn default() -> Self {
+        GameConfig::default().mood
+    }
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        GameConfig::default().audio
+    }
+}
+
 impl Default for CameraConfig {
     fn default() -> Self {
         GameConfig::default().camera
@@ -954,6 +1004,152 @@ mod tests {
         without.replace_range(start..end, "");
         let parsed: GameConfig = ron::from_str(&without).unwrap();
         assert!(parsed.stroll.enabled);
+    }
+
+    /// Every `name:(...)` section of a serialised config, as
+    /// `(start, end, name)` byte ranges covering the section and the comma
+    /// after it.
+    ///
+    /// Found by walking the text rather than by listing the sections, because a
+    /// list is the thing that gets forgotten — which is exactly the failure the
+    /// two tests below exist to prevent.
+    fn top_level_sections(text: &str) -> Vec<(usize, usize, &str)> {
+        let mut starts: Vec<(usize, &str)> = Vec::new();
+        let mut depth = 0usize;
+        let mut name_start = None;
+        for (i, c) in text.char_indices() {
+            match c {
+                '(' => {
+                    if depth == 1
+                        && let Some(at) = name_start
+                    {
+                        starts.push((at, &text[at..i]));
+                    }
+                    depth += 1;
+                    name_start = None;
+                }
+                ')' => {
+                    depth -= 1;
+                    name_start = None;
+                }
+                ',' if depth == 1 => name_start = Some(i + 1),
+                _ => {
+                    if depth == 1 && name_start.is_none() && c.is_alphabetic() {
+                        name_start = Some(i);
+                    }
+                }
+            }
+        }
+
+        starts
+            .into_iter()
+            .map(|(at, name)| {
+                let open = at + text[at..].find('(').unwrap();
+                let mut depth = 0usize;
+                let mut end = open;
+                for (i, c) in text[open..].char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = open + i + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let end = if text[end..].starts_with(',') {
+                    end + 1
+                } else {
+                    end
+                };
+                (at, end, name)
+            })
+            .collect()
+    }
+
+    /// Deleting *any* whole section still leaves a file that loads.
+    ///
+    /// There were two of these before, one for `window` and one for `crowd`,
+    /// each written the week that section arrived — which is the pattern that
+    /// loses a player their settings eventually, because it depends on somebody
+    /// remembering. This one finds the sections instead of naming them, so a new
+    /// block is covered the day it is added.
+    #[test]
+    fn an_options_file_missing_any_one_section_still_parses() {
+        // A value outside every section, so each case can check the rest of the
+        // file survived rather than only that it parsed.
+        let written = GameConfig {
+            world_seed: 0x5EED_0F17,
+            ..Default::default()
+        };
+        let text = ron::ser::to_string(&written).unwrap();
+
+        let sections = top_level_sections(&text);
+        assert!(
+            sections.len() >= 8,
+            "expected to find the config's sections; found {:?}",
+            sections.iter().map(|s| s.2).collect::<Vec<_>>()
+        );
+
+        for (start, end, name) in sections {
+            let mut without = text.clone();
+            without.replace_range(start..end, "");
+            let parsed: GameConfig = ron::from_str(&without)
+                .unwrap_or_else(|e| panic!("options without `{name}` should still parse: {e}"));
+            assert_eq!(
+                parsed.world_seed, 0x5EED_0F17,
+                "removing `{name}` lost the rest of the file"
+            );
+        }
+    }
+
+    /// Deleting any *field* of any section still leaves a file that loads.
+    ///
+    /// This is the one that matches what actually happened: `contact_shadow_length`
+    /// and `sharpening` were added to the graphics block without defaults, and
+    /// every player's existing `options.ron` stopped parsing — which the loader
+    /// answers by discarding all of it, so a change to two shadow dials reset
+    /// their city, their costume and their keybindings. There was a test for it
+    /// afterwards, but only for `graphics`; this is that test over every block.
+    #[test]
+    fn an_options_file_missing_any_one_field_still_parses() {
+        let text = ron::ser::to_string(&GameConfig::default()).unwrap();
+
+        let mut checked = 0usize;
+        for (start, _, name) in top_level_sections(&text) {
+            let open = start + text[start..].find('(').unwrap() + 1;
+            let close = open + text[open..].find(')').unwrap();
+            for field in text[open..close].split(',') {
+                // `ssao:Some(High)` splits across the comma-free `Some(...)`,
+                // so only whole `name:value` pairs are candidates.
+                let Some(field_name) = field.split(':').next() else {
+                    continue;
+                };
+                if field_name.is_empty() || !field.contains(':') {
+                    continue;
+                }
+                let without = text.replacen(&format!("{field},"), "", 1);
+                if without == text {
+                    continue;
+                }
+                checked += 1;
+                let parsed: Result<GameConfig, _> = ron::from_str(&without);
+                assert!(
+                    parsed.is_ok(),
+                    "an options file written before `{name}.{field_name}` existed is \
+                     rejected, which discards the player's whole options file: {:?}",
+                    parsed.err()
+                );
+            }
+        }
+
+        assert!(
+            checked >= 40,
+            "expected to have dropped a field from every block; only tried {checked}"
+        );
     }
 
     #[test]
@@ -1009,50 +1205,6 @@ mod tests {
             parsed.crowd.population,
             GameConfig::default().crowd.population
         );
-    }
-
-    /// Every field of the graphics block carries a serde default.
-    ///
-    /// The block is serialised into `saves/options.ron` in full, and the
-    /// loader's answer to a file it cannot parse is to throw the whole thing
-    /// away and start again — which loses the player's city, costume and
-    /// keybindings, silently, with one warning line. So a field added to
-    /// `GraphicsSettings` without a default is a change that quietly resets
-    /// everybody's options the first time they run the new build, and that is
-    /// exactly what happened between one commit and the next when contact
-    /// shadow length and sharpening arrived.
-    ///
-    /// Tested by deleting one field at a time from a freshly written file,
-    /// which is what an *older* file is: a file written before that field
-    /// existed.
-    #[test]
-    fn an_options_file_missing_any_one_graphics_field_still_parses() {
-        let text = ron::ser::to_string(&GameConfig::default()).unwrap();
-        let start = text.find("graphics:(").unwrap() + "graphics:(".len();
-        let end = start + text[start..].find(')').unwrap();
-        let block = &text[start..end];
-
-        for field in block.split(',') {
-            let Some(name) = field.split(':').next() else {
-                continue;
-            };
-            // `ssao:Some(High)` splits across the comma-free `Some(...)`, so
-            // only whole `name:value` pairs are candidates.
-            if name.is_empty() || !field.contains(':') {
-                continue;
-            }
-            let without = text.replacen(&format!("{field},"), "", 1);
-            if without == text {
-                continue;
-            }
-            let parsed: Result<GameConfig, _> = ron::from_str(&without);
-            assert!(
-                parsed.is_ok(),
-                "an options file written before `{name}` existed is rejected, \
-                 which resets the player's whole options file: {:?}",
-                parsed.err()
-            );
-        }
     }
 
     #[test]

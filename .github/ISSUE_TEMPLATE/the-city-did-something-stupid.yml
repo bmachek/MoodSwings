@@ -1,0 +1,78 @@
+name: The city did something stupid
+description: A screenshot of a flummi inside a wall, a car on a roof, a street that is not a street.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The README asks for these by name, so this is the front door rather than
+        a joke. A picture and a seed is usually the whole report.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: One or two sentences, and the picture.
+      placeholder: |
+        Drag the screenshot straight in.
+    validations:
+      required: true
+
+  - type: input
+    id: seed
+    attributes:
+      label: Seed and city
+      description: >
+        Both are in `saves/options.ron` as `world_seed` and `city`. The whole
+        world derives from them, so with those two the same street can be
+        walked back to. Without them it usually cannot.
+      placeholder: "world_seed: 2882400018, city: Landshuepf"
+    validations:
+      required: true
+
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: >
+        A street name if the sign was readable, or the position from the dev
+        panel (F3). `--at-node N` from README's flag table is the most useful
+        form of all, because it reproduces the framing exactly.
+      placeholder: "--at-node 300, or: corner of Altstadt and Ländgasse"
+
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: Does it happen again
+      options:
+        - Every time, same spot
+        - Sometimes
+        - Saw it once and never again
+        - Have not tried
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Machine
+      description: >
+        OS, GPU, and whether this is a release or a debug build. The GPU matters
+        more than usual here — `GraphicsSettings::downgrade` rewrites the preset
+        to what the adapter actually reports, so two machines on "ultra" are not
+        necessarily rendering the same thing.
+      placeholder: |
+        macOS 15.6, Apple M4 Pro, cargo run --release
+        or: Windows 11, RTX 4070, release archive v0.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Anything the log said
+      description: >
+        Warnings especially. A clone that has not run `tools/fetch-materials.sh`
+        plays every sound as a short silence and says so loudly — that one is
+        setup rather than a bug.
+      render: text

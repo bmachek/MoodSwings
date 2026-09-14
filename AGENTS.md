@@ -8,7 +8,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 cargo run                      # debug; ~2-10s incremental after the first build
 cargo run --release            # smoother frame rate, slower to compile
 cargo run --features dev       # bevy dynamic_linking — fastest iteration
-cargo test                     # ~324 unit tests, all inline #[cfg(test)] modules
+cargo test                     # 718 unit tests (727 with --workspace), all inline #[cfg(test)]
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
@@ -19,7 +19,16 @@ cargo run -- --audition shots/audio   # write the whole sound bank out as WAVs
 ```
 
 Optional cargo features: `raytracing` (pulls in `bevy_solari`), `dlss` (needs an
-NVIDIA GPU and the vendor SDK). Neither is on by default.
+NVIDIA GPU and the vendor SDK). Neither is on by default, and neither is wired
+to a pass yet — say so before promising either to anybody. `raytracing` gates
+exactly one block (`render::mod`), which asks the GPU whether it has the wgpu
+features Solari needs; nothing ever attaches `SolariLighting`.
+`Upscaling::Dlss` is reachable from the dev panel and from a save file, no
+preset selects it, and `GraphicsSettings::downgrade` rewrites it to TAA
+unconditionally because nothing attaches Bevy's `Dlss` component —
+`render::quality` says as much in its own comments. What they are today is
+compile-time capability probes, and CI compiles `raytracing` on every pull
+request so that at least stays true.
 
 ### Verifying rendering changes
 
