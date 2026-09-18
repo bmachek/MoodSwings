@@ -74,13 +74,20 @@ const CONTACT_SLACK: f32 = 0.06;
 /// Multiplier on the hop when somebody deliberately jumps.
 pub const JUMP_SCALE: f32 = 2.6;
 /// The tallest thing a body will pick its feet up for, as a fraction of its own
-/// standing height.
+/// standing height — and never more than [`STEP_CEILING`] whatever that says.
 ///
 /// A kerb is 0.28 m, which is a third of an adult flummi and over half a child,
-/// so this has to be generous or the children of this city cannot get back onto
-/// the pavement they crossed a road from. Above it a body is walking into a
-/// wall, not up a step, and walking into a wall is allowed to fail.
+/// so the fraction has to be generous or the children of this city cannot get
+/// back onto the pavement they crossed a road from. Two limits rather than one
+/// because the generous fraction is generous in the wrong direction on a
+/// grown-up: three fifths of an adult is 54 cm, which is a garden wall, a
+/// planter and every table on every terrace in the Altstadt. The crowd walking
+/// up onto the furniture is a funnier bug than the crowd walking into it and it
+/// is still a bug.
 const STEP_MAX: f32 = 0.6;
+/// The tallest step anybody climbs, in metres. A kerb with a little over it,
+/// and nothing that is really a thing to sit on.
+const STEP_CEILING: f32 = 0.35;
 /// And the smallest worth leaving the ground for. Below this the capsule's own
 /// bottom cap rides over it.
 const STEP_MIN: f32 = 0.05;
@@ -243,7 +250,7 @@ pub fn step_lookahead(stand_height: f32) -> f32 {
 /// height, and walking into a wall is allowed to fail. Pure: what a kerb costs
 /// is arithmetic, and it is the arithmetic a test can hold.
 pub fn step_lift(step: f32, stand_height: f32) -> f32 {
-    if step < STEP_MIN || step > stand_height * STEP_MAX {
+    if step < STEP_MIN || step > (stand_height * STEP_MAX).min(STEP_CEILING) {
         return 0.0;
     }
     (2.0 * 9.81 * (step + STEP_CLEARANCE)).sqrt()
@@ -486,6 +493,58 @@ mod tests {
                 "a body standing {stand}m counts {slack}m of air as ground"
             );
             assert!(slack > stand * 0.25, "{stand}m has nothing to steer with");
+        }
+    }
+
+    /// A kerb yes, the café furniture no.
+    ///
+    /// Two limits, because one cannot hold both ends. A kerb is over half a
+    /// child, so a fraction of standing height has to be generous — and three
+    /// fifths of an adult is 54 cm, which is a garden wall and every table on
+    /// every terrace in the Altstadt.
+    #[test]
+    fn a_body_steps_up_a_kerb_and_not_onto_the_furniture() {
+        let kerb = crate::world::buildings::SIDEWALK_HEIGHT;
+        for stand in [0.905f32, 0.845, 0.845 * 0.62] {
+            assert!(
+                step_lift(kerb, stand) > 0.0,
+                "a body standing {stand:.2}m cannot get up a {kerb}m kerb"
+            );
+            // A café table, a bench, a low wall.
+            for furniture in [0.42f32, 0.45, 0.5] {
+                assert_eq!(
+                    step_lift(furniture, stand),
+                    0.0,
+                    "a body standing {stand:.2}m climbed a {furniture}m step"
+                );
+            }
+            // And a wall is a wall whatever else it is.
+            assert_eq!(step_lift(stand, stand), 0.0);
+        }
+        // A dog is knee-high to the kerb and has its hop for it instead.
+        assert_eq!(step_lift(kerb, 0.26), 0.0);
+    }
+
+    /// The lift is the arithmetic of clearing the step, not a dial.
+    #[test]
+    fn the_lift_clears_the_step_it_was_asked_for() {
+        let stand = 0.905;
+        for step in [
+            0.06f32,
+            0.15,
+            crate::world::buildings::SIDEWALK_HEIGHT,
+            0.34,
+        ] {
+            let lift = step_lift(step, stand);
+            let apex = lift * lift / (2.0 * 9.81);
+            assert!(
+                apex > step,
+                "a {step}m step got a lift reaching {apex:.3}m, which does not clear it"
+            );
+            assert!(
+                apex < step + 0.12,
+                "a {step}m step got a lift reaching {apex:.3}m, which is a jump"
+            );
         }
     }
 

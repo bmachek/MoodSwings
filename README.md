@@ -1699,7 +1699,11 @@ in the world.
   going, so it deals with a kerb and with nothing more complicated. A flight of
   stairs is a step it will hop up one at a time if the treads are deep enough
   and stall against if they are not, and a ramp is not read as a step at all —
-  the town is flat wherever it is built, so nothing yet needs it to be.
+  the town is flat wherever it is built, so nothing yet needs it to be. The
+  ceiling on a step is 35 cm, which is a kerb with a little over it: the limit
+  is there because three fifths of an adult flummi is also every café table in
+  the Altstadt, and a crowd walking up onto the furniture is a funnier bug than
+  a crowd walking into it without being any less of one.
 - A junction is reserved by the *chord* of each movement across it, not by the
   arc a car actually drives, and the reservation is a point rather than a
   queue: there is no check that there is room on the far side before a car is
