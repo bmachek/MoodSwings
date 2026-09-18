@@ -27,6 +27,7 @@
 //! over the walking intent, so a crossing that is cancelled leaves nothing to
 //! undo.
 
+use avian3d::prelude::Rotation;
 use bevy::prelude::*;
 use rand::RngExt;
 
@@ -201,7 +202,8 @@ fn wait_and_cross(
     mut crossers: Query<
         (
             Entity,
-            &mut Transform,
+            &Transform,
+            &mut Rotation,
             &mut Bouncer,
             &mut Pedestrian,
             &mut Crossing,
@@ -219,7 +221,9 @@ fn wait_and_cross(
         .map(|(transform, velocity)| (transform.translation.xz(), velocity.0.xz()))
         .collect();
 
-    for (entity, mut transform, mut bouncer, mut pedestrian, mut crossing) in &mut crossers {
+    for (entity, transform, mut rotation, mut bouncer, mut pedestrian, mut crossing) in
+        &mut crossers
+    {
         if pedestrian.panic > 0.0 {
             // A car has already made the decision. Get off the road.
             commands.entity(entity).remove::<Crossing>();
@@ -253,10 +257,7 @@ fn wait_and_cross(
         bouncer.desired = Vec2::ZERO;
         crossing.waited += dt;
         let looking = crossing.far - crossing.kerb;
-        if let Ok(facing) = Dir2::new(looking) {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        }
+        crate::ai::steering::face(&mut rotation, looking);
 
         // Anything bearing down on the crossing line, from either direction.
         // Not "a car nearby": a car parked at the kerb next to them and a car
@@ -305,5 +306,22 @@ fn wait_and_cross(
         if crossing.react <= 0.0 {
             crossing.stepped_off = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(decide_to_cross);
+        initialises(wait_and_cross);
     }
 }

@@ -231,11 +231,11 @@ fn drive_player(
     config: Res<GameConfig>,
     rigs: Query<&CameraRig>,
     mut players: Query<
-        (&ActionState<Action>, &mut Bouncer, &mut Transform),
+        (&ActionState<Action>, &mut Bouncer, &mut Rotation),
         (With<Player>, Without<crate::player::interact::Driving>),
     >,
 ) {
-    let Ok((action_state, mut bouncer, mut transform)) = players.single_mut() else {
+    let Ok((action_state, mut bouncer, mut rotation)) = players.single_mut() else {
         return;
     };
 
@@ -263,12 +263,15 @@ fn drive_player(
     // Ease into travel, and hold the last heading when idle. Written here
     // rather than left to the solver because rotation is locked: nothing else
     // is going to turn the body, and a figure that walks sideways looks like a
-    // bug rather than like a joke.
-    if let Ok(facing) = Dir2::new(direction.xz()) {
-        let target = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        let blend = 1.0 - (-config.stroll.turn_ease.max(0.0) * time.delta_secs()).exp();
-        transform.rotation = transform.rotation.slerp(target, blend);
-    }
+    // bug rather than like a joke. Onto Avian's `Rotation` rather than the
+    // `Transform`, which on an interpolated body is a teleport and costs the
+    // walk itself — see `ai::steering::face_eased`.
+    crate::ai::steering::face_eased(
+        &mut rotation,
+        direction.xz(),
+        config.stroll.turn_ease,
+        time.delta_secs(),
+    );
 
     // The resting hop is set every frame — the controller spends the scale on
     // each landing, the same contract `ai::pedestrian` uses for the crowd. See
@@ -290,6 +293,17 @@ fn drive_player(
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(drive_player);
+    }
     use super::*;
     use crate::bounce::testing::{TICK, finish, ground, kerb, physics_app};
     use crate::core::config::Gait;

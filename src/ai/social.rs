@@ -339,7 +339,8 @@ fn hold_chats(
     mut rng: ResMut<AudioRng>,
     mut chatting: Query<(
         Entity,
-        &mut Transform,
+        &Transform,
+        &mut Rotation,
         &mut Bouncer,
         &mut Mood,
         &Temperament,
@@ -350,10 +351,11 @@ fn hold_chats(
     let now = time.elapsed_secs();
     let others: HashMap<Entity, (Vec3, f32)> = chatting
         .iter()
-        .map(|(entity, transform, _, mood, ..)| (entity, (transform.translation, mood.value)))
+        .map(|(entity, transform, _, _, mood, ..)| (entity, (transform.translation, mood.value)))
         .collect();
 
-    for (entity, mut transform, mut bouncer, mut mood, temper, mut chat) in &mut chatting {
+    for (entity, transform, mut rotation, mut bouncer, mut mood, temper, mut chat) in &mut chatting
+    {
         chat.left -= dt;
         let partner = others.get(&chat.with).copied();
         if chat.left <= 0.0 || partner.is_none() {
@@ -375,10 +377,7 @@ fn hold_chats(
         } else {
             Vec2::ZERO
         };
-        if let Ok(facing) = Dir2::new(apart.xz()) {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        }
+        crate::ai::steering::face(&mut rotation, apart.xz());
         // And look at them while doing it. The body already turns; what the
         // head adds is that the eyes follow the other person when they shift
         // their weight, which is most of what "talking to somebody" looks
@@ -477,14 +476,14 @@ fn hold_loiters(
     mut rng: ResMut<AudioRng>,
     mut loitering: Query<(
         Entity,
-        &mut Transform,
+        &mut Rotation,
         &mut Bouncer,
         &Pedestrian,
         &mut Loitering,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut transform, mut bouncer, pedestrian, mut stop) in &mut loitering {
+    for (entity, mut rotation, mut bouncer, pedestrian, mut stop) in &mut loitering {
         stop.left -= dt;
         // A car ends a window-shop the same way it ends a chat.
         if stop.left <= 0.0 || pedestrian.panic > 0.0 {
@@ -497,11 +496,8 @@ fn hold_loiters(
             continue;
         }
         bouncer.desired = Vec2::ZERO;
-        if let Some(face) = stop.face
-            && let Ok(facing) = Dir2::new(face)
-        {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
+        if let Some(face) = stop.face {
+            crate::ai::steering::face(&mut rotation, face);
         }
     }
 }
@@ -636,7 +632,8 @@ fn gawk(
     time: Res<Time>,
     mut gawkers: Query<(
         Entity,
-        &mut Transform,
+        &Transform,
+        &mut Rotation,
         &mut Bouncer,
         &Pedestrian,
         &mut Rubbernecking,
@@ -644,7 +641,7 @@ fn gawk(
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
-    for (entity, mut transform, mut bouncer, pedestrian, mut look) in &mut gawkers {
+    for (entity, transform, mut rotation, mut bouncer, pedestrian, mut look) in &mut gawkers {
         look.left -= dt;
         if look.left <= 0.0 || pedestrian.panic > 0.0 {
             commands.entity(entity).remove::<Rubbernecking>();
@@ -652,10 +649,7 @@ fn gawk(
         }
         bouncer.desired = Vec2::ZERO;
         let towards = (look.at - transform.translation).xz();
-        if let Ok(facing) = Dir2::new(towards) {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        }
+        crate::ai::steering::face(&mut rotation, towards);
         commands
             .entity(entity)
             .insert(super::figure::Attention::to(look.at, now, 0.6));
@@ -674,7 +668,14 @@ fn sour_at_traffic(
     time: Res<Time>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut grouches: Query<
-        (Entity, &mut Transform, &mut Mood, &Archetype, &Pedestrian),
+        (
+            Entity,
+            &Transform,
+            &mut Rotation,
+            &mut Mood,
+            &Archetype,
+            &Pedestrian,
+        ),
         (
             Without<crate::vehicle::spawn::Vehicle>,
             Without<Launched>,
@@ -692,7 +693,7 @@ fn sour_at_traffic(
         return;
     }
 
-    for (entity, mut transform, mut mood, archetype, pedestrian) in &mut grouches {
+    for (entity, transform, mut rotation, mut mood, archetype, pedestrian) in &mut grouches {
         if *archetype != Archetype::Wutbuerger || pedestrian.panic > 0.0 {
             continue;
         }
@@ -705,10 +706,7 @@ fn sour_at_traffic(
             continue;
         };
         mood.value = (mood.value - RANT_STING * dt).clamp(-1.0, 1.0);
-        if let Ok(facing) = Dir2::new((*car - here).xz()) {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        }
+        crate::ai::steering::face(&mut rotation, (*car - here).xz());
         // And track it as it goes past, which is the whole of what glaring is.
         commands.entity(entity).insert(super::figure::Attention::to(
             *car,
@@ -1044,6 +1042,21 @@ fn snap(
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(hold_chats);
+        initialises(hold_loiters);
+        initialises(gawk);
+        initialises(sour_at_traffic);
+        initialises(strike_up_chats);
+    }
     use super::*;
 
     #[test]

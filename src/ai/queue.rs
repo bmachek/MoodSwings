@@ -62,6 +62,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use avian3d::prelude::Rotation;
 use bevy::prelude::*;
 use rand::RngExt;
 
@@ -830,11 +831,11 @@ fn lose_patience(
 /// difference is entirely in this one branch.
 fn hold_the_line(
     queues: Res<Queues>,
-    mut standing: Query<(&mut Transform, &mut Bouncer), With<Queueing>>,
+    mut standing: Query<(&Transform, &mut Rotation, &mut Bouncer), With<Queueing>>,
 ) {
     for line in queues.lines.values() {
         for (slot, member) in line.members.iter().enumerate() {
-            let Ok((mut transform, mut bouncer)) = standing.get_mut(*member) else {
+            let Ok((transform, mut rotation, mut bouncer)) = standing.get_mut(*member) else {
                 continue;
             };
             let want = line.slot(slot);
@@ -849,10 +850,7 @@ fn hold_the_line(
             } else {
                 -line.along
             };
-            if let Ok(facing) = Dir2::new(facing) {
-                transform.rotation =
-                    Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-            }
+            crate::ai::steering::face(&mut rotation, facing);
         }
     }
 }
@@ -971,6 +969,17 @@ pub fn arrive(
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(hold_the_line);
+    }
     use super::*;
 
     fn line_of(count: usize) -> Queues {

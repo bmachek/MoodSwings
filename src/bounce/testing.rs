@@ -101,3 +101,21 @@ pub fn finish(app: &mut App) {
     app.finish();
     app.cleanup();
 }
+
+/// Initialises a system, which is enough to trip Bevy's query-conflict check.
+///
+/// The check is `B0001`: two queries in one system may not both touch a
+/// component if either is mutable. It panics at first run rather than at
+/// compile time, and no unit test builds the whole app, so the capture harness
+/// — which needs a GPU and a whole city — has been the integration test for the
+/// schedule. It has caught this twice, and it cannot reach a system that only
+/// runs behind a flag at all: `multiplayer::receive` had three mutable
+/// `Transform` queries and died the moment a server answered.
+///
+/// Initialising needs none of the resources a system reads, so a test is four
+/// lines and runs in microseconds. `multiplayer` has carried its own copy of
+/// this since that bug; this is the same trick offered to everybody else.
+pub fn initialises<M>(system: impl IntoSystem<(), (), M>) {
+    let mut world = bevy::ecs::world::World::new();
+    IntoSystem::into_system(system).initialize(&mut world);
+}
