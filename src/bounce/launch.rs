@@ -232,8 +232,10 @@ fn run_over_anybody(
 /// gets away with it because `walk_pavements` overwrites the facing on the very
 /// next frame. Nothing writes a dog's, and a dog is not `NeverTumbles`, so one
 /// taxi put it on its back for the rest of the session. `vehicle::impact` has
-/// stood cars back up the right way round all along; this is the same three
-/// lines.
+/// stood cars back up the right way round all along, on the same reasoning —
+/// onto the `Transform` rather than onto `Rotation`, which is right *there* and
+/// wrong here: a car is righted once and wants the teleport, and this runs on a
+/// body whose interpolation is worth keeping.
 fn recover_from_knockdown(
     mut commands: Commands,
     time: Res<Time>,

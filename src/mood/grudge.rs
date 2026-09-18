@@ -272,6 +272,9 @@ fn spin(
         // not touch it. Onto `Rotation` rather than `Transform` because the
         // body is interpolated and a `Transform` write from `Update` is a
         // teleport — see `ai::steering::face`.
+        // Post-multiplied, where `Transform::rotate_y` pre-multiplied. The
+        // two differ only for a body that is tilted, and a pirouetting citizen
+        // has its rotation locked upright: this is a yaw on a yaw.
         rotation.0 *= Quat::from_rotation_y(std::f32::consts::TAU * SPIN_RATE * dt);
     }
 }

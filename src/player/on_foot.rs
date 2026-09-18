@@ -519,6 +519,44 @@ mod tests {
         }
     }
 
+    /// The jump is the one thing on this body a player presses on purpose.
+    ///
+    /// It is spent at a landing, and a walking body never lands: it rests, and
+    /// resting is not arriving. The bouncing city hid that because a bouncing
+    /// body is never at rest, which is why every test here used to pass while
+    /// the gait the player actually plays could not leave the ground.
+    #[test]
+    fn a_jump_leaves_the_ground_in_either_gait() {
+        for gait in Gait::ALL {
+            let (mut app, player) = harness(gait, 2.0);
+            settle(&mut app, player, 300);
+            // What this body gets to without being asked: standing, in the
+            // walking gait; the top of an ordinary arc in the bouncing one.
+            let (_, ordinary) = envelope(&mut app, player, 90);
+
+            // Held, the way `drive_player` writes it while the key is down —
+            // long enough to reach the ground, because a bouncing body spends
+            // most of its time off it.
+            let mut high = f32::MIN;
+            for _ in 0..45 {
+                app.world_mut()
+                    .get_mut::<Bouncer>(player)
+                    .unwrap()
+                    .hop_scale = JUMP_SCALE;
+                app.update();
+                high = high.max(height_of(&app, player));
+            }
+            for _ in 0..150 {
+                tick(&mut app, player);
+                high = high.max(height_of(&app, player));
+            }
+            assert!(
+                high > ordinary + 1.0,
+                "{gait:?} jumped to {high:.2}m, and gets to {ordinary:.2}m without trying"
+            );
+        }
+    }
+
     #[test]
     fn the_bounce_holds_its_height_instead_of_dying_away() {
         // Restitution alone would damp out within a second or two. The hop is

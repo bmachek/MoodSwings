@@ -281,5 +281,6 @@ mod tests {
     fn no_query_of_a_system_here_fights_another() {
         use crate::bounce::testing::initialises;
         initialises(run_errands);
+        initialises(hold_browse);
     }
 }

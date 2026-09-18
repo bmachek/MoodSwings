@@ -194,11 +194,15 @@ fn wait_and_cross(
         (&Transform, &avian3d::prelude::LinearVelocity),
         With<crate::vehicle::spawn::Vehicle>,
     >,
-    // `Without<Vehicle>` is not decoration. Both queries touch `Transform` and
-    // one of them mutably, which Bevy rejects at the first run of the system
-    // rather than at compile time — and a pedestrian is never a vehicle, so
-    // the filter that makes them disjoint changes nothing about what is
-    // matched. The capture harness caught this, which is what it is for.
+    // `Without<Vehicle>` used to be what kept Bevy from rejecting this system
+    // at its first run: both queries touched `Transform` and one of them
+    // mutably. Neither does now — the facing moved onto `Rotation`, which the
+    // traffic query does not read — so the filter is a statement about who
+    // crosses roads rather than a conflict fix. It stays because a pedestrian
+    // is never a vehicle and saying so costs nothing, and because the next
+    // mutable term added here would need it back. The conflict itself has a
+    // test now (`no_query_of_a_system_here_fights_another`); it used to need
+    // the capture harness and a GPU.
     mut crossers: Query<
         (
             Entity,

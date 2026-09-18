@@ -25,9 +25,10 @@
 //! it did. The rebound is assigned rather than added, so a landing that fires at
 //! the top of the probe's slack is a floor the body hops off without ever
 //! touching the pavement — permanently, and at no cost in energy. The headless
-//! harness measured both halves of it: a body's soles oscillating between 41 and
-//! 85 centimetres above the street, and — once the walking gait made the resting
-//! hop zero — one stepping off a 28 cm kerb sinking the last stretch at about
+//! harness measured both halves of it: a body whose soles never came within 41
+//! centimetres of the street, whatever it was doing — crowd, player or jump —
+//! and, once the walking gait made the resting hop zero, one stepping off a
+//! 28 cm kerb sinking the last stretch at about
 //! 15 cm/s, nearly three seconds to arrive, because every frame reassigned the
 //! fall to nothing. So `grounded` is still the wide reach and steering still
 //! reads it; `touching` is the narrow one, and a landing is the frame a body
@@ -354,7 +355,16 @@ pub fn bounce_bodies(
         // contact, and applying it here instead keeps the one rule this module
         // is built on — the vertical speed is *assigned*, never added, so
         // nothing can compound into a body that climbs out of the world.
-        let hop = if landed {
+        // A hop is spent whenever the body is on the ground and not already on
+        // its way up — not only on the frame it arrives. The difference is the
+        // whole of the walking city: a walking body never *lands*, it rests,
+        // and resting is not arriving, so a jump asked for from a standstill
+        // had nothing to be spent on and the player could not leave the
+        // ground. The rising test is what keeps this from becoming the hover
+        // again: a body that has just been given its hop is still inside the
+        // contact shell for a frame or two, and must not be given it twice.
+        let ready = landed || (touching && velocity.y <= 0.0);
+        let hop = if ready {
             let asked = bouncer.hop_scale.max(bouncer.pending.take().unwrap_or(0.0));
             tune.hop_speed * asked
         } else {
@@ -397,9 +407,11 @@ pub fn bounce_bodies(
             booked.y += -velocity.y;
             velocity.y = 0.0;
         }
-        if landed {
-            // A jump is asked for once and spent once; holding the key down
-            // must not turn into a pogo stick to the roofline.
+        if ready {
+            // A one-shot is asked for once and spent once, whether or not it
+            // came to anything: whoever owns this body writes the resting
+            // scale afresh every frame, and what is left here must not be
+            // spent a second time.
             bouncer.hop_scale = 1.0;
         }
 

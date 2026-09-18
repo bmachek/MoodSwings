@@ -355,11 +355,22 @@ mod tests {
     }
 
     /// A one-shot hop survives the writers that rewrite the scale every frame.
+    ///
+    /// Both gaits, and the walking one is the case that matters: the skater's
+    /// ollie is documented as firing "whatever the gait setting says", and a
+    /// walking body never lands — it rests — so a one-shot that waits for a
+    /// landing waits for ever.
     #[test]
-    fn a_pending_hop_is_spent_on_the_next_landing_however_long_that_takes() {
+    fn a_pending_hop_is_spent_whatever_the_body_was_doing() {
+        for resting_scale in [1.0f32, 0.0] {
+            one_shot_is_spent(resting_scale);
+        }
+    }
+
+    fn one_shot_is_spent(scale: f32) {
         let (mut app, body) = watched(crate::bounce::testing::TICK);
-        hop_for(&mut app, body, 1.0, 240);
-        let resting = height_reached(&mut app, body, 1.0, 90);
+        hop_for(&mut app, body, scale, 240);
+        let resting = height_reached(&mut app, body, scale, 90);
 
         app.world_mut().get_mut::<Bouncer>(body).unwrap().pending = Some(JUMP_SCALE);
         // `hop_for` writes the ordinary scale every tick, the way the pavement
@@ -367,18 +378,18 @@ mod tests {
         // landing falls in one frame out of twenty: the skater's ollie fired
         // about that often. The window is a jump's whole arc, which is two and
         // a half times an ordinary one.
-        let jumped = height_reached(&mut app, body, 1.0, 150);
+        let jumped = height_reached(&mut app, body, scale, 150);
         assert!(
             jumped > resting + 0.5,
-            "the one-shot reached {jumped:.2}m against an ordinary {resting:.2}m: it was overwritten"
+            "at scale {scale} the one-shot reached {jumped:.2}m against an ordinary {resting:.2}m: it was overwritten"
         );
 
         // And exactly once: two arcs later it is an ordinary hop again.
-        hop_for(&mut app, body, 1.0, 90);
-        let after = height_reached(&mut app, body, 1.0, 90);
+        hop_for(&mut app, body, scale, 90);
+        let after = height_reached(&mut app, body, scale, 90);
         assert!(
             after < resting + 0.3,
-            "the one-shot was still going at {after:.2}m, an ordinary hop being {resting:.2}m"
+            "at scale {scale} the one-shot was still going at {after:.2}m, an ordinary hop being {resting:.2}m"
         );
     }
 

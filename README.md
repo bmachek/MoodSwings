@@ -469,6 +469,13 @@ read it. `touching` is the ground. A landing is the frame a body arrives on it â
 or, for a fall quick enough to cross the whole contact shell between two frames,
 the frame the fall reverses, which is every jump and every roof.
 
+A landing makes a sound of its own, pitched off how fast the body arrived. It
+is the same boing, quieter and a little higher, and it is deliberately not a
+knock: being hit is somebody else's doing and moves a mood, while coming down
+off your own jump is nobody's business but yours. The controller books the
+whole of a landing out of what the mood system watches for exactly so that the
+two cannot be confused.
+
 Walking is the default and hopping is a setting, and the difference lives here.
 A walking body has no hop to leave with, so it gives back the solver's own
 restitution instead â€” applied by the controller rather than left to the solver,
