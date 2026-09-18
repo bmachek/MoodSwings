@@ -840,8 +840,12 @@ fn show_off(
                 if rng.random::<f32>() > OLLIE_CHANCE * dt {
                     continue;
                 }
-                // Spent on the next landing, exactly like a player's jump.
-                bouncer.hop_scale = OLLIE;
+                // Spent on the next landing, exactly like a player's jump —
+                // through `pending` rather than `hop_scale`, because
+                // `walk_pavements` rewrites the scale every frame and a
+                // landing is one frame in twenty. Written to the scale, this
+                // trick fired about one time in twenty.
+                bouncer.pending = Some(OLLIE);
             }
             _ => {}
         }

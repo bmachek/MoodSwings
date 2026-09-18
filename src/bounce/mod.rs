@@ -8,6 +8,8 @@ pub mod boing;
 pub mod controller;
 pub mod launch;
 pub mod squash;
+#[cfg(test)]
+pub mod testing;
 
 use bevy::prelude::*;
 
