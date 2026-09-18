@@ -27,6 +27,7 @@
 //! the route said, so a citizen whose errand is cancelled simply carries on
 //! down the pavement from the next frame with nothing to undo.
 
+use avian3d::prelude::Rotation;
 use bevy::prelude::*;
 use rand::RngExt;
 
@@ -244,21 +245,42 @@ pub const WALK_OVER: f32 = 1.15;
 fn hold_browse(
     mut commands: Commands,
     time: Res<Time>,
-    mut browsers: Query<(Entity, &mut Transform, &mut Bouncer, &Pedestrian, &Browsing)>,
+    mut browsers: Query<(
+        Entity,
+        &Transform,
+        &mut Rotation,
+        &mut Bouncer,
+        &Pedestrian,
+        &Browsing,
+    )>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, mut transform, mut bouncer, pedestrian, browsing) in &mut browsers {
+    for (entity, transform, mut rotation, mut bouncer, pedestrian, browsing) in &mut browsers {
         if now > browsing.until || pedestrian.panic > 0.0 {
             commands.entity(entity).remove::<Browsing>();
             continue;
         }
         bouncer.desired = Vec2::ZERO;
-        if let Ok(facing) = Dir2::new((browsing.at - transform.translation).xz()) {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        }
+        crate::ai::steering::face(&mut rotation, (browsing.at - transform.translation).xz());
         commands
             .entity(entity)
             .insert(Attention::to(browsing.at, now, 0.6));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(run_errands);
+        initialises(hold_browse);
     }
 }

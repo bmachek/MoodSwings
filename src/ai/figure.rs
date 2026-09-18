@@ -1416,9 +1416,11 @@ pub fn animate(
         }
 
         let (vertical, horizontal) = match bouncer {
-            // The gait gates the squash along with the hop: a walking body is
-            // permanently at phase zero as far as the bouncer can tell, and
-            // holding the landing squash forever reads as a rendering bug.
+            // The gait gates the squash along with the hop: a walking body
+            // rests rather than landing, so its phase runs off the end of an
+            // arc it never finished and holds at the pose either end of one
+            // gives, and holding the landing squash forever reads as a
+            // rendering bug.
             Some(bouncer) => crate::bounce::squash::stretch(
                 bouncer.hop_phase(),
                 config.gait.squash(config.bounce.squash),

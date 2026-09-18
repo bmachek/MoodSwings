@@ -412,10 +412,11 @@ impl Gait {
         }
     }
 
-    /// The squash depth that goes with it. Walking bodies are permanently at
-    /// the bottom of a hop as far as `Bouncer::hop_phase` can tell, and a
-    /// city frozen mid-squash reads as a rendering bug, so the whole cycle
-    /// is switched off with the hop.
+    /// The squash depth that goes with it. A walking body never lands — it
+    /// rests — so `Bouncer::hop_phase` runs off the end of an arc it never
+    /// finished and holds at 1.0, which is the same pose as 0.0: the bottom
+    /// of a hop. A city frozen mid-squash reads as a rendering bug, so the
+    /// whole cycle is switched off with the hop.
     pub fn squash(self, amount: f32) -> f32 {
         match self {
             Self::Walking => 0.0,

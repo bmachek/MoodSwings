@@ -47,6 +47,32 @@ pub struct Wallop {
     pub severity: f32,
 }
 
+/// Somebody came down hard on their own account.
+///
+/// The other half of the contract above. Everything a body does to itself is
+/// booked out of [`Wallop`] by the bounce controller, which is what keeps a
+/// jump from reading as an assault — and left the hardest landing in the game
+/// silent, with `Bouncer::landing_speed` documented as the thing the boing is
+/// pitched off and read by nobody. So a landing has a message of its own. It
+/// makes a sound and it changes nobody's mood, because falling over is not an
+/// insult, however much it looks like one.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct Landed {
+    pub entity: Entity,
+    pub position: Vec3,
+    /// Downward speed at the moment of contact, in m/s.
+    pub speed: f32,
+}
+
+/// Arrival speed, in m/s, at which a landing is worth hearing.
+///
+/// Above the rhythm of a bouncing body, which arrives at its own hop speed and
+/// would otherwise tap on every step, and above a kerb (2.3). A jump lands at
+/// 7.3 and a roof at whatever the roof is worth.
+const LANDING_FLOOR: f32 = 4.2;
+/// And the arrival that rings as loud as this sound ever does.
+const LANDING_FULL: f32 = 14.0;
+
 /// Last tick's velocity, so a change in it can be spotted.
 #[derive(Component, Default)]
 pub struct PreviousVelocity(pub Vec3);
@@ -55,12 +81,14 @@ pub struct BoingPlugin;
 
 impl Plugin for BoingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Wallop>().add_systems(
-            Update,
-            (spot_wallops, play_boings)
-                .chain()
-                .in_set(GameSet::Simulation),
-        );
+        app.add_message::<Wallop>()
+            .add_message::<Landed>()
+            .add_systems(
+                Update,
+                (spot_wallops, play_boings, play_landings)
+                    .chain()
+                    .in_set(GameSet::Simulation),
+            );
     }
 }
 
@@ -71,6 +99,15 @@ pub fn wallop_strength(delta: f32) -> f32 {
         return 0.0;
     }
     ((delta - WALLOP_FLOOR) / (WALLOP_FULL - WALLOP_FLOOR)).clamp(0.05, 1.0)
+}
+
+/// How hard a landing reads, 0 to 1. The same shape as [`wallop_strength`] on
+/// its own floor, because it is the same sound with a different cause.
+pub fn landing_strength(speed: f32) -> f32 {
+    if speed < LANDING_FLOOR {
+        return 0.0;
+    }
+    ((speed - LANDING_FLOOR) / (LANDING_FULL - LANDING_FLOOR)).clamp(0.05, 1.0)
 }
 
 fn spot_wallops(
@@ -128,13 +165,44 @@ fn play_boings(
     }
 }
 
+fn play_landings(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut landings: MessageReader<Landed>,
+) {
+    for landing in landings.read() {
+        let force = landing_strength(landing.speed);
+        if force <= 0.0 {
+            continue;
+        }
+        commands.spawn((
+            AudioPlayer(bank.boing.clone()),
+            // Quieter than a knock of the same size and pitched a little
+            // higher: the body hitting the pavement is one surface, not two
+            // flummis meeting.
+            spatial_once(effect_gain(&config, GAIN * 0.7 * force), EARSHOT)
+                .with_speed(1.5 - force * 0.55),
+            Transform::from_translation(landing.position),
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(spot_wallops);
+    }
     use super::*;
     use crate::bounce::controller::{Bouncer, JUMP_SCALE, bounce_bodies};
-    use bevy::asset::AssetPlugin;
-    use bevy::time::TimeUpdateStrategy;
-    use std::time::Duration;
 
     #[test]
     fn an_ordinary_hop_makes_no_noise() {
@@ -151,35 +219,27 @@ mod tests {
         heard.0 += wallops.read().count();
     }
 
-    #[test]
-    fn a_body_bouncing_and_jumping_under_its_own_steam_never_wallops_itself() {
-        // The rebound at the bottom of every hop is *assigned* by the bounce
-        // controller, and at 2×hop_speed per landing it is well over the
-        // wallop floor — a jump lands past the outrage limit. If the detector
-        // reads those assignments, the street boings on every step and a
-        // player makes themselves furious by jumping, which is the bug this
-        // test pins down. Only what the world does to a body may register.
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin::default(),
-            TransformPlugin,
-            PhysicsPlugins::default(),
-        ));
-        app.init_asset::<Mesh>();
-        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
-            1.0 / 64.0,
-        )));
-        app.init_resource::<crate::core::config::GameConfig>();
-        app.init_resource::<Heard>();
-        app.add_message::<Wallop>();
-        app.add_systems(Update, (bounce_bodies, spot_wallops, count_wallops).chain());
+    /// Landings loud enough to be worth a sound, since the last look.
+    #[derive(Resource, Default)]
+    struct Landings(usize);
 
-        app.world_mut().spawn((
-            RigidBody::Static,
-            Collider::cuboid(200.0, 2.0, 200.0),
-            Transform::from_xyz(0.0, -1.0, 0.0),
-        ));
+    fn count_landings(mut landings: MessageReader<Landed>, mut heard: ResMut<Landings>) {
+        heard.0 += landings
+            .read()
+            .filter(|landing| landing_strength(landing.speed) > 0.0)
+            .count();
+    }
+
+    /// Builds a body on flat ground with the wallop detector watching it.
+    ///
+    /// `hop` is written every tick the way the owner of a body does it, so a
+    /// test can ask for the bouncing city (1.0), the walking one (0.0) or a
+    /// jump without rebuilding anything.
+    fn watched(frame: f64) -> (App, Entity) {
+        let mut app = crate::bounce::testing::physics_app(frame);
+        app.init_resource::<Heard>();
+        app.add_systems(Update, (bounce_bodies, spot_wallops, count_wallops).chain());
+        crate::bounce::testing::ground(&mut app);
         let body = app
             .world_mut()
             .spawn((
@@ -190,32 +250,159 @@ mod tests {
                 Bouncer::new(1.05 * 0.5 + 0.32),
             ))
             .id();
-        app.finish();
-        app.cleanup();
+        crate::bounce::testing::finish(&mut app);
+        (app, body)
+    }
 
-        // Let the spawn drop land and the rhythm settle before counting.
-        for _ in 0..240 {
+    fn hop_for(app: &mut App, body: Entity, hop: f32, ticks: usize) {
+        for _ in 0..ticks {
+            app.world_mut().get_mut::<Bouncer>(body).unwrap().hop_scale = hop;
             app.update();
         }
-        app.world_mut().resource_mut::<Heard>().0 = 0;
+    }
 
-        // Five seconds of bouncing on the spot.
-        for _ in 0..320 {
-            app.update();
-        }
-        let hopping = app.world().resource::<Heard>().0;
-        assert_eq!(hopping, 0, "{hopping} wallops from bouncing on the spot");
+    #[test]
+    fn a_body_bouncing_and_jumping_under_its_own_steam_never_wallops_itself() {
+        // The rebound at the bottom of every hop is *assigned* by the bounce
+        // controller, and at 2×hop_speed per landing it is well over the
+        // wallop floor — a jump lands past the outrage limit. If the detector
+        // reads those assignments, the street boings on every step and a
+        // player makes themselves furious by jumping, which is the bug this
+        // test pins down. Only what the world does to a body may register.
+        //
+        // Both gaits, because they land differently: the bouncing one leaves
+        // with its own hop, the walking one gives back the solver's
+        // restitution instead, and neither is anything anybody did to it.
+        for hop in [1.0f32, 0.0] {
+            let (mut app, body) = watched(crate::bounce::testing::TICK);
+            hop_for(&mut app, body, hop, 240);
+            app.world_mut().resource_mut::<Heard>().0 = 0;
 
-        // And a deliberate jump, landing included.
-        app.world_mut().get_mut::<Bouncer>(body).unwrap().hop_scale = JUMP_SCALE;
-        for _ in 0..180 {
-            app.update();
+            // Five seconds on the spot.
+            hop_for(&mut app, body, hop, 320);
+            let resting = app.world().resource::<Heard>().0;
+            assert_eq!(
+                resting, 0,
+                "{resting} wallops from a body at hop {hop} doing nothing"
+            );
+
+            // And a deliberate jump, landing included.
+            hop_for(&mut app, body, JUMP_SCALE, 1);
+            hop_for(&mut app, body, hop, 180);
+            let jumping = app.world().resource::<Heard>().0;
+            assert_eq!(
+                jumping, 0,
+                "{jumping} wallops from a jump at hop {hop} nobody was hit by"
+            );
         }
-        let jumping = app.world().resource::<Heard>().0;
-        assert_eq!(
-            jumping, 0,
-            "{jumping} wallops from a jump nobody was hit by"
+    }
+
+    /// A stutter is not an assault.
+    ///
+    /// Only the vertical assignment was booked, so on a frame long enough for
+    /// the steering to close the whole gap to `desired` in one step — a chunk
+    /// streaming in, which this repository logs at 80ms and up — a body that
+    /// wanted to sprint knocked itself over. Measured: none at 16 and 50ms,
+    /// one at 80 and 120.
+    #[test]
+    fn a_long_frame_is_not_a_knock() {
+        for frame in [0.080f64, 0.120, 0.250] {
+            let (mut app, body) = watched(crate::bounce::testing::TICK);
+            hop_for(&mut app, body, 0.0, 240);
+            app.world_mut().resource_mut::<Heard>().0 = 0;
+
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f64(frame),
+            ));
+            {
+                let mut bouncer = app.world_mut().get_mut::<Bouncer>(body).unwrap();
+                bouncer.hop_scale = 0.0;
+                // A sprint asked for from a standstill: the widest gap the
+                // steering is ever handed.
+                bouncer.desired = Vec2::new(7.6, 0.0);
+            }
+            app.update();
+            let heard = app.world().resource::<Heard>().0;
+            assert_eq!(
+                heard,
+                0,
+                "a {:.0}ms frame walloped a body that was only trying to run",
+                frame * 1000.0
+            );
+        }
+    }
+
+    /// A landing has a sound of its own, and the resting rhythm does not.
+    #[test]
+    fn a_fall_lands_audibly_and_a_hop_does_not() {
+        let (mut app, body) = watched(crate::bounce::testing::TICK);
+        app.init_resource::<Landings>();
+        app.add_systems(Update, count_landings);
+        hop_for(&mut app, body, 1.0, 240);
+        app.world_mut().resource_mut::<Landings>().0 = 0;
+
+        // Five seconds of the travelling bounce: the rhythm of the whole city,
+        // and it must not tap on every step.
+        hop_for(&mut app, body, 1.0, 320);
+        let resting = app.world().resource::<Landings>().0;
+        assert_eq!(resting, 0, "{resting} landings heard from an ordinary hop");
+
+        // A deliberate jump, asked for once and spent once.
+        app.world_mut().get_mut::<Bouncer>(body).unwrap().pending = Some(JUMP_SCALE);
+        hop_for(&mut app, body, 1.0, 200);
+        let jumped = app.world().resource::<Landings>().0;
+        assert!(jumped >= 1, "a jump from 2.7m came down in silence");
+    }
+
+    /// A one-shot hop survives the writers that rewrite the scale every frame.
+    ///
+    /// Both gaits, and the walking one is the case that matters: the skater's
+    /// ollie is documented as firing "whatever the gait setting says", and a
+    /// walking body never lands — it rests — so a one-shot that waits for a
+    /// landing waits for ever.
+    #[test]
+    fn a_pending_hop_is_spent_whatever_the_body_was_doing() {
+        for resting_scale in [1.0f32, 0.0] {
+            one_shot_is_spent(resting_scale);
+        }
+    }
+
+    fn one_shot_is_spent(scale: f32) {
+        let (mut app, body) = watched(crate::bounce::testing::TICK);
+        hop_for(&mut app, body, scale, 240);
+        let resting = height_reached(&mut app, body, scale, 90);
+
+        app.world_mut().get_mut::<Bouncer>(body).unwrap().pending = Some(JUMP_SCALE);
+        // `hop_for` writes the ordinary scale every tick, the way the pavement
+        // AI does. Before `pending` existed that overwrote the trick, and a
+        // landing falls in one frame out of twenty: the skater's ollie fired
+        // about that often. The window is a jump's whole arc, which is two and
+        // a half times an ordinary one.
+        let jumped = height_reached(&mut app, body, scale, 150);
+        assert!(
+            jumped > resting + 0.5,
+            "at scale {scale} the one-shot reached {jumped:.2}m against an ordinary {resting:.2}m: it was overwritten"
         );
+
+        // And exactly once: two arcs later it is an ordinary hop again.
+        hop_for(&mut app, body, scale, 90);
+        let after = height_reached(&mut app, body, scale, 90);
+        assert!(
+            after < resting + 0.3,
+            "at scale {scale} the one-shot was still going at {after:.2}m, an ordinary hop being {resting:.2}m"
+        );
+    }
+
+    /// Highest the body gets over a span of ticks, with the ordinary scale
+    /// written every one of them.
+    fn height_reached(app: &mut App, body: Entity, hop: f32, ticks: usize) -> f32 {
+        let mut high = f32::MIN;
+        for _ in 0..ticks {
+            app.world_mut().get_mut::<Bouncer>(body).unwrap().hop_scale = hop;
+            app.update();
+            high = high.max(app.world().get::<Transform>(body).unwrap().translation.y);
+        }
+        high
     }
 
     #[test]

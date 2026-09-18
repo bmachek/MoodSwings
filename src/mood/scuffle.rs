@@ -121,7 +121,8 @@ fn shake(
     mut rng: ResMut<AudioRng>,
     mut scufflers: Query<(
         Entity,
-        &mut Transform,
+        &Transform,
+        &mut Rotation,
         &mut LinearVelocity,
         &mut Bouncer,
         &mut Mood,
@@ -137,8 +138,16 @@ fn shake(
         .collect();
     let where_is = |who: Entity| others.iter().find(|(e, _)| *e == who).map(|(_, at)| *at);
 
-    for (entity, mut transform, mut velocity, mut bouncer, mut mood, voice, mut scuffle) in
-        &mut scufflers
+    for (
+        entity,
+        transform,
+        mut rotation,
+        mut velocity,
+        mut bouncer,
+        mut mood,
+        voice,
+        mut scuffle,
+    ) in &mut scufflers
     {
         scuffle.left -= dt;
         let partner = where_is(scuffle.with);
@@ -165,10 +174,7 @@ fn shake(
         let apart = (there - transform.translation).with_y(0.0);
 
         // Face the argument. Nothing else will turn a stopped body.
-        if let Ok(facing) = Dir2::new(apart.xz()) {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-        }
+        crate::ai::steering::face(&mut rotation, apart.xz());
 
         // The grip and the judder. Sideways is perpendicular to the line
         // between them; the victim is thrown along it and the grabber sways
@@ -216,6 +222,17 @@ pub fn grabbable(is_player: bool, steadfast: bool, launched: bool, scuffling: bo
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(shake);
+    }
     use super::*;
 
     #[test]

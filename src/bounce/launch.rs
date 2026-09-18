@@ -224,22 +224,44 @@ fn run_over_anybody(
 }
 
 /// Hands control back once the victim has stopped rolling, and stands them up.
+///
+/// The standing up is the part that was missing, and it was missing for a while
+/// because most victims hid it. `LockedAxes` freezes a body's *angular
+/// velocity*; it does not write a rotation, so re-inserting it leaves whoever
+/// it is at whatever attitude the tumble finished in — locked there. A citizen
+/// gets away with it because `walk_pavements` overwrites the facing on the very
+/// next frame. Nothing writes a dog's, and a dog is not `NeverTumbles`, so one
+/// taxi put it on its back for the rest of the session. `vehicle::impact` has
+/// stood cars back up the right way round all along, on the same reasoning —
+/// onto the `Transform` rather than onto `Rotation`, which is right *there* and
+/// wrong here: a car is righted once and wants the teleport, and this runs on a
+/// body whose interpolation is worth keeping.
 fn recover_from_knockdown(
     mut commands: Commands,
     time: Res<Time>,
-    mut victims: Query<(Entity, &mut KnockedDown)>,
+    mut victims: Query<(
+        Entity,
+        &mut KnockedDown,
+        &mut Rotation,
+        &mut AngularVelocity,
+    )>,
 ) {
-    for (entity, mut knocked) in &mut victims {
+    for (entity, mut knocked, mut rotation, mut spin) in &mut victims {
         knocked.left -= time.delta_secs();
         if knocked.left > 0.0 {
             continue;
         }
+        // Back on their feet, in both senses: keep the direction they came to
+        // rest facing, drop the roll and the pitch, and stop the spin before
+        // the lock does it — a locked body that is still turning is a body the
+        // solver has to argue with.
+        let (yaw, _, _) = rotation.0.to_euler(EulerRot::YXZ);
+        rotation.0 = Quat::from_rotation_y(yaw);
+        spin.0 = Vec3::ZERO;
         commands
             .entity(entity)
             .remove::<KnockedDown>()
             .remove::<Launched>()
-            // Back on their feet, in both senses: a flummi that stayed free to
-            // rotate would spend the rest of the game lying on its face.
             .insert(LockedAxes::ROTATION_LOCKED);
     }
 }
@@ -287,6 +309,19 @@ fn unwedge_from_vehicles(
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(run_over_anybody);
+        initialises(recover_from_knockdown);
+        initialises(unwedge_from_vehicles);
+    }
     use super::*;
     use crate::player::on_foot::CAPSULE_LENGTH;
     use bevy::asset::AssetPlugin;
@@ -361,7 +396,12 @@ mod tests {
         let mut app = App::new();
         let victim = app
             .world_mut()
-            .spawn((LockedAxes::ROTATION_LOCKED, LinearVelocity::ZERO))
+            .spawn((
+                LockedAxes::ROTATION_LOCKED,
+                LinearVelocity::ZERO,
+                Rotation::default(),
+                AngularVelocity::ZERO,
+            ))
             .id();
         app.world_mut()
             .run_system_once(
@@ -372,6 +412,58 @@ mod tests {
             )
             .unwrap();
         (app, victim)
+    }
+
+    /// Getting up means getting up, not being frozen where you fell.
+    ///
+    /// `LockedAxes` constrains angular velocity and writes no rotation, so
+    /// re-inserting it on a body that came to rest on its face pins it there.
+    /// The crowd hid this because `walk_pavements` rewrites a citizen's facing
+    /// every frame; nothing writes a dog's, and a dog tumbles.
+    #[test]
+    fn a_tumbler_is_stood_back_up_rather_than_locked_where_it_landed() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, victim) = launched(true);
+        app.world_mut().init_resource::<Time>();
+        // Face down, mid-roll, the way a body arrives at the end of a tumble.
+        {
+            let world = app.world_mut();
+            let mut rotation = world.get_mut::<Rotation>(victim).unwrap();
+            // Facing 0.7, pitched forward and rolled most of the way over:
+            // the attitude a body arrives at the end of a tumble in.
+            rotation.0 = Quat::from_euler(EulerRot::YXZ, 0.7, 0.5, 1.4);
+            let mut spin = world.get_mut::<AngularVelocity>(victim).unwrap();
+            spin.0 = Vec3::new(3.0, 1.0, -2.0);
+            let mut knocked = world.get_mut::<KnockedDown>(victim).unwrap();
+            knocked.left = 0.0;
+        }
+        app.world_mut()
+            .run_system_once(recover_from_knockdown)
+            .unwrap();
+
+        let world = app.world();
+        let rotation = world.get::<Rotation>(victim).unwrap().0;
+        let up = rotation * Vec3::Y;
+        assert!(
+            up.y > 0.99,
+            "stood back up facing {up:?}: still lying where it landed"
+        );
+        let (yaw, pitch, roll) = rotation.to_euler(EulerRot::YXZ);
+        assert!(
+            (yaw - 0.7).abs() < 1e-3,
+            "the direction it came to rest facing was thrown away: {yaw}"
+        );
+        assert!(
+            pitch.abs() < 1e-3 && roll.abs() < 1e-3,
+            "pitch {pitch} roll {roll} survived the get-up"
+        );
+        assert_eq!(
+            world.get::<AngularVelocity>(victim).unwrap().0,
+            Vec3::ZERO,
+            "locked while still spinning is a body the solver has to argue with"
+        );
+        assert!(world.get::<LockedAxes>(victim).is_some());
+        assert!(world.get::<Launched>(victim).is_none());
     }
 
     #[test]

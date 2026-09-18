@@ -352,7 +352,8 @@ fn ride(
         (
             &mut Cyclist,
             &mut Bouncer,
-            &mut Transform,
+            &Transform,
+            &mut Rotation,
             &mut super::figure::WalkCycle,
             &mut super::figure::Riding,
             &Children,
@@ -362,7 +363,8 @@ fn ride(
     mut wheels: Query<&mut Transform, (With<Wheel>, Without<Cyclist>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cyclist, mut bouncer, mut transform, mut cycle, mut riding, children) in &mut cyclists
+    for (mut cyclist, mut bouncer, transform, mut rotation, mut cycle, mut riding, children) in
+        &mut cyclists
     {
         let position = transform.translation.xz();
         let b = city.graph.node(cyclist.to).pos;
@@ -433,16 +435,30 @@ fn ride(
             // point becoming a twitch.
             let turn = super::figure::shortest_turn(cyclist.heading, yaw) / dt.max(1e-3);
             let wanted = (-turn * PACE / 9.81).atan().clamp(-LEAN_LIMIT, LEAN_LIMIT);
-            let lean = transform.rotation.to_euler(EulerRot::YXZ).2;
+            let lean = rotation.0.to_euler(EulerRot::YXZ).2;
             let eased = lean + (wanted - lean) * (LEAN_SLEW * dt).min(1.0);
             cyclist.heading = yaw;
-            transform.rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(eased);
+            // Avian's `Rotation`, not the `Transform`: this runs every frame on
+            // an interpolated rigid body, where a `Transform` write reads as a
+            // teleport and costs the rider the distance it is easing over.
+            rotation.0 = Quat::from_rotation_y(yaw) * Quat::from_rotation_z(eased);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(ride);
+    }
     /// A cyclist who is pedalling is not a cyclist who is walking.
     #[test]
     fn a_rider_puts_their_feet_on_the_pedals_and_not_on_the_road() {
