@@ -143,6 +143,13 @@ menu's "Tastenbelegung" screen, along with mouse sensitivity, a Y-invert
 toggle, audio and graphics. Settings persist to `saves/options.ron`; the
 world state from a save goes to `saves/quicksave.ron`, same as before.
 
+"Fortbewegung" in the same settings decides how everybody on foot gets about:
+Gehen, which is the default and keeps their feet on the ground, or Hüpfen,
+which is the city as it first was, with the whole crowd travelling by bouncing.
+It is only the *resting* hop that the switch turns off. Jumps, launches,
+crashes and the solver's own rubber are untouched by it, and a flummi in either
+setting is still made of rubber the moment anything happens to it.
+
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
 Y interacts, right trigger taunts, left trigger cheers, X throws the flower,
 B is the handbrake.
@@ -450,6 +457,27 @@ airborne for most of its cycle, and a controller that only steers while
 strictly touching the ground gives you about three frames of control a second.
 Reaching down means the lower part of every arc counts as grounded, which is
 where the steering that matters happens anyway.
+
+What that reach must not decide is where a body *lands*, and for a long time it
+did — which turned the first paragraph of this section on its head. A landing
+fired the moment the ray saw ground anywhere inside half a standing height, and
+the rebound being assigned rather than added made that height free: the body
+left again at full hop speed without ever touching anything, for ever. The
+headless harness measures it at 41 centimetres. So the probe answers two
+questions now. `grounded` is the wide reach, and steering and jump permission
+read it. `touching` is the ground. A landing is the frame a body arrives on it —
+or, for a fall quick enough to cross the whole contact shell between two frames,
+the frame the fall reverses, which is every jump and every roof.
+
+Walking is the default and hopping is a setting, and the difference lives here.
+A walking body has no hop to leave with, so it gives back the solver's own
+restitution instead — applied by the controller rather than left to the solver,
+so that it is booked like every other assignment and a jump cannot read as
+being hit by a car. And it has to pick its feet up for a kerb, because the hop
+that used to clear one is gone: a short probe ahead of where it is going, and a
+lift sized to the step. Without that a child, whose capsule meets the stone
+above its own hemisphere, could cross a road and never get back up the other
+side.
 
 What actually sells it is not the physics but the squash: flattened at the
 bottom of the arc, drawn out along the direction of travel on the way up and
@@ -1667,6 +1695,11 @@ in the world.
 - Pedestrians cross roads wherever their route turns, rather than at crossings,
   and nothing on foot reads a signal: the lights below are for the traffic. A
   citizen steps off a kerb on a green as readily as on a red.
+- A body climbs a step by finding it with one ray straight ahead of where it is
+  going, so it deals with a kerb and with nothing more complicated. A flight of
+  stairs is a step it will hop up one at a time if the treads are deep enough
+  and stall against if they are not, and a ramp is not read as a step at all —
+  the town is flat wherever it is built, so nothing yet needs it to be.
 - A junction is reserved by the *chord* of each movement across it, not by the
   arc a car actually drives, and the reservation is a point rather than a
   queue: there is no check that there is room on the far side before a car is

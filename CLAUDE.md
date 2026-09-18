@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo run                      # debug; ~2-10s incremental after the first build
 cargo run --release            # smoother frame rate, slower to compile
 cargo run --features dev       # bevy dynamic_linking — fastest iteration
-cargo test                     # 718 unit tests (727 with --workspace), all inline #[cfg(test)]
+cargo test                     # 741 unit tests (750 with --workspace), all inline #[cfg(test)]
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
@@ -111,6 +111,27 @@ in a different city. Probe with a temporary `info!` in the spawn path instead.
 Capture mode is not just a camera: `core::capture::is_capture_mode()` gates the
 dev panel off (`ui`) and mutes audio, and several systems check it. Anything that
 would spoil an unattended shot should check it too.
+
+### Verifying physics without a window
+
+`bounce::testing::physics_app` is a headless Avian world built the way
+`world::mod` builds the real one — the same interpolation, the same
+`DefaultRestitution` and solver settings — with `ground()` and `kerb()` to put
+something under a body and `finish()` to do what `run()` would. It is the only
+instrument here that needs neither a GPU nor a window, and it answers the
+questions a screenshot cannot: where the low point of a hop is, how long a body
+takes to come down off a kerb, whether a facing written every frame costs a
+body its walk. Drive it with `TimeUpdateStrategy::ManualDuration`, and pass a
+frame *shorter* than the tick to ask what happens above the tick rate, which is
+where interpolation does the most work and where two of the bugs it has caught
+only exist.
+
+Two rules it enforces that nothing else could. Physics tests run over
+`Gait::ALL`, because the default is walking and every physics test used to
+drive the bouncing city by leaving `hop_scale` at its constructed 1.0. And
+`initialises(system)` is four lines that trip Bevy's B0001 query-conflict check
+without any of the resources the system reads — the check panics at first run,
+not at compile time, and the capture harness was the only thing catching it.
 
 ### Verifying audio changes
 
@@ -388,7 +409,7 @@ Every crossing of the Isar was a launch ramp.
 
 ### The traps
 
-Six things here have bitten more than once and none of them fail loudly:
+Seven things here have bitten more than once and none of them fail loudly:
 
 - **The ground is only flat where the town is.** `world::terrain` displaces it,
   and about thirty spawners write a world y directly (`SIDEWALK_HEIGHT`,
@@ -419,7 +440,24 @@ Six things here have bitten more than once and none of them fail loudly:
 - **Restitution is a property of a contact.** A body held off the ground by a
   spring — a floating character controller, a car on raycast suspension — never
   forms one, so declaring it elastic does nothing. `bounce::controller` applies
-  the hop by hand for that reason.
+  the hop by hand for that reason. The corollary cost a year: a landing that
+  fires anywhere inside the ground probe's generous reach is a *second* way of
+  never forming a contact, and the rebound being assigned rather than added
+  makes that height free for ever. `grounded` is the wide reach, for steering
+  and for jump permission; `touching` is the narrow one, and only it decides a
+  landing. A fast fall crosses the whole contact shell between two frames, so a
+  landing is also recognised by the fall reversing.
+- **A `Transform` written from `Update` onto a rigid body is a teleport.**
+  `world::mod` runs Avian with `PhysicsInterpolationPlugin::interpolate_all()`,
+  and the easing clears its state — translation included — for any body whose
+  `Transform` a game system changed. Avian then syncs the eased, lagging
+  position back into `Position`. Twelve systems wrote a facing that way and the
+  crowd either walked at a third of its speed or never finished turning,
+  depending on how the scheduler ordered an unordered pair. Write Avian's
+  `Rotation` (and `Position`) instead; `ai::steering::face` is the one place
+  that does it for a facing. None of it shows in a still, so the capture
+  harness cannot catch it — `bounce::testing::physics_app` installs the same
+  interpolation so a `cargo test` can.
 - **Avian scales a collider by its transform.** Squash and stretch is applied to
   a figure's *children*, off their `Rest` pose; scaling the body entity would
   flatten the collider and sink the figure through the pavement. A child with no
