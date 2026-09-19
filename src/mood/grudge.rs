@@ -257,19 +257,25 @@ fn pursue(
 fn spin(
     mut commands: Commands,
     time: Res<Time>,
-    mut dancers: Query<(Entity, &mut Transform, &mut Pirouette), Without<Launched>>,
+    mut dancers: Query<(Entity, &mut Rotation, &mut Pirouette), Without<Launched>>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut transform, mut spin) in &mut dancers {
+    for (entity, mut rotation, mut spin) in &mut dancers {
         spin.left -= dt;
         if spin.left <= 0.0 {
             commands.entity(entity).remove::<Pirouette>();
             continue;
         }
-        // Written straight onto the rotation, which nothing else is competing
-        // for: the crowd's own facing is set by `walk_pavements` earlier in the
-        // same set, and rotation is locked so the solver will not touch it.
-        transform.rotate_y(std::f32::consts::TAU * SPIN_RATE * dt);
+        // Written straight onto Avian's rotation, which nothing else is
+        // competing for: the crowd's own facing is set by `walk_pavements`
+        // earlier in the same set, and rotation is locked so the solver will
+        // not touch it. Onto `Rotation` rather than `Transform` because the
+        // body is interpolated and a `Transform` write from `Update` is a
+        // teleport — see `ai::steering::face`.
+        // Post-multiplied, where `Transform::rotate_y` pre-multiplied. The
+        // two differ only for a body that is tilted, and a pirouetting citizen
+        // has its rotation locked upright: this is a yaw on a yaw.
+        rotation.0 *= Quat::from_rotation_y(std::f32::consts::TAU * SPIN_RATE * dt);
     }
 }
 
@@ -399,6 +405,17 @@ fn settle_scores(
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(spin);
+    }
     use super::*;
 
     #[test]

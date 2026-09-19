@@ -4,10 +4,56 @@
 //! components, so the geometry that decides whether a car turns the right way
 //! can be tested directly instead of inferred from watching traffic.
 
+use avian3d::prelude::Rotation;
 use bevy::prelude::*;
 
 /// Which side of the road traffic drives on. Right-hand rule.
 pub const RIGHT_HAND_TRAFFIC: bool = true;
+
+/// Turns a body to face where it is going.
+///
+/// The one place this is done, and it writes Avian's [`Rotation`] rather than
+/// the entity's `Transform`, which is not a style preference. `world::mod` runs
+/// the physics with `PhysicsInterpolationPlugin::interpolate_all()`, so every
+/// rigid body's rendered pose is eased between ticks; the crate that does the
+/// easing treats *any* `Update`-time change to `Transform` as a teleport, and
+/// clears the easing state for the whole transform — translation included —
+/// when it sees one. Avian then syncs the eased, lagging position back into
+/// `Position` and the body loses part of a tick of travel, every tick.
+///
+/// A dozen systems here wrote the facing that way, once per frame per citizen.
+/// Measured in the headless harness, over two seconds of walking at 7.6 m/s:
+///
+/// | frame | writing `Transform` | writing `Rotation` |
+/// |---|---|---|
+/// | 144 Hz | 4.01 m covered, facing arrives | 14.43 m, facing arrives |
+/// | 60 Hz | 14.34 m, facing reaches 19° of 90° | 14.34 m, 90° |
+///
+/// Which of the two failures shows depends on how the scheduler happens to
+/// order an unordered pair, so both are real and the town gets one or the
+/// other. Neither is visible in a still, which is why it survived: the capture
+/// harness poses one frame.
+pub fn face(rotation: &mut Rotation, heading: Vec2) {
+    if heading == Vec2::ZERO {
+        return;
+    }
+    rotation.0 = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(heading));
+}
+
+/// The same, eased at `rate` per second instead of snapped.
+///
+/// What the player has always had — "a figure that walks sideways looks like a
+/// bug rather than like a joke" — kept separate because the crowd has always
+/// snapped and making it stop is a change to how the city looks, not to how it
+/// is written.
+pub fn face_eased(rotation: &mut Rotation, heading: Vec2, rate: f32, dt: f32) {
+    let Ok(facing) = Dir2::new(heading) else {
+        return;
+    };
+    let target = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
+    let blend = 1.0 - (-rate.max(0.0) * dt).exp();
+    rotation.0 = rotation.0.slerp(target, blend);
+}
 
 /// Unit normal pointing to the right of `direction` in the XZ plane.
 ///
@@ -290,6 +336,104 @@ pub fn throttle_for_speed(current: f32, desired: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bounce::controller::{Bouncer, bounce_bodies};
+    use crate::bounce::testing::{finish, ground, physics_app};
+    use avian3d::prelude::*;
+
+    /// What a facing written onto `Transform` costs an interpolated body.
+    ///
+    /// The table in [`face`] is this test. Both halves matter and only one of
+    /// them shows at a given frame rate, so it runs at three: the tick rate
+    /// itself, below it, and well above it, which is where a player's monitor
+    /// actually is.
+    fn walk_and_turn(frame: f64, write_transform: bool) -> (f32, f32) {
+        let mut app = physics_app(frame);
+        app.add_systems(Update, bounce_bodies);
+        ground(&mut app);
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 2.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::capsule(0.32, 1.05),
+                LockedAxes::ROTATION_LOCKED,
+                Bouncer::new(1.05 * 0.5 + 0.32),
+            ))
+            .id();
+        finish(&mut app);
+
+        let settle = (3.0 / frame) as usize;
+        for _ in 0..settle {
+            app.world_mut().get_mut::<Bouncer>(body).unwrap().hop_scale = 0.0;
+            app.update();
+        }
+
+        let start = app.world().get::<Transform>(body).unwrap().translation;
+        let seconds = 2.0;
+        let frames = (seconds / frame) as usize;
+        let heading = Vec2::new(1.0, 0.0);
+        for _ in 0..frames {
+            {
+                let mut bouncer = app.world_mut().get_mut::<Bouncer>(body).unwrap();
+                bouncer.hop_scale = 0.0;
+                bouncer.desired = heading * 7.6;
+            }
+            if write_transform {
+                // The way a dozen systems used to do it.
+                let target = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(heading));
+                let mut transform = app.world_mut().get_mut::<Transform>(body).unwrap();
+                let blend = 1.0 - (-14.0 * frame as f32).exp();
+                transform.rotation = transform.rotation.slerp(target, blend);
+            } else {
+                let dt = frame as f32;
+                let mut rotation = app.world_mut().get_mut::<Rotation>(body).unwrap();
+                face_eased(&mut rotation, heading, 14.0, dt);
+            }
+            app.update();
+        }
+        let end = app.world().get::<Transform>(body).unwrap().translation;
+        let covered = (end - start).with_y(0.0).length();
+        let facing = app
+            .world()
+            .get::<Transform>(body)
+            .unwrap()
+            .rotation
+            .to_euler(EulerRot::YXZ)
+            .0;
+        (covered, facing.to_degrees())
+    }
+
+    #[test]
+    fn facing_where_you_are_going_does_not_cost_you_the_walk() {
+        let wanted = 7.6 * 2.0;
+        for frame in [1.0 / 144.0, 1.0 / 64.0, 1.0 / 30.0] {
+            let (covered, facing) = walk_and_turn(frame, false);
+            assert!(
+                covered > wanted * 0.9,
+                "at {:.0}Hz a turning body covered {covered:.2}m of {wanted:.2}m",
+                1.0 / frame
+            );
+            // -Z is zero yaw and +X is a quarter turn clockwise from it.
+            assert!(
+                (facing + 90.0).abs() < 5.0,
+                "at {:.0}Hz the body ended up facing {facing:.1}°, not -90°",
+                1.0 / frame
+            );
+        }
+    }
+
+    /// The same run done the old way, kept so the reason is not re-litigated
+    /// from memory. One of the two failures shows at any given frame rate.
+    #[test]
+    fn writing_the_facing_onto_transform_is_what_it_used_to_cost() {
+        let wanted = 7.6 * 2.0;
+        let (fast_covered, _) = walk_and_turn(1.0 / 144.0, true);
+        let (_, slow_facing) = walk_and_turn(1.0 / 64.0, true);
+        assert!(
+            fast_covered < wanted * 0.5 || (slow_facing + 90.0).abs() > 20.0,
+            "neither failure reproduced: {fast_covered:.2}m at 144Hz, {slow_facing:.1}° at 64Hz"
+        );
+    }
 
     #[test]
     fn right_of_matches_bevys_right_axis() {

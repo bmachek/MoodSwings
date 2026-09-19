@@ -626,7 +626,8 @@ fn walk_pavements(
         (
             &mut Pedestrian,
             &mut Bouncer,
-            &mut Transform,
+            &Transform,
+            &mut Rotation,
             &Mood,
             &super::archetype::Archetype,
             &super::archetype::AgeClass,
@@ -651,7 +652,9 @@ fn walk_pavements(
     }
     let mut sample = None;
 
-    for (mut pedestrian, mut bouncer, mut transform, mood, archetype, age) in &mut pedestrians {
+    for (mut pedestrian, mut bouncer, transform, mut rotation, mood, archetype, age) in
+        &mut pedestrians
+    {
         let position = transform.translation.xz();
         let mut a = city.graph.node(pedestrian.from).pos;
         let mut b = city.graph.node(pedestrian.to).pos;
@@ -747,11 +750,10 @@ fn walk_pavements(
         bouncer.desired = heading * speed;
 
         // Rotation is locked, so nothing else will turn them to face the way
-        // they are going.
-        if heading != Vec2::ZERO {
-            transform.rotation =
-                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(heading));
-        }
+        // they are going. Onto Avian's `Rotation`: a `Transform` written from
+        // `Update` on an interpolated body is a teleport, and this one runs
+        // once per citizen per frame. See `steering::face`.
+        crate::ai::steering::face(&mut rotation, heading);
 
         if sample.is_none() {
             sample = Some((transform.translation, speed, pedestrian.panic));
@@ -860,6 +862,20 @@ impl<I: Iterator> ChooseExt for I {}
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(walk_pavements);
+        initialises(flock);
+        initialises(give_way);
+        initialises(maintain_population);
+    }
     use super::*;
 
     #[test]

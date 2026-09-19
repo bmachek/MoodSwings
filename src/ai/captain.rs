@@ -433,7 +433,8 @@ fn stalk(
         (
             Entity,
             &mut CaptainErdnuss,
-            &mut Transform,
+            &Transform,
+            &mut Rotation,
             &mut Bouncer,
             &mut WalkCycle,
             &LinearVelocity,
@@ -451,7 +452,7 @@ fn stalk(
     mut bubbles: Query<(&mut GreetingBubble, &mut Visibility)>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut captain, mut transform, mut bouncer, mut cycle, velocity, voice) in
+    for (entity, mut captain, transform, mut rotation, mut bouncer, mut cycle, velocity, voice) in
         &mut captains
     {
         let here = transform.translation;
@@ -495,10 +496,7 @@ fn stalk(
                 } else {
                     Vec2::ZERO
                 };
-                if let Ok(facing) = Dir2::new(towards.xz()) {
-                    transform.rotation =
-                        Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-                }
+                crate::ai::steering::face(&mut rotation, towards.xz());
             }
             None => {
                 // Nobody about: amble along the graph until there is.
@@ -520,10 +518,7 @@ fn stalk(
                 if let Some(goal) = goal {
                     let towards = goal - here.xz();
                     bouncer.desired = towards.normalize_or_zero() * WANDER_SPEED;
-                    if let Ok(facing) = Dir2::new(towards) {
-                        transform.rotation =
-                            Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
-                    }
+                    crate::ai::steering::face(&mut rotation, towards);
                 }
             }
         }
@@ -568,6 +563,18 @@ fn fade_greetings(time: Res<Time>, mut bubbles: Query<(&mut GreetingBubble, &mut
 
 #[cfg(test)]
 mod tests {
+
+    /// Two queries in one system may not both touch a component if either is
+    /// mutable, and Bevy says so by panicking at first run. Several of these
+    /// queries changed from `&mut Transform` to `&Transform` + `&mut Rotation`
+    /// when the facing moved off the transform, which is exactly the edit that
+    /// creates the overlap by accident.
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(haunt);
+        initialises(stalk);
+    }
     use super::*;
 
     #[test]
