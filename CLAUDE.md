@@ -409,7 +409,7 @@ Every crossing of the Isar was a launch ramp.
 
 ### The traps
 
-Seven things here have bitten more than once and none of them fail loudly:
+Ten things here have bitten more than once and none of them fail loudly:
 
 - **The ground is only flat where the town is.** `world::terrain` displaces it,
   and about thirty spawners write a world y directly (`SIDEWALK_HEIGHT`,
@@ -474,6 +474,35 @@ Seven things here have bitten more than once and none of them fail loudly:
   markers really are exclusive, spelling that out in `Without` is the honest
   fix, and `multiplayer`'s test is the cheap way to prove it: initialising a
   system is enough to trip the check, and needs none of the resources it reads.
+- **Parry's heightfield lattice is indexed `[x][z]`, outer index first.** Avian's
+  own doc says so and `world::mod`'s comment said the opposite, so
+  `ground_collider` nested its loops the wrong way and handed Avian the
+  *transpose* of the terrain: the ground you stood on was the ground you saw
+  mirrored about `x == z`. Nothing showed it while every town was flat — the
+  transpose of zero is zero — and under Landshut's real relief it was 74 m out,
+  which is a Hofberg you drive straight through and an invisible fifty-metre
+  shelf across a street on the other diagonal. `the_collider_lattice_runs_x_first`
+  is four lines and asks the linked parry rather than anybody's memory of it;
+  `the_ground_collider_agrees_with_the_ground_you_can_see` walks the committed
+  Landshut off the lattice's own sample points, because a transpose is invisible
+  wherever `x == z`.
+- **`bevy_egui` gives its context to the first camera it finds, and then latches.**
+  This app spawns two in one unordered `Startup` — the player's and the
+  minimap's, which renders into a 320 by 320 texture — so which one won was
+  archetype order, and it was the minimap's. Every egui surface in the game, the
+  pause menu and the F3 panel both, was drawn correctly into a widget nobody was
+  looking at: `Escape` froze the world and freed the cursor and no menu ever
+  appeared. `ui::menu` turns `auto_create_primary_context` off and
+  `player::camera::spawn_camera` carries `PrimaryEguiContext`, next to the
+  `IsDefaultUiCamera` that says the same thing for Bevy's own UI. Anything that
+  adds a camera has to leave both alone.
+- **Pausing `Time<Physics>` stops Avian clearing forces, not systems applying
+  them.** `vehicle::controller::drive_vehicles` runs in `FixedUpdate`, which the
+  pause menu does not stop, so a menu left open charged the suspension up and
+  fired the car on resume — five metres after a second, seventy after five, the
+  height scaling with how long the player read the menu. It needs a run
+  condition, not a `GameSet` gate. Anything else that ever applies a force
+  outside the physics schedule needs the same one.
 - **`figure::FigureAssets` is inserted by `pedestrian::setup` and read by the
   player spawn**, and `mood::face::FaceAssets` by both. The ordering is
   Startup → PostStartup and is silently load-bearing.

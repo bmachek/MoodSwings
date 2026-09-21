@@ -11,7 +11,7 @@ use avian3d::prelude::*;
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindow, WindowMode};
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 use leafwing_input_manager::prelude::ActionState;
 
 use crate::core::config::{GameConfig, Resolution};
@@ -47,8 +47,24 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(EguiPlugin::default())
-            .init_resource::<MenuScreen>()
+        app.add_plugins(EguiPlugin::default());
+        // Say which camera owns the egui context instead of letting
+        // `bevy_egui` guess. Its guess is "the first camera an application
+        // creates", and this app creates two in one unordered `Startup`: the
+        // player's, and the minimap's, which renders into a 320 by 320
+        // texture. When the minimap won, every egui surface in the game —
+        // the pause menu and the F3 tuning panel both — was drawn into that
+        // texture, so `Escape` paused the world and showed nothing. The owner
+        // is declared on the camera itself, in `player::camera::spawn_camera`.
+        //
+        // Set here rather than in a `PreStartup` system because
+        // `setup_primary_egui_context_system` runs *at* `PreStartup`, and a
+        // system cannot reliably run before another in the same schedule
+        // without an ordering constraint on somebody else's system.
+        app.world_mut()
+            .resource_mut::<EguiGlobalSettings>()
+            .auto_create_primary_context = false;
+        app.init_resource::<MenuScreen>()
             .init_resource::<AwaitingRebind>()
             .init_resource::<SaveLoadStatus>()
             .add_systems(

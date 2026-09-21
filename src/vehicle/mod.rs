@@ -11,6 +11,7 @@ pub mod spawn;
 pub mod spec;
 pub mod trim;
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::core::schedule::GameSet;
@@ -25,7 +26,22 @@ impl Plugin for VehiclePlugin {
             .add_systems(PostStartup, spawn::spawn_parked_vehicles)
             // Forces must be applied before Avian steps in `FixedPostUpdate`,
             // and re-applied every tick because Avian clears them after.
-            .add_systems(FixedUpdate, controller::drive_vehicles)
+            //
+            // "Because Avian clears them after" is also why this needs a run
+            // condition and not just a `GameSet` gate. `FixedUpdate` keeps
+            // running while the pause menu is open; the physics schedule does
+            // not, because `ui::menu::pause_physics` pauses `Time<Physics>` —
+            // so the clearing stops and the applying does not, and a whole
+            // menu's worth of suspension force lands on the car in the tick
+            // after `Escape`. Measured in `the_pause_menu_does_not_charge_the_
+            // suspension`: a second of menu threw a settled sedan five metres
+            // up, five seconds threw it seventy. Nobody had ever seen it
+            // because the menu itself was being drawn into the minimap and no
+            // one could pause at all — see `player::camera::spawn_camera`.
+            .add_systems(
+                FixedUpdate,
+                controller::drive_vehicles.run_if(|time: Res<Time<Physics>>| !time.is_paused()),
+            )
             .add_systems(
                 Update,
                 // Chained so a fling never reads a stale impact: the same

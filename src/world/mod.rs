@@ -501,17 +501,27 @@ const GROUND_LATTICE: usize = 550;
 /// does for the only reason that is maintainable: both of them ask
 /// `world::terrain` and neither of them has an opinion of its own.
 ///
-/// Parry indexes its lattice `[z][x]` — rows are Z — which Avian's own doc
-/// comment has the other way round. It matters here because the ground is not
-/// symmetrical.
+/// Parry indexes its lattice `[x][z]` — the *outer* index is X — exactly as
+/// Avian's own doc comment says ("the number of rows indicates the number of
+/// subdivisions along the `X` axis"). This comment used to claim the opposite
+/// and the loops were nested to match it, which fed Avian the transpose of the
+/// terrain: the physical ground was the visible ground mirrored about the line
+/// `x == z`. Nothing showed it while every town was flat — `Terrain::height`
+/// is exactly zero along every street and within a metre of it over most of a
+/// generated city — but under Landshut's real relief it put the Hofberg's
+/// whole north-west slope at about zero and stood an invisible fifty-metre
+/// shelf across the streets on the other diagonal. That is the "you drive
+/// through the Hofberg instead of up it" bug, and
+/// `the_collider_lattice_runs_x_first` is the four-line test that pins the
+/// axis order down so a comment can never be the only thing holding it.
 fn ground_collider(terrain: &terrain::Terrain, played: f32) -> Collider {
     let last = GROUND_LATTICE - 1;
     let heights = (0..GROUND_LATTICE)
-        .map(|iz| {
-            let z = (iz as f32 / last as f32 - 0.5) * played;
+        .map(|ix| {
+            let x = (ix as f32 / last as f32 - 0.5) * played;
             (0..GROUND_LATTICE)
-                .map(|ix| {
-                    let x = (ix as f32 / last as f32 - 0.5) * played;
+                .map(|iz| {
+                    let z = (iz as f32 / last as f32 - 0.5) * played;
                     terrain.height(Vec2::new(x, z))
                 })
                 .collect()
@@ -1191,4 +1201,119 @@ fn road_material(
         }
     }
     asphalt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::CityStyle;
+
+    /// Which index of `Collider::heightfield`'s `Vec<Vec<f32>>` runs along X.
+    ///
+    /// Four lines, because for a while the only thing saying so was a comment
+    /// in [`ground_collider`] and the comment was wrong — the lattice went in
+    /// transposed and the ground you could stand on was the ground you could
+    /// see mirrored about `x == z`. A ramp in the outer index alone and two
+    /// rays settle it, and they settle it against the version of parry that
+    /// is actually linked rather than against anybody's memory of its docs.
+    #[test]
+    fn the_collider_lattice_runs_x_first() {
+        let n = 5usize;
+        let heights: Vec<Vec<f32>> = (0..n)
+            .map(|outer| (0..n).map(|_| outer as f32 * 10.0).collect())
+            .collect();
+        let collider = Collider::heightfield(heights, Vec3::new(40.0, 1.0, 40.0));
+        let ground = |x: f32, z: f32| {
+            collider
+                .cast_ray(
+                    Vec3::ZERO,
+                    Quat::IDENTITY,
+                    Vec3::new(x, 100.0, z),
+                    Vec3::NEG_Y,
+                    200.0,
+                    true,
+                )
+                .map(|(distance, _)| 100.0 - distance)
+                .expect("the ray should meet the lattice")
+        };
+        let along_x = ground(19.0, 0.0) - ground(-19.0, 0.0);
+        let along_z = ground(0.0, 19.0) - ground(0.0, -19.0);
+        assert!(
+            along_x.abs() > 30.0,
+            "the outer index should run along X, but X only moved by {along_x} m"
+        );
+        assert!(
+            along_z.abs() < 1.0e-3,
+            "the inner index should be flat here, but Z moved by {along_z} m"
+        );
+    }
+
+    /// And the ground you stand on is the ground you can see.
+    ///
+    /// The mesh and the collider both ask `world::terrain` and neither has an
+    /// opinion of its own, so the only way they can disagree is in how the
+    /// lattice is handed over. Walked over the committed Landshut, because
+    /// that is the one layout with a relief big enough for a disagreement to
+    /// show: on a flat town the transpose of zero is zero.
+    #[test]
+    fn the_ground_collider_agrees_with_the_ground_you_can_see() {
+        let Some(town) = atlas::load("landshut") else {
+            return;
+        };
+        let half_extent = 1_000.0;
+        let (mut layout, _) = atlas::layout(&town, 1, half_extent);
+        let (real, _) =
+            atlas::footprints(&town, &layout.graph, 1, half_extent, CityStyle::Landshuepf);
+        let (blocks, _) = streetside::lots(&layout, 1, CityStyle::Landshuepf, real);
+        layout.blocks = blocks;
+        let reach = half_extent + ENVELOPE + BACKLAND + 60.0;
+        let terrain = terrain::Terrain::new(&layout, reach, true, 1);
+        let played = half_extent * 2.0 + 200.0;
+        let collider = ground_collider(&terrain, played);
+
+        // Off the lattice's own sample points on purpose: a transpose is
+        // invisible at every point where x happens to equal z.
+        let mut worst = 0.0f32;
+        let mut worst_at = Vec2::ZERO;
+        for i in 0..37 {
+            for j in 0..37 {
+                let at = Vec2::new(
+                    (i as f32 / 36.0 - 0.5) * played * 0.96 + 1.7,
+                    (j as f32 / 36.0 - 0.5) * played * 0.96 - 2.3,
+                );
+                let Some((distance, _)) = collider.cast_ray(
+                    Vec3::ZERO,
+                    Quat::IDENTITY,
+                    Vec3::new(at.x, 400.0, at.y),
+                    Vec3::NEG_Y,
+                    900.0,
+                    true,
+                ) else {
+                    continue;
+                };
+                let under_foot = 400.0 - distance;
+                let drawn = terrain.height(at);
+                if (under_foot - drawn).abs() > worst {
+                    worst = (under_foot - drawn).abs();
+                    worst_at = at;
+                }
+            }
+        }
+        // A metre of slack for the lattice itself: the collider samples every
+        // four metres and interpolates over a triangle, the mesh is asked for
+        // the exact point, and the Hofberg's face falls fast enough that the
+        // two differ by tens of centimetres between samples.
+        // A metre and a half of slack, and it is the lattice rather than a
+        // disagreement: the collider samples every four metres and spans each
+        // cell with two triangles, the mesh is asked for the exact point, and
+        // the worst point in this walk sits on a sixty-degree face — the north
+        // scarp of the Hofberg, which `world::terrain` describes in those very
+        // words. Four metres at sixty degrees is seven metres of rise across
+        // one cell, so a metre out in the middle of one is the grid, not a bug.
+        // Handed over transposed, the same walk was 74 m out.
+        assert!(
+            worst < 1.5,
+            "the ground you stand on is {worst} m from the ground you can see, at {worst_at}"
+        );
+    }
 }
