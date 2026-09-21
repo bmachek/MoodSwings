@@ -156,6 +156,17 @@ fn spawn_camera(mut commands: Commands) {
         // With a minimap camera in the world too, UI needs to be told which
         // view it belongs to; otherwise the HUD silently renders nowhere.
         IsDefaultUiCamera,
+        // And egui needs telling separately, for the same reason and with a
+        // worse failure. `bevy_egui` gives its primary context to "the first
+        // camera an application creates" and then latches, and both cameras
+        // are spawned in one unordered `Startup` — so which one won was
+        // decided by archetype order, and it was the minimap's. The pause
+        // menu and the tuning panel were being drawn, correctly, into a 320
+        // by 320 offscreen texture: `Escape` froze the world and freed the
+        // cursor, and no menu ever appeared. `MenuPlugin` turns the guessing
+        // off; this says who owns it. Capture mode only repoints this
+        // camera's render target, so the owner is the same one there.
+        bevy_egui::PrimaryEguiContext,
         Transform::from_xyz(0.0, 60.0, 120.0).with_rotation(Quat::from_euler(
             EulerRot::YXZ,
             rig.yaw,

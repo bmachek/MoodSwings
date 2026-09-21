@@ -195,7 +195,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors and the nave of a walk-in church (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), what the game is allowed to call the buildings on them (`trading`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals, hollowed out where they are big enough to enter (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -367,6 +367,18 @@ tools/bake-city.py --rename  assets/cities/landshut.ron built.json
 ```
 
 The other two exist because the bake has always held tags it never wrote down.
+One thing the map says that the game does not repeat: what the shops are
+called. `--rename` takes the OSM `name` tag so the Finanzamt and the
+Stadtresidenz wear their own, and the same tag names living companies and, in
+one case, a private person. `world::trading` sits between the extract and the
+painted sign: the town is renamed to Landshüpf wherever a name mentions it,
+and a register replaces the forty-five trading names in the committed atlas
+with invented ones. Both halves of the decision are written out — the renamed
+and the kept — and a test holds their union against the committed file
+exactly, so a re-bake that brings a new business into town fails until
+somebody has decided what the game calls it. The civic and the historic keep
+their real names, which is the whole point of reading a real map.
+
 `--reflag` takes the roads dump's `oneway` and `highway=pedestrian`: nine per
 cent of Landshut's road length is one-way and 4.8 km of it is a
 Fussgaengerzone, the Altstadt included, and `roadgraph::Rules` is what
@@ -382,6 +394,44 @@ by containment with a size guard in *both* directions — a forty-square-metre
 metre hall whose middle lands beside it, and the runtime draws a thirty-seven-
 metre pyramid of brick. A name or a kind is written per *building*, never per
 part: one wing named and its siblings blank is two buildings that touch.
+
+### A church you can walk into
+
+`world::interior` has built real rooms behind real doors for a while — floor,
+lined walls, an emissive ceiling, furniture with colliders and one member of
+staff with a full set of feelings. Churches were not on that path:
+`BuildingKind::enterable()` names four shop-shaped kinds, and `world::church`
+raised its nave as one solid box whose only door was a slab of painted shadow
+with a collider in it.
+
+They are on it now, and the route is their own rather than `enterable()`'s,
+because a church's door is its own architecture: you come in under the west
+tower. `church::spawn` draws the nave and the tower's ground storey as
+*shells* — four walls and a vault, with the pierced face built as two jambs
+and a lintel — and hands back a `Nave` that `world::buildings` furnishes
+through the same `interior::spawn` the shops use. `Doorframe` grew `clear`,
+`head` and `opening` for it: a shopfront's glass runs to the ceiling so its
+room height and its doorway are one number, and a basilica's are 13 m and
+4.6 m.
+
+Three things were invisible while the nave was solid masonry and are not any
+more, and all three are the same lesson:
+
+- **The pitched roof hangs into the room.** It is a cube turned 45° about the
+  ridge, so its lower vertex drops as far below the eaves as the ridge stands
+  above them — fifteen metres on St. Martin. The vault goes under it, with
+  `VAULT_CLEARANCE` to spare.
+- **Two of the tower's four corner buttresses stand inside the nave.** The
+  tower's back corners are past the nave's front wall by construction. A
+  walk-in church drops them; a west tower's rear buttresses are absorbed into
+  the nave anyway.
+- **The stone vault and the plaster ceiling lining were laid at the same
+  height**, two down-facing faces in one plane — `world::layer`'s rule, which
+  turns out to apply indoors too.
+
+`Shape::of` is the pure function all the proportions come out of, so every one
+of those is a `cargo test` rather than a screenshot. What it cannot check is
+what the room looks like; that is `--screenshot` with the camera inside it.
 
 ### A bridge cannot be raised
 
@@ -409,7 +459,7 @@ Every crossing of the Isar was a launch ramp.
 
 ### The traps
 
-Seven things here have bitten more than once and none of them fail loudly:
+Ten things here have bitten more than once and none of them fail loudly:
 
 - **The ground is only flat where the town is.** `world::terrain` displaces it,
   and about thirty spawners write a world y directly (`SIDEWALK_HEIGHT`,
@@ -474,6 +524,35 @@ Seven things here have bitten more than once and none of them fail loudly:
   markers really are exclusive, spelling that out in `Without` is the honest
   fix, and `multiplayer`'s test is the cheap way to prove it: initialising a
   system is enough to trip the check, and needs none of the resources it reads.
+- **Parry's heightfield lattice is indexed `[x][z]`, outer index first.** Avian's
+  own doc says so and `world::mod`'s comment said the opposite, so
+  `ground_collider` nested its loops the wrong way and handed Avian the
+  *transpose* of the terrain: the ground you stood on was the ground you saw
+  mirrored about `x == z`. Nothing showed it while every town was flat — the
+  transpose of zero is zero — and under Landshut's real relief it was 74 m out,
+  which is a Hofberg you drive straight through and an invisible fifty-metre
+  shelf across a street on the other diagonal. `the_collider_lattice_runs_x_first`
+  is four lines and asks the linked parry rather than anybody's memory of it;
+  `the_ground_collider_agrees_with_the_ground_you_can_see` walks the committed
+  Landshut off the lattice's own sample points, because a transpose is invisible
+  wherever `x == z`.
+- **`bevy_egui` gives its context to the first camera it finds, and then latches.**
+  This app spawns two in one unordered `Startup` — the player's and the
+  minimap's, which renders into a 320 by 320 texture — so which one won was
+  archetype order, and it was the minimap's. Every egui surface in the game, the
+  pause menu and the F3 panel both, was drawn correctly into a widget nobody was
+  looking at: `Escape` froze the world and freed the cursor and no menu ever
+  appeared. `ui::menu` turns `auto_create_primary_context` off and
+  `player::camera::spawn_camera` carries `PrimaryEguiContext`, next to the
+  `IsDefaultUiCamera` that says the same thing for Bevy's own UI. Anything that
+  adds a camera has to leave both alone.
+- **Pausing `Time<Physics>` stops Avian clearing forces, not systems applying
+  them.** `vehicle::controller::drive_vehicles` runs in `FixedUpdate`, which the
+  pause menu does not stop, so a menu left open charged the suspension up and
+  fired the car on resume — five metres after a second, seventy after five, the
+  height scaling with how long the player read the menu. It needs a run
+  condition, not a `GameSet` gate. Anything else that ever applies a force
+  outside the physics schedule needs the same one.
 - **`figure::FigureAssets` is inserted by `pedestrian::setup` and read by the
   player spawn**, and `mood::face::FaceAssets` by both. The ordering is
   Startup → PostStartup and is silently load-bearing.
