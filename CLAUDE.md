@@ -195,7 +195,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), what the game is allowed to call the buildings on them (`trading`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -367,6 +367,18 @@ tools/bake-city.py --rename  assets/cities/landshut.ron built.json
 ```
 
 The other two exist because the bake has always held tags it never wrote down.
+One thing the map says that the game does not repeat: what the shops are
+called. `--rename` takes the OSM `name` tag so the Finanzamt and the
+Stadtresidenz wear their own, and the same tag names living companies and, in
+one case, a private person. `world::trading` sits between the extract and the
+painted sign: the town is renamed to Landshüpf wherever a name mentions it,
+and a register replaces the forty-five trading names in the committed atlas
+with invented ones. Both halves of the decision are written out — the renamed
+and the kept — and a test holds their union against the committed file
+exactly, so a re-bake that brings a new business into town fails until
+somebody has decided what the game calls it. The civic and the historic keep
+their real names, which is the whole point of reading a real map.
+
 `--reflag` takes the roads dump's `oneway` and `highway=pedestrian`: nine per
 cent of Landshut's road length is one-way and 4.8 km of it is a
 Fussgaengerzone, the Altstadt included, and `roadgraph::Rules` is what

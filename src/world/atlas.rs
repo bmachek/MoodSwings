@@ -748,7 +748,11 @@ pub fn footprints(
         // reason: the names are the closed list. Two buildings that really do
         // share a name (Landshut has two Alte Post and two Torhaus) share the
         // plate, which is right: they are called the same thing.
-        let name = (!first.name.is_empty()).then(|| landmarks.intern(&first.name, kind));
+        // What the map calls it is not always what the game may call it — see
+        // `world::trading`, which is the one place between the ODbL extract
+        // and a painted sign where a living company's name is taken out.
+        let name = (!first.name.is_empty())
+            .then(|| landmarks.intern(&super::trading::traded(&first.name), kind));
 
         let mut buildings = Vec::with_capacity(parts.len());
         let (mut low_corner, mut high_corner) = (Vec2::MAX, Vec2::MIN);

@@ -42,6 +42,7 @@ pub mod streetside;
 pub mod terrain;
 pub mod texture;
 pub mod timeofday;
+pub mod trading;
 pub mod vegetation;
 pub mod weather;
 pub mod worksite;
