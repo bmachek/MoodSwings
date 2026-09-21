@@ -1576,7 +1576,7 @@ fn spawn_building(
         building.kind,
         super::citygen::BuildingKind::Church | super::citygen::BuildingKind::Cathedral
     ) {
-        super::church::spawn(
+        let nave = super::church::spawn(
             commands,
             assets,
             center,
@@ -1592,6 +1592,34 @@ fn spawn_building(
             building.kind == super::citygen::BuildingKind::Cathedral,
             chunk,
         );
+        // And what is behind the door, where the church came out big enough
+        // to have one. Ordered from here rather than from `church::spawn` for
+        // the same reason the shops are: the structure is one decision and
+        // the room inside it is another, and `world::interior` owns the
+        // second one for every kind that has it.
+        if let Some(nave) = nave {
+            crate::world::interior::spawn(
+                commands,
+                ctx.interior,
+                ctx.cast.as_ref(),
+                building.kind,
+                &crate::world::interior::Doorframe {
+                    center: nave.center,
+                    yaw,
+                    width: nave.width,
+                    depth: nave.depth,
+                    height,
+                    class,
+                    clear: nave.clear,
+                    head: nave.head,
+                    opening: nave.opening,
+                    ground: building.ground,
+                },
+                seed,
+                chunk,
+                ctx.lod_scale,
+            );
+        }
         hang_sign(
             commands,
             ctx,
@@ -1792,6 +1820,12 @@ fn spawn_building(
                 depth: throat,
                 height,
                 class,
+                // A shopfront's glass is the opening: it runs to the ceiling,
+                // so the room's clear height and the way in are one number.
+                clear: shell::door_head(class, height),
+                head: shell::door_head(class, height),
+                opening: shell::door_width(class, frontage),
+                ground: building.ground,
             },
             seed,
             chunk,

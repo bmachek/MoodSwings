@@ -195,7 +195,7 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), what the game is allowed to call the buildings on them (`trading`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
+| `world` | City generator (incl. building kinds & vacant-lot zoning), road graph, chunk streaming, day/night, weather, the cloud deck overhead (`sky`), the shape of the ground and the hills round the town (`terrain`), the variation that keeps open ground from being one green (`ground`), how high everything lying flat on it is laid (`layer`), facades/LOD shells, window interiors, walk-in ground floors and the nave of a walk-in church (`interior`), drivable parking decks (`garage`), painted signs, ad posters & civic frontages (`signage`), park monuments (`statues`), the fountains and columns a real town keeps on its own squares (`monument`), real street networks baked from OpenStreetMap (`atlas`), what the game is allowed to call the buildings on them (`trading`), the frontages that fill them (`streetside`), the enamel plates on their corners (`streetname`) and the law under those — one-way arrows, no-entry discs, the boundary of the Fussgaengerzone (`roadsign`), churches & cathedrals, hollowed out where they are big enough to enter (`church`), stepped gables and pitched roofs for the old-town postcards (`gable`), the stadium and its Welle (`stadium`), the canal and its bridges (`river`), the parapets, lamps and pier heads where a street crosses a real river (`bridge`), lot furnishing (`lots`), what a building hangs on its face and puts out in front of it — pipes, boards, window boxes, bikes, terraces, dishes, tags and roller shutters on a clock (`frontage`), rubbish that scatters when you walk through it (`litter`), streetworks (`worksite`), pennants and washing strung over the narrow streets (`bunting`), chimney smoke and gully steam (`plume`), road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
@@ -394,6 +394,44 @@ by containment with a size guard in *both* directions — a forty-square-metre
 metre hall whose middle lands beside it, and the runtime draws a thirty-seven-
 metre pyramid of brick. A name or a kind is written per *building*, never per
 part: one wing named and its siblings blank is two buildings that touch.
+
+### A church you can walk into
+
+`world::interior` has built real rooms behind real doors for a while — floor,
+lined walls, an emissive ceiling, furniture with colliders and one member of
+staff with a full set of feelings. Churches were not on that path:
+`BuildingKind::enterable()` names four shop-shaped kinds, and `world::church`
+raised its nave as one solid box whose only door was a slab of painted shadow
+with a collider in it.
+
+They are on it now, and the route is their own rather than `enterable()`'s,
+because a church's door is its own architecture: you come in under the west
+tower. `church::spawn` draws the nave and the tower's ground storey as
+*shells* — four walls and a vault, with the pierced face built as two jambs
+and a lintel — and hands back a `Nave` that `world::buildings` furnishes
+through the same `interior::spawn` the shops use. `Doorframe` grew `clear`,
+`head` and `opening` for it: a shopfront's glass runs to the ceiling so its
+room height and its doorway are one number, and a basilica's are 13 m and
+4.6 m.
+
+Three things were invisible while the nave was solid masonry and are not any
+more, and all three are the same lesson:
+
+- **The pitched roof hangs into the room.** It is a cube turned 45° about the
+  ridge, so its lower vertex drops as far below the eaves as the ridge stands
+  above them — fifteen metres on St. Martin. The vault goes under it, with
+  `VAULT_CLEARANCE` to spare.
+- **Two of the tower's four corner buttresses stand inside the nave.** The
+  tower's back corners are past the nave's front wall by construction. A
+  walk-in church drops them; a west tower's rear buttresses are absorbed into
+  the nave anyway.
+- **The stone vault and the plaster ceiling lining were laid at the same
+  height**, two down-facing faces in one plane — `world::layer`'s rule, which
+  turns out to apply indoors too.
+
+`Shape::of` is the pure function all the proportions come out of, so every one
+of those is a `cargo test` rather than a screenshot. What it cannot check is
+what the room looks like; that is `--screenshot` with the camera inside it.
 
 ### A bridge cannot be raised
 
