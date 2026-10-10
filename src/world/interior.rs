@@ -94,6 +94,12 @@ pub struct InteriorKit {
     counter: Handle<StandardMaterial>,
     table: Handle<StandardMaterial>,
     sofa: Handle<StandardMaterial>,
+    /// The nave's own four: bench oak, altar stone, a lit candle, and the
+    /// glass. See the church arm of [`spawn`].
+    pew: Handle<StandardMaterial>,
+    altar: Handle<StandardMaterial>,
+    candle: Handle<StandardMaterial>,
+    glass: Vec<Handle<StandardMaterial>>,
     /// A work coat per enterable kind, in `coat_for` order.
     coats: Vec<Handle<StandardMaterial>>,
 }
@@ -104,6 +110,7 @@ impl InteriorKit {
             BuildingKind::Supermarket => 0,
             BuildingKind::Restaurant => 1,
             BuildingKind::Hotel => 2,
+            BuildingKind::Church | BuildingKind::Cathedral => 4,
             _ => 3,
         };
         self.coats[slot].clone()
@@ -136,6 +143,27 @@ pub fn build_assets(
     let table = surface(materials, Color::srgb(0.80, 0.78, 0.72), 0.8, 0.65);
     let sofa = surface(materials, Color::srgb(0.28, 0.38, 0.46), 1.0, 0.5);
 
+    // A nave is darker than a shop and it is lit differently: the ceiling is
+    // twenty-eight metres up, so it is no longer the lamp. The windows are,
+    // and they are the only thing in here that glows harder than the surface
+    // it falls on — which is what a church interior looks like from the door
+    // and is the whole reason to let anybody in.
+    let pew = surface(materials, Color::srgb(0.30, 0.20, 0.13), 0.75, 0.35);
+    let altar = surface(materials, Color::srgb(0.84, 0.80, 0.70), 0.55, 0.7);
+    let candle = surface(materials, Color::srgb(1.0, 0.86, 0.60), 0.4, 14.0);
+    // Four lights out of one window, which is what a rose window does to a
+    // white wall. Deliberately saturated: the glass is the only colour in a
+    // room built out of stone.
+    let glass = [
+        Color::srgb(0.75, 0.16, 0.16),
+        Color::srgb(0.16, 0.30, 0.72),
+        Color::srgb(0.90, 0.72, 0.18),
+        Color::srgb(0.18, 0.55, 0.32),
+    ]
+    .into_iter()
+    .map(|color| surface(materials, color, 0.25, 9.0))
+    .collect();
+
     // Work coats are lit like the room they stand in, or the clerk reads as
     // a cutout pasted into their own shop.
     let coats = [
@@ -143,6 +171,7 @@ pub fn build_assets(
         Color::srgb(0.16, 0.16, 0.18), // the waiter's black
         Color::srgb(0.22, 0.30, 0.52), // the concierge blue
         Color::srgb(0.45, 0.45, 0.48), // office grey
+        Color::srgb(0.12, 0.12, 0.14), // the sexton's cassock
     ]
     .into_iter()
     .map(|color| surface(materials, color, 0.85, 0.55))
@@ -157,6 +186,10 @@ pub fn build_assets(
         counter,
         table,
         sofa,
+        pew,
+        altar,
+        candle,
+        glass,
         coats,
     }
 }
@@ -222,6 +255,23 @@ pub struct Doorframe {
     pub depth: f32,
     pub height: f32,
     pub class: FacadeClass,
+    /// Clear height inside, floor to ceiling.
+    ///
+    /// A shop's is its door head, because a shopfront's glass runs to the
+    /// ceiling and the shell carves the opening that high. A church's is its
+    /// nave: St. Martin is 28.8 m clear, and a nave with a shop's ceiling is
+    /// a garage with pews in it. Stated rather than derived because those two
+    /// answers have nothing in common.
+    pub clear: f32,
+    /// Height of the way in. Equal to [`clear`](Self::clear) for a shopfront —
+    /// the glass *is* the opening — and much less for a church, which gets a
+    /// lintel and a wall above its door.
+    pub head: f32,
+    /// Width of the way in.
+    pub opening: f32,
+    /// The ground the building stands on, where that is not the valley floor
+    /// — see `citygen::Building::ground`. Zero for everything on a pavement.
+    pub ground: f32,
 }
 
 /// Spawns one building's room, furnishing and staff.
@@ -236,7 +286,7 @@ pub fn spawn(
     lod_scale: f32,
 ) {
     let spin = Quat::from_rotation_y(frame.yaw);
-    let head = shell::door_head(frame.class, frame.height);
+    let head = frame.clear;
     let range = (RANGE * lod_scale).max(1.0);
 
     // The room inside the structural walls.
@@ -250,7 +300,12 @@ pub fn spawn(
                  at: Vec3,
                  size: Vec3,
                  solid: bool| {
-        let world = spin * at + Vec3::new(frame.center.x, SIDEWALK_HEIGHT, frame.center.y);
+        let world = spin * at
+            + Vec3::new(
+                frame.center.x,
+                SIDEWALK_HEIGHT + frame.ground,
+                frame.center.y,
+            );
         let mut piece = commands.spawn((
             ChunkOf(chunk),
             Mesh3d(kit.cube.clone()),
@@ -304,7 +359,7 @@ pub fn spawn(
         Vec3::new(w, head, LINING),
         false,
     );
-    let door = shell::door_width(frame.class, frame.width);
+    let door = frame.opening;
     let flank = (w - door) * 0.5;
     for side in [-1.0f32, 1.0] {
         piece(
@@ -316,6 +371,19 @@ pub fn spawn(
                 lining(frame.depth * 0.5),
             ),
             Vec3::new(flank, head, LINING),
+            false,
+        );
+    }
+    // And the wall over the door, where the way in stops short of the
+    // ceiling. A shopfront's does not — its glass runs the full height and
+    // this is zero-sized, so it is skipped rather than drawn flat.
+    if frame.head < head - 1.0e-3 {
+        let lintel = head - frame.head;
+        piece(
+            commands,
+            &kit.wall,
+            Vec3::new(0.0, frame.head + lintel * 0.5, lining(frame.depth * 0.5)),
+            Vec3::new(door, lintel, LINING),
             false,
         );
     }
@@ -376,6 +444,113 @@ pub fn spawn(
                 true,
             );
         }
+        // The nave. The door is at `+z` under the tower, so the altar is at
+        // the far end and the benches face it down a middle aisle — which is
+        // also the line a visitor walks in on, so nothing has to be shoved
+        // aside to get to the front.
+        BuildingKind::Church | BuildingKind::Cathedral => {
+            const AISLE: f32 = 1.8;
+            const PEW_PITCH: f32 = 0.95;
+            let bench = (w - AISLE) * 0.5 - 0.6;
+            // Benches from just inside the door back to the chancel step,
+            // leaving the last fifth of the nave to the altar.
+            let front = d * 0.40;
+            let back = -d * 0.22;
+            let rows = (((front - back) / PEW_PITCH) as usize).clamp(3, 26);
+            for row in 0..rows {
+                let z = front - row as f32 * PEW_PITCH;
+                for side in [-1.0f32, 1.0] {
+                    // A church nobody has tidied since the last service.
+                    let skew = rng.random_range(-0.04..0.04);
+                    piece(
+                        commands,
+                        &kit.pew,
+                        Vec3::new(side * (AISLE + bench) * 0.5 + skew, 0.45, z),
+                        Vec3::new(bench, 0.9, 0.38),
+                        true,
+                    );
+                }
+            }
+            // The altar, and two steps up to it.
+            let chancel = back - d * 0.16;
+            piece(
+                commands,
+                &kit.altar,
+                Vec3::new(0.0, 0.08, chancel + 0.9),
+                Vec3::new(w * 0.62, 0.16, 2.4),
+                true,
+            );
+            piece(
+                commands,
+                &kit.altar,
+                Vec3::new(0.0, 0.55, chancel),
+                Vec3::new(2.6, 1.1, 1.0),
+                true,
+            );
+            // Candles on it, and a pair of standards either side. The flame
+            // is the emissive scrap on top; the stick under it is not.
+            for (x, y, tall) in [
+                (-0.9, 1.1, 0.34),
+                (0.9, 1.1, 0.34),
+                (-w * 0.26, 0.0, 1.30),
+                (w * 0.26, 0.0, 1.30),
+            ] {
+                piece(
+                    commands,
+                    &kit.pew,
+                    Vec3::new(x, y + tall * 0.5, chancel),
+                    Vec3::new(0.10, tall, 0.10),
+                    false,
+                );
+                piece(
+                    commands,
+                    &kit.candle,
+                    Vec3::new(x, y + tall + 0.05, chancel),
+                    Vec3::new(0.07, 0.10, 0.07),
+                    false,
+                );
+            }
+            // The glass. Tall lancets down both flanks, starting well above
+            // head height because that is where a church puts them and
+            // because anything lower would be furniture. The colour cycles
+            // rather than rolls: a window that changed colour every time its
+            // chunk streamed back in would be a disco.
+            // The one over the altar, which is what a visitor is looking at
+            // from the moment the door opens. Three lights, because a chancel
+            // window is a window with tracery in it and three boxes side by
+            // side is what this game draws tracery with.
+            let east_sill = (head * 0.34).clamp(4.0, 10.0);
+            let east_pane = (head - east_sill - 1.2).clamp(2.0, 9.0);
+            for light in -1..=1 {
+                piece(
+                    commands,
+                    &kit.glass[(light + 1) as usize % kit.glass.len()],
+                    Vec3::new(
+                        light as f32 * 1.5,
+                        east_sill + east_pane * 0.5,
+                        -(d * 0.5 - LINING * 2.5),
+                    ),
+                    Vec3::new(1.3, east_pane, LINING),
+                    false,
+                );
+            }
+            let bays = ((d / 3.4) as usize).clamp(2, 8);
+            let sill = (head * 0.28).clamp(3.5, 9.0);
+            let pane = (head - sill - 1.5).clamp(2.0, 11.0);
+            for bay in 0..bays {
+                let z = (bay as f32 - (bays - 1) as f32 * 0.5) * (d * 0.82 / bays as f32);
+                for (i, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+                    let colour = &kit.glass[(bay * 2 + i) % kit.glass.len()];
+                    piece(
+                        commands,
+                        colour,
+                        Vec3::new(side * (w * 0.5 - LINING * 2.6), sill + pane * 0.5, z),
+                        Vec3::new(LINING, pane, 1.5),
+                        false,
+                    );
+                }
+            }
+        }
         // The two lobbies share a plan; the materials tell them apart.
         _ => {
             piece(
@@ -409,12 +584,15 @@ pub fn spawn(
     // door, everybody else's counter guards the back wall.
     let post = match kind {
         BuildingKind::Supermarket => Vec3::new(-w * 0.28, 0.0, d * 0.32 - 1.1),
+        // The sexton stands off to one side of his own altar, where a sexton
+        // stands: in the middle he would be the altar.
+        BuildingKind::Church | BuildingKind::Cathedral => Vec3::new(w * 0.17, 0.0, -d * 0.38 + 1.6),
         _ => Vec3::new(0.0, 0.0, -d * 0.42 + 1.0),
     };
     let at = spin * post
         + Vec3::new(
             frame.center.x,
-            SIDEWALK_HEIGHT + STAND_HEIGHT,
+            SIDEWALK_HEIGHT + frame.ground + STAND_HEIGHT,
             frame.center.y,
         );
     let mut clerk = commands.spawn((

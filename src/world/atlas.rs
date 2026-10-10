@@ -649,26 +649,40 @@ pub fn footprints(
         //
         // Unless a street still holds the ground under it. The terrain keeps
         // everything within `terrain::LEVEL_REACH` of a pavement at exactly
-        // zero and fades to the hill over `LEVEL_FADE` past that, and a
-        // landmark any part of which stands inside that reach is on the
-        // street's ground, not the hill's: the hill has been cut away round
-        // the street, and the building goes with the street. So the test is
-        // from the building's farthest corner, not its middle.
+        // zero and fades to the hill over `LEVEL_FADE` past that, so a
+        // building whose middle stands inside that reach is on the street's
+        // ground: the hill has been cut away round the street, and the
+        // building goes with it.
+        //
+        // Two things about that test were wrong and both buried buildings.
+        //
+        // It used to be asked from the building's farthest *corner* — the
+        // radius inflated by the whole group's spread — which is a bounding
+        // sphere, and a bounding sphere round a castle reaches much further
+        // than the castle does. The Dürnitztrakt is six parts over thirty
+        // metres, so it went looking for a street ninety-five metres off,
+        // found the ones at the foot of the Hofberg, and was planted on the
+        // valley floor with sixty-six metres of hill on top of it — while the
+        // Fürstenbau beside it, having two parts and a smaller sphere, stood
+        // up on the hill correctly. It is asked from the middle now.
+        //
+        // And it only ran at all for a building the relief called a *hill*,
+        // above `HILL`. The hill is a threshold; the ground is a field. A
+        // building on eleven metres of slope with no street near it was given
+        // a ground of zero and the terrain then held the slope under it, so it
+        // stood eleven metres under its own doorstep. The corridor is the
+        // thing that flattens ground, so the corridor is the thing to ask —
+        // `HILL` still decides which buildings the town does not build up
+        // there at all, which is the separate question it was written for.
         let ground = match relief {
-            Some(relief) if relief.is_hill(centre) => {
-                if !landmark {
+            Some(relief) => {
+                if relief.is_hill(centre) && !landmark {
                     uphill += 1;
                     continue;
                 }
-                let spread = parts
-                    .iter()
-                    .map(|part| {
-                        let at = Vec2::new(part.centre.0, part.centre.1);
-                        at.distance(centre) + Vec2::new(part.frontage, part.depth).length() * 0.5
-                    })
-                    .fold(0.0f32, f32::max);
-                let held = super::terrain::LEVEL_REACH + super::terrain::LEVEL_FADE + spread;
-                if street_within(graph, centre, held).is_some() {
+                let held = super::terrain::LEVEL_REACH + super::terrain::LEVEL_FADE;
+                let on_the_street = street_within(graph, centre, held).is_some();
+                if on_the_street {
                     0.0
                 } else {
                     parts
@@ -677,7 +691,7 @@ pub fn footprints(
                         .fold(0.0f32, f32::max)
                 }
             }
-            _ => 0.0,
+            None => 0.0,
         };
 
         let district = super::streetside::district_at(centre, half_extent, false);
@@ -734,7 +748,11 @@ pub fn footprints(
         // reason: the names are the closed list. Two buildings that really do
         // share a name (Landshut has two Alte Post and two Torhaus) share the
         // plate, which is right: they are called the same thing.
-        let name = (!first.name.is_empty()).then(|| landmarks.intern(&first.name, kind));
+        // What the map calls it is not always what the game may call it — see
+        // `world::trading`, which is the one place between the ODbL extract
+        // and a painted sign where a living company's name is taken out.
+        let name = (!first.name.is_empty())
+            .then(|| landmarks.intern(&super::trading::traded(&first.name), kind));
 
         let mut buildings = Vec::with_capacity(parts.len());
         let (mut low_corner, mut high_corner) = (Vec2::MAX, Vec2::MIN);

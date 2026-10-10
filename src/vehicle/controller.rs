@@ -295,11 +295,18 @@ fn apply_anti_roll(
             continue;
         }
         let force = difference * spec.anti_roll;
+        // The compressed side is the side the body has sunk on, so that is the
+        // side to hold *up*. This had the two signs the other way round, which
+        // is a bar that adds the roll it is named for resisting: a sedan
+        // leaned 3.2 degrees through a corner with the bar switched off and
+        // 5.5 with it on, a truck 4.2 against 6.4. Nothing caught it because
+        // the only test of it asked whether the car stayed upright, and a car
+        // rolling seventy per cent more than it needs to is still upright.
         if state.wheels[left].grounded {
-            forces.apply_force_at_point(-up * force, transform.transform_point(anchors[left]));
+            forces.apply_force_at_point(up * force, transform.transform_point(anchors[left]));
         }
         if state.wheels[right].grounded {
-            forces.apply_force_at_point(up * force, transform.transform_point(anchors[right]));
+            forces.apply_force_at_point(-up * force, transform.transform_point(anchors[right]));
         }
     }
 }
@@ -405,7 +412,13 @@ mod tests {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             TICK,
         )));
-        app.add_systems(FixedUpdate, drive_vehicles);
+        // Registered exactly as `VehiclePlugin` registers it, run condition
+        // included — a harness that skips the condition cannot see a bug that
+        // lives in it.
+        app.add_systems(
+            FixedUpdate,
+            drive_vehicles.run_if(|time: Res<Time<Physics>>| !time.is_paused()),
+        );
 
         app.world_mut().spawn((
             RigidBody::Static,
@@ -456,6 +469,40 @@ mod tests {
     fn step(app: &mut App, ticks: usize) {
         for _ in 0..ticks {
             app.update();
+        }
+    }
+
+    /// A car does not charge itself up while the pause menu is open.
+    ///
+    /// `drive_vehicles` runs in `FixedUpdate` and Avian clears forces in its
+    /// own schedule, so pausing `Time<Physics>` stops the clearing and not
+    /// the applying. Before the run condition in `VehiclePlugin`, a second of
+    /// menu launched a settled sedan five metres into the air on resume and
+    /// five seconds launched it seventy — the height scaling with how long
+    /// the player had the menu open, which is as clear a signature as a bug
+    /// gets. It had never been seen because the menu was being drawn into the
+    /// minimap texture and nobody could open it.
+    #[test]
+    fn the_pause_menu_does_not_charge_the_suspension() {
+        for class in VehicleClass::CIVILIAN {
+            for held in [1usize, 64, 320] {
+                let (mut app, car, spec) = harness(class, 0.0);
+                step(&mut app, 200);
+                app.world_mut().resource_mut::<Time<Physics>>().pause();
+                step(&mut app, held);
+                app.world_mut().resource_mut::<Time<Physics>>().unpause();
+                let mut peak = f32::MIN;
+                for _ in 0..120 {
+                    step(&mut app, 1);
+                    peak = peak.max(transform_of(&app, car).translation.y);
+                }
+                let rest = spec.resting_height();
+                assert!(
+                    peak - rest < 0.05,
+                    "{class:?} rose {:.2} m above its ride height after {held} ticks of menu",
+                    peak - rest
+                );
+            }
         }
     }
 
@@ -670,6 +717,67 @@ mod tests {
     }
 
     /// Peak reported slip while cornering, which is what the tyre audio reads.
+    /// Peak roll through the standard corner, in degrees.
+    fn peak_roll(class: VehicleClass, anti_roll: f32) -> f32 {
+        let (mut app, car, _) = harness(class, 0.0);
+        app.world_mut()
+            .get_mut::<VehicleSpec>(car)
+            .unwrap()
+            .anti_roll = anti_roll;
+        step(&mut app, 200);
+        set_input(
+            &mut app,
+            car,
+            VehicleInput {
+                throttle: 1.0,
+                ..default()
+            },
+        );
+        step(&mut app, 260);
+        set_input(
+            &mut app,
+            car,
+            VehicleInput {
+                throttle: 1.0,
+                steer: 1.0,
+                handbrake: false,
+            },
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..90 {
+            step(&mut app, 1);
+            let lean = transform_of(&app, car)
+                .up()
+                .dot(Vec3::Y)
+                .clamp(-1.0, 1.0)
+                .acos();
+            peak = peak.max(lean.to_degrees());
+        }
+        peak
+    }
+
+    /// The anti-roll bar resists roll.
+    ///
+    /// Which sounds too obvious to test, and was exactly the bug: the two
+    /// forces were applied to the wrong sides, so `anti_roll` *added* lean —
+    /// a sedan rolled 3.2 degrees through this corner with the bar off and
+    /// 5.5 with it on. `steering_turns_the_car_and_it_stays_upright` passed
+    /// throughout, because a car rolling half again as much as it should is
+    /// still upright. So this compares the bar against itself switched off,
+    /// which is the only comparison that can see a sign.
+    #[test]
+    fn the_anti_roll_bar_resists_roll_rather_than_adding_it() {
+        for class in VehicleClass::CIVILIAN {
+            let spec = class.spec();
+            let free = peak_roll(class, 0.0);
+            let barred = peak_roll(class, spec.anti_roll);
+            assert!(
+                barred < free * 0.95,
+                "{class:?} rolls {barred:.2} deg with its bar and {free:.2} deg without one"
+            );
+        }
+    }
+
     fn peak_slip(app: &mut App, car: Entity, handbrake: bool) -> f32 {
         step(app, 200);
         set_input(

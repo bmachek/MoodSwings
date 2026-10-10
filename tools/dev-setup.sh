@@ -182,11 +182,24 @@ MAT_COUNT=$(find assets/materials -mindepth 1 -maxdepth 1 -type d 2>/dev/null | 
 step "assets/materials: $MAT_COUNT sets — a clone renders a complete city without them"
 
 say "== gpu =="
-# What decides whether the visual harness runs at all. wgpu wants a Vulkan
-# adapter; llvmpipe is one, in software, and slow enough that it is a different
-# instrument rather than the same one without a graphics card.
+# What decides whether the visual harness runs at all. On Linux wgpu wants a
+# Vulkan adapter; llvmpipe is one, in software, and slow enough that it is a
+# different instrument rather than the same one without a graphics card.
+#
+# macOS and Windows are not that. wgpu takes Metal on one and DX12 on the
+# other, every Mac has a GPU, and neither has `/dev/dri` — so the Linux test
+# below called every Mac "none" and every session on one opened by being told
+# the camera, the patrol and the film were unavailable. They were not: this was
+# written on an M4 Pro and `--screenshot` takes about nine seconds. Check the
+# platform before checking the Linux-only evidence.
 GPU=none
-if [ -d /dev/dri ]; then
+case "$(uname -s)" in
+    Darwin) GPU=hardware ;;
+    MINGW* | MSYS* | CYGWIN* | Windows_NT) GPU=hardware ;;
+esac
+if [ "$GPU" = hardware ]; then
+    :
+elif [ -d /dev/dri ]; then
     GPU=hardware
 elif ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
     GPU=llvmpipe
@@ -220,6 +233,7 @@ echo
 if [ -z "$PROBLEMS" ]; then
     echo "Ready: cargo test, cargo clippy, cargo run -- --survey, cargo run -- --audition."
     [ "$GPU" = none ] && echo "Not ready: anything that renders — see the gpu section above."
+    [ "$GPU" = hardware ] && echo "Also ready: --screenshot, --patrol, --film, --fps-log."
     exit 0
 fi
 echo "Still to do:"

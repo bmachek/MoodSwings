@@ -369,6 +369,17 @@ fn ride(
         let position = transform.translation.xz();
         let b = city.graph.node(cyclist.to).pos;
 
+        // A glide, and it has to be written before anything can `continue`
+        // past it. `bounce::controller` spends the scale at every landing and
+        // writes 1.0 back, so a frame on which nobody says "0.0" is a frame
+        // the body hops at full strength — and the arrival branch below was
+        // exactly such a frame. That is not a rare one here: `ARRIVED` is six
+        // metres and 77.7% of the committed Landshut's road edges are shorter
+        // than that (median 2.9 m), so a cyclist on the real street network
+        // spends most of its life inside the arrival radius. What it drew was
+        // a town full of pogo-ing bicycles.
+        bouncer.hop_scale = 0.0;
+
         if position.distance(b) < ARRIVED {
             let next = city
                 .graph
@@ -397,8 +408,6 @@ fn ride(
 
         let heading = (target - position).normalize_or_zero();
         bouncer.desired = heading * PACE;
-        // Zero hop: a glide.
-        bouncer.hop_scale = 0.0;
         // And no stride at all. This used to be `PACE * 0.45`, with a comment
         // admitting the joke — "the legs still pump, because the walk cycle
         // does not know it has become a drivetrain" — and what it drew was a

@@ -878,6 +878,87 @@ mod tests {
         assert!(castles > 0, "nothing was kept up on the Hofberg");
     }
 
+    /// And nothing is standing inside the hill.
+    ///
+    /// The companion to the test above, and the one that was missing: that
+    /// one walks the landmarks whose `ground` is already non-zero and checks
+    /// the plateau came up to meet them, so a building wrongly given a ground
+    /// of *zero* is the one case it cannot see. Three separate mistakes lived
+    /// in that blind spot at once and the worst of them put all six parts of
+    /// the Dürnitztrakt — the great hall of Burg Trausnitz — sixty-six metres
+    /// inside the Hofberg, with the rest of the castle standing correctly
+    /// around it. See `atlas::footprints` for what each of them was.
+    ///
+    /// Two metres of slack, and a count rather than nothing at all, because
+    /// what is left is a different problem with a real design decision behind
+    /// it: `Building::ground` is one height for a whole building, deliberately
+    /// — "a castle wing does not step down its own slope" — so a building
+    /// whose middle is on a street and whose back range climbs a bank still
+    /// has that back range below the earth. Twelve parts of Landshut's 4533
+    /// are in that state and the worst is under fifteen metres. Lower either
+    /// number and this test wants lowering with it; raise one and something
+    /// has gone backwards.
+    #[test]
+    fn nothing_is_buried_in_the_hill() {
+        let Some(town) = crate::world::atlas::load("landshut") else {
+            assert!(
+                !crate::core::assets::root()
+                    .join("cities/landshut.ron")
+                    .exists(),
+                "the committed Landshut does not load as an atlas"
+            );
+            return;
+        };
+        let (mut layout, _) = crate::world::atlas::layout(&town, 1, HALF_EXTENT);
+        let (real, names) = crate::world::atlas::footprints(
+            &town,
+            &layout.graph,
+            1,
+            HALF_EXTENT,
+            CityStyle::Landshuepf,
+        );
+        let (blocks, _) = crate::world::streetside::lots(&layout, 1, CityStyle::Landshuepf, real);
+        layout.blocks = blocks;
+        let terrain = Terrain::new(&layout, REACH, true, 1);
+
+        let mut buried = Vec::new();
+        for block in &layout.blocks {
+            for building in &block.buildings {
+                let under = terrain.height(building.footprint.center());
+                if under - building.ground > 2.0 {
+                    buried.push((
+                        under - building.ground,
+                        building.footprint.center(),
+                        building
+                            .name
+                            .and_then(|n| names.names.get(n as usize).cloned())
+                            .unwrap_or_else(|| "<unnamed>".to_owned()),
+                    ));
+                }
+            }
+        }
+        buried.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let worst = buried.first().map(|b| b.0).unwrap_or(0.0);
+        assert!(
+            buried.len() <= 12,
+            "{} buildings stand inside the ground, worst {:?}",
+            buried.len(),
+            buried.first()
+        );
+        assert!(
+            worst < 15.0,
+            "a building stands {worst} m inside the ground: {:?}",
+            buried.first()
+        );
+        // The castle in particular: the wings stand together or not at all.
+        for (depth, at, name) in &buried {
+            assert!(
+                !name.contains("trakt") && !name.contains("bau"),
+                "{name} at {at} is {depth} m inside the Hofberg"
+            );
+        }
+    }
+
     /// Two seeds are two landscapes, and one seed is always the same one —
     /// the whole world regenerates its chunks from the seed, so a hill that
     /// moved between visits would be a hill that moved while you looked at it.
