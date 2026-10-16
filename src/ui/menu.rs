@@ -367,7 +367,23 @@ fn root_screen(
         settings::save(config, keybindings);
         exit.write(AppExit::Success);
     }
+
+    ui.add_space(10.0);
+    ui.vertical_centered(|ui| {
+        ui.label(egui::RichText::new(DEDICATION).weak().italics());
+    });
 }
+
+/// The dedication, at the foot of the pause menu — the only menu the game has,
+/// since startup goes straight into the city.
+///
+/// It first arrived with the schadenfreude round, in the README and here, and
+/// that pull request was merged into the branch it was stacked on rather than
+/// into `main`, so neither line ever shipped, and nobody noticed until the
+/// first release was being cut. The test below holds both halves in place.
+/// The README keeps the original English; this is the German, because
+/// everything a player reads is.
+const DEDICATION: &str = "Für Daniel — den besten Sohn, den man sich vorstellen kann.";
 
 /// Who to be. One button per archetype, the current one marked; clicking
 /// re-dresses the player on the spot — the menu is a mirror — and the choice
@@ -612,4 +628,19 @@ fn controls_screen(
 fn key_label(key: KeyCode) -> String {
     let raw = format!("{key:?}");
     raw.strip_prefix("Key").map(str::to_string).unwrap_or(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dedication_is_in_the_menu_and_in_the_readme() {
+        assert!(DEDICATION.starts_with("Für Daniel"));
+        assert!(
+            include_str!("../../README.md")
+                .contains("*For Daniel — the best son anyone could imagine.*"),
+            "the README has lost its dedication"
+        );
+    }
 }

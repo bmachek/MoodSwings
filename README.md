@@ -4,6 +4,8 @@
 
 An open-world sandbox about being rude to strangers, built in Rust with Bevy.
 
+*For Daniel — the best son anyone could imagine.*
+
 Everything here is made of rubber. You do not walk, you bounce; so does
 everybody else, and so do the cars. There are no weapons — the two mouse
 buttons blow a raspberry and whistle — and nobody can be hurt, because there is
@@ -38,8 +40,41 @@ generator; nothing here is authored by hand.
 
 ## Running
 
+### From a release
+
+Every tag `v*` builds the game for three platforms and attaches the archives
+to a [release](https://github.com/bmachek/MoodSwings/releases):
+
+| Platform | Archive |
+|---|---|
+| Windows 10/11, x64 | `mood-swings-<version>-windows-x64.zip` |
+| macOS 11 or later, Apple silicon | `mood-swings-<version>-macos-arm64.tar.gz` |
+| Linux, x64 (glibc 2.35 or later) | `mood-swings-<version>-linux-x64.tar.gz` |
+
+Unpack it anywhere and start `mood_swings` (`mood_swings.exe` on Windows) in
+the folder it unpacked to; the game looks for `assets/` beside itself. The
+archive carries everything the game needs: the shaders, Landshüpf — the baked
+map of the real Landshut, `assets/cities/landshut.ron` — and the whole recorded
+sound bank. The scanned textures are the one thing it leaves out, because they
+are optional and the size of the rest of the archive several times over;
+`tools/fetch-materials.sh` (`.bat` on Windows) inside it fetches them in place.
+Options and quick saves go to `saves/` in the working directory.
+
+None of the binaries is signed. Windows SmartScreen asks first (*Weitere
+Informationen → Trotzdem ausführen*); macOS refuses a downloaded binary
+outright until the quarantine flag is lifted from the unpacked folder, once:
+
 ```sh
-tools/fetch-materials.sh  # ~200 MB of CC0 textures; optional, see below
+xattr -dr com.apple.quarantine mood-swings-v0.1.0-macos-arm64
+```
+
+On Linux the game wants a Vulkan driver and the runtime libraries of ALSA and
+libudev, all of which a desktop install already has.
+
+### From source
+
+```sh
+tools/fetch-materials.sh  # the CC0 sound bank (required) and ~200 MB of textures (optional)
 cargo run                 # first build takes a few minutes; then ~2-10s
 cargo run --release       # smoother, slower to compile
 cargo run --features dev  # dynamic linking, fastest iteration
@@ -47,7 +82,9 @@ cargo run --features dev  # dynamic linking, fastest iteration
 
 The material download is optional. Without it every surface falls back to the
 procedural texture it shipped with, and the game runs exactly the same — it
-just looks worse. Nothing is checked in and nothing is required to build.
+just looks worse. Nothing is checked in and nothing is required to build. The
+sounds are the half that is not optional: a clone that has not fetched them
+still starts, and every sound in it is a short silence and a warning.
 
 ## Multiplayer (shared exploration)
 
