@@ -259,6 +259,7 @@ pub fn spawn(
                 .with_scale(size),
             RigidBody::Static,
             Collider::cuboid(1.0, 1.0, 1.0),
+            super::buildings::dead_wall(),
         ));
     };
 
@@ -334,6 +335,7 @@ pub fn spawn(
             ChunkOf(chunk),
             RigidBody::Static,
             Collider::compound(plates),
+            super::buildings::dead_wall(),
             Transform::from_translation(place(at)).with_rotation(spin),
         ));
     };

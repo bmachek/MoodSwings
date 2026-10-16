@@ -13,6 +13,13 @@
 //! a lamppost, and an apology can genuinely miss. That is on purpose. An
 //! apology that cannot fail is a button that dispenses forgiveness, and
 //! nobody would feel anything about pressing it.
+//!
+//! It is not the player's alone. Everything else in `mood` — the taunt, the
+//! cheer, the grudge, the pirouette — runs through the same code for a
+//! citizen as for the player, and the flower was the one exception. A flummi
+//! that notices it is being hunted now sues for peace the same way, so a
+//! street can stage a whole feud and its reconciliation with no player
+//! anywhere in it: chase, lob, catch, thank-you pirouette, over.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -23,7 +30,7 @@ use super::feeling::Mood;
 use super::grudge::{Grudge, Pirouette};
 use super::provoke::Provoker;
 use crate::audio::bank::SoundBank;
-use crate::audio::{AudioRng, close_once, effect_gain};
+use crate::audio::{AudioRng, close_once, effect_gain, spatial_once};
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
 use crate::player::input::Action;
@@ -38,6 +45,19 @@ const WILT_AFTER: f32 = 4.0;
 /// How long the receiver spins for. Longer than an ordinary delighted
 /// pirouette: this one is a thank-you, and it should be seen.
 const THANKS_SPIN: f32 = 2.2;
+/// Chance per second that a flummi being hunted sues for peace.
+const CONTRITION: f32 = 0.35;
+/// Mood below which somebody is too sour to say sorry to anybody. Not far
+/// above indifferent: the ones who apologise are the ones who were never that
+/// cross to begin with, which is who apologises in a real street too.
+const CONTRITE: f32 = 0.1;
+/// How much longer than the player's an NPC's rest is after a flower. An
+/// NPC that machine-gunned flowers would drain every feud before anybody saw
+/// one.
+const NPC_REST: f32 = 2.0;
+/// How far an NPC's apology carries, as a voice. A flower thrown on the far
+/// side of the street is worth hearing; one three streets away is not.
+const SORRY_EARSHOT: f32 = 24.0;
 
 /// A flower in flight, and who it is meant for.
 #[derive(Component)]
@@ -61,7 +81,9 @@ impl Plugin for ApologyPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, build_flower).add_systems(
             Update,
-            (player_apologizes, fly_flowers).chain().in_set(GameSet::Ai),
+            (player_apologizes, npcs_apologize, fly_flowers)
+                .chain()
+                .in_set(GameSet::Ai),
         );
     }
 }
@@ -165,12 +187,26 @@ fn player_apologizes(
         return;
     };
 
-    // Out of the hand, not the navel, and aimed at the chest, not the feet.
+    spawn_flower(&mut commands, &assets, player, target, from, at);
+}
+
+/// Out of the hand, not the navel, and aimed at the chest, not the feet.
+///
+/// Shared by the player and the crowd, so a citizen's apology is the same
+/// thrown body as the player's and can miss in exactly the same ways.
+fn spawn_flower(
+    commands: &mut Commands,
+    assets: &FlowerAssets,
+    by: Entity,
+    target: Entity,
+    from: Vec3,
+    at: Vec3,
+) {
     commands
         .spawn((
             Name::new("Flower"),
             Flower {
-                by: player,
+                by,
                 target,
                 age: 0.0,
             },
@@ -202,6 +238,62 @@ fn player_apologizes(
                 ));
             }
         });
+}
+
+/// Whether somebody being hunted is in a mood to sue for peace, given a roll
+/// in `0..1` and the frame's length. Pure, so the rate can be argued about.
+pub fn sues_for_peace(mood: f32, roll: f32, dt: f32) -> bool {
+    mood >= CONTRITE && roll < CONTRITION * dt
+}
+
+/// A flummi that is the `against` of somebody's grudge, in a decent enough
+/// mood, turns and throws its pursuer a flower.
+///
+/// Rolled per grudge rather than per flummi, so somebody with two pursuers is
+/// twice as likely to try — which is about right; the cooldown it shares with
+/// the taunt keeps it to one flower at a time either way. The `Provoker` is
+/// the same one the taunt reads, so sorry and a raspberry in the same breath
+/// is as impossible for a citizen as it is for the player.
+fn npcs_apologize(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<GameConfig>,
+    assets: Res<FlowerAssets>,
+    bank: Option<Res<SoundBank>>,
+    mut rng: ResMut<AudioRng>,
+    // Never at the player: a flower caught ends in a thank-you pirouette,
+    // and a pirouette steers the body it is on. The player's body is the
+    // player's own.
+    grudges: Query<(Entity, &Grudge, &Transform), Without<Player>>,
+    mut culprits: Query<(&Transform, &Mood, &mut Provoker), Without<Player>>,
+) {
+    let dt = time.delta_secs();
+    for (holder, grudge, pursuer) in &grudges {
+        let Ok((transform, mood, mut provoker)) = culprits.get_mut(grudge.against) else {
+            continue;
+        };
+        if provoker.cooldown > 0.0 || !sues_for_peace(mood.value, rng.random::<f32>(), dt) {
+            continue;
+        }
+        let at = pursuer.translation;
+        if transform.translation.distance(at) > config.mood.apology_range {
+            continue;
+        }
+        provoker.cooldown = config.mood.provoke_rest * NPC_REST;
+
+        // Somebody else's mouth, so it plays through the spatial mixer
+        // rather than flat in both ears the way the player's own sorry does.
+        let from = transform.translation + Vec3::Y * 0.5;
+        if let Some(bank) = &bank {
+            commands.spawn((
+                AudioPlayer(bank.sorry.clone()),
+                spatial_once(effect_gain(&config, 0.7), SORRY_EARSHOT)
+                    .with_speed(rng.random_range(0.9..1.15)),
+                Transform::from_translation(from),
+            ));
+        }
+        spawn_flower(&mut commands, &assets, grudge.against, holder, from, at);
+    }
 }
 
 /// Flies every flower to its verdict: received, or wilted where it fell.
@@ -247,6 +339,30 @@ fn fly_flowers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(npcs_apologize);
+        initialises(fly_flowers);
+    }
+
+    #[test]
+    fn only_the_not_very_cross_apologise_and_not_every_frame() {
+        let frame = 1.0 / 60.0;
+        // A roll of zero always passes the rate: this is the mood's veto.
+        assert!(sues_for_peace(0.5, 0.0, frame));
+        assert!(
+            !sues_for_peace(-0.5, 0.0, frame),
+            "a furious flummi said sorry"
+        );
+        // And the rate is per second, not per frame: at sixty frames a second
+        // almost every roll fails.
+        assert!(!sues_for_peace(0.5, 0.05, frame));
+        // Over a whole second, about a third of hunted flummis try.
+        assert!(sues_for_peace(0.5, 0.3, 1.0));
+        assert!(!sues_for_peace(0.5, 0.4, 1.0));
+    }
 
     #[test]
     fn the_throw_arcs_up_and_lands_on_the_target() {

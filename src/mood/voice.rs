@@ -139,7 +139,7 @@ impl Plugin for VoicePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Turn>().add_systems(
             Update,
-            (gasp_at_wallops, speak_up)
+            (gasp_at_wallops, yelp_in_fright, speak_up)
                 .chain()
                 .in_set(GameSet::Ai)
                 // The bank is synthesised in `Startup`; nothing here can run
@@ -257,9 +257,59 @@ fn gasp_at_wallops(
     }
 }
 
+/// How long somebody who just yelped keeps quiet, in seconds. Longer than a
+/// gasp's: the silence after a fright is part of it, and whoever just ran
+/// from a car has nothing to add for a moment.
+const AFTER_A_FRIGHT: f32 = 1.2;
+
+/// Taking fright, out loud.
+///
+/// The gasp, not a sound of its own: a startle and having the wind knocked
+/// out of you are the same intake of breath, and the bank is recordings now,
+/// so a new noise would be a new download for every clone. Pitched by the
+/// voice that makes it, like everything else here.
+///
+/// Inside the turn-taking gate, unlike the gasp at a wallop: fright is
+/// *common* — one hard braking can scare six flummis at once, and six
+/// simultaneous yelps are a horror film, not a comedy. One per turn window
+/// carries the scene; the rest of the scare is visible in the running.
+fn yelp_in_fright(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut turn: ResMut<Turn>,
+    mut frights: MessageReader<crate::ai::pedestrian::TookFright>,
+    mut flummis: Query<(&Transform, &mut Voicebox)>,
+) {
+    for fright in frights.read() {
+        if turn.0 > 0.0 {
+            continue;
+        }
+        let Ok((transform, mut voice)) = flummis.get_mut(fright.entity) else {
+            continue;
+        };
+        if voice.cooldown > 0.0 {
+            continue;
+        }
+        commands.spawn((
+            AudioPlayer(bank.gasp.clone()),
+            spatial_once(effect_gain(&config, GAIN), EARSHOT).with_speed(voice.pitch),
+            Transform::from_translation(transform.translation + MOUTH),
+        ));
+        voice.cooldown = voice.cooldown.max(AFTER_A_FRIGHT);
+        turn.0 = TURN_TAKING;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(yelp_in_fright);
+    }
 
     #[test]
     fn somebody_with_no_opinion_murmurs_about_the_weather() {

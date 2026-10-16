@@ -110,7 +110,9 @@ pub fn landing_strength(speed: f32) -> f32 {
     ((speed - LANDING_FLOOR) / (LANDING_FULL - LANDING_FLOOR)).clamp(0.05, 1.0)
 }
 
-fn spot_wallops(
+/// Crate-visible so a headless test elsewhere — the geyser's ride in
+/// `world::mayhem` — can watch the same knocks the mood system does.
+pub(crate) fn spot_wallops(
     mut commands: Commands,
     mut wallops: MessageWriter<Wallop>,
     mut bodies: Query<
