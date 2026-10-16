@@ -150,6 +150,15 @@ pub mod stream {
     pub const WOODS: u64 = 35;
     /// Stable visual identities; never advances a layout or crowd stream.
     pub const APPEARANCE: u64 = 36;
+    /// Bystander reaction rolls: who pirouettes at somebody else's launch and
+    /// who takes against it (`mood::schadenfreude`). Emphatically not `MOOD`,
+    /// although the subject matter is mood — that stream's draw order fixes
+    /// which temperament each spawned citizen gets, so a crash pulling a draw
+    /// from it would quietly re-cast the city's future residents. And not
+    /// `AudioRng` either, which the grudge and the gawk share: how many
+    /// people a launch is witnessed by must not change which curse the next
+    /// grumbler picks or how long somebody stares.
+    pub const WITNESS: u64 = 37;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

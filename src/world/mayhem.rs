@@ -59,10 +59,17 @@ pub struct Breakaway {
 }
 
 /// Something bolted just left its footing. The audio module plays the twang
-/// off this rather than being called, so deleting the sound changes nothing.
+/// off this rather than being called, so deleting the sound changes nothing,
+/// and `mood::schadenfreude` reads the crowd's delight off it the same way.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct PropSheared {
     pub position: Vec3,
+    /// How fast whatever sheared it arrived, in m/s.
+    pub speed: f32,
+    /// What just went airborne, in kilograms. A parking meter at speed is
+    /// funnier than a cone nudged over, and the listeners need the numbers to
+    /// know the difference.
+    pub mass: f32,
 }
 
 /// A sheared hydrant's stump, throwing water.
@@ -70,6 +77,18 @@ pub struct PropSheared {
 pub struct Geyser {
     pub life: Timer,
 }
+
+/// On a prop that [`shear`] sent flying. The pavement reads it as something
+/// to run from while it is still moving fast enough to matter
+/// (`CrowdConfig::flying_scare_speed`); the marker simply stays on afterwards,
+/// because the speed filter on the reading side ages it out for free and a
+/// system to take it off on settling would be a system for nothing.
+#[derive(Component)]
+pub struct SentFlying;
+
+/// Below this, a geyser is too far gone to be worth running from or to throw
+/// anybody: the main is giving out and the spray is a dribble.
+pub const LIVE_PRESSURE: f32 = 0.2;
 
 /// One thrown droplet. Animated by hand rather than given to the solver:
 /// a geyser is a hundred of these a second and none of them needs to push
@@ -103,7 +122,7 @@ impl Plugin for MayhemPlugin {
             .add_systems(Startup, setup_assets)
             .add_systems(
                 Update,
-                (shear_props, erupt_geysers, fly_droplets)
+                (shear_props, erupt_geysers, toss_over_geysers, fly_droplets)
                     .chain()
                     .in_set(GameSet::Simulation),
             );
@@ -219,9 +238,12 @@ pub fn shear(
         Mass(breakaway.mass),
         LinearVelocity(carried),
         AngularVelocity(tumble),
+        SentFlying,
     ));
     sheared.write(PropSheared {
         position: transform.translation,
+        speed: velocity.length(),
+        mass: breakaway.mass,
     });
 
     if breakaway.geyser {
@@ -250,6 +272,89 @@ pub fn shear(
 /// most of its life looking broken rather than glorious.
 pub fn pressure(elapsed: f32) -> f32 {
     ((1.0 - elapsed) / 0.25).clamp(0.0, 1.0)
+}
+
+/// The water's half of a geyser throw: straight up, at a pressure-scaled
+/// speed, plus a little shove off the stump so the arc lands beside it rather
+/// than straight back on. Pure so the bop line can be argued in a test;
+/// `offset` is the victim's position relative to the stump, flattened.
+///
+/// Never below 60% of full send while there is any pressure at all: a weak
+/// little hop off a dying geyser reads as a stumble, not a ride.
+pub fn toss(head: f32, speed: f32, offset: Vec3) -> Vec3 {
+    if head < LIVE_PRESSURE {
+        return Vec3::ZERO;
+    }
+    // Deterministic from the offset, so no stream is needed. Somebody dead
+    // centre goes straight up.
+    let aside = offset.with_y(0.0).normalize_or_zero() * TOSS_ASIDE;
+    Vec3::Y * speed * (0.6 + 0.4 * head) + aside
+}
+
+/// Sideways part of a geyser throw, in m/s.
+const TOSS_ASIDE: f32 = 1.2;
+
+/// The geyser's own verb: a flummi who blunders onto a live stump goes up
+/// with the water.
+///
+/// The throw keeps whatever the body was doing across the ground and replaces
+/// what it was doing vertically. From a standing or walking body, then, the
+/// velocity change the wallop detector sees is the water's own vector — held
+/// under `MoodConfig::bop_limit` by a test, so the throw reads as a friendly
+/// bop (a hopping body caught on its way down adds its fall, and can tip just
+/// over). The landing does not read as a bop at all: a body coming back down
+/// from nearly three metres hits the pavement at nine or ten metres a second
+/// of lost velocity, and `feel_wallops` books that at full fuse. So the
+/// ride's delight is handed over here, explicitly, as
+/// `SchadenfreudeConfig::geyser_glee` — enough to leave most of the street
+/// happier for the trip and still not enough to cheer a Wutbürger up, who is
+/// insulted by the landing as he is by everything. A headless test rides the
+/// whole thing, knock by knock, and holds both halves of that.
+///
+/// `launch` is the one way off anybody's feet, so `wheee` plays off the
+/// `KnockedDown` it inserts, the steadfast stay upright, and the knockdown
+/// window is also why this cannot machine-gun anybody: no second throw until
+/// they are back on their feet — at which point landing back on the stump goes
+/// up again, which is the joke.
+fn toss_over_geysers(
+    mut commands: Commands,
+    config: Res<crate::core::config::GameConfig>,
+    geysers: Query<(&Geyser, &Transform)>,
+    mut victims: Query<
+        (
+            Entity,
+            &Transform,
+            &mut LinearVelocity,
+            Option<&mut crate::mood::feeling::Mood>,
+            Has<crate::bounce::launch::NeverTumbles>,
+        ),
+        (
+            With<crate::bounce::controller::Bouncer>,
+            Without<Vehicle>,
+            Without<crate::player::interact::Driving>,
+            Without<crate::bounce::launch::KnockedDown>,
+        ),
+    >,
+) {
+    let tune = &config.schadenfreude;
+    let reach = tune.geyser_toss_radius * tune.geyser_toss_radius;
+    for (geyser, stump) in &geysers {
+        let head = pressure(geyser.life.fraction());
+        if head < LIVE_PRESSURE {
+            continue;
+        }
+        for (victim, transform, mut velocity, mood, steadfast) in &mut victims {
+            let offset = (transform.translation - stump.translation).with_y(0.0);
+            if offset.length_squared() > reach {
+                continue;
+            }
+            let throw = velocity.0.with_y(0.0) + toss(head, tune.geyser_toss, offset);
+            crate::bounce::launch::launch(&mut commands, victim, &mut velocity, throw, !steadfast);
+            if let Some(mut mood) = mood {
+                mood.value = (mood.value + tune.geyser_glee).clamp(-1.0, 1.0);
+            }
+        }
+    }
 }
 
 fn erupt_geysers(
@@ -313,6 +418,146 @@ fn fly_droplets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_query_of_a_system_here_fights_another() {
+        use crate::bounce::testing::initialises;
+        initialises(toss_over_geysers);
+    }
+
+    #[test]
+    fn a_geyser_throw_lands_on_its_victim_as_a_bop_rather_than_an_insult() {
+        // What the wallop detector sees is the change in velocity, and the
+        // throw is added to whatever the body was doing — so the water's own
+        // vector is the whole of it. Full pressure is the hardest there is,
+        // and the shove off the stump counts too.
+        let config = crate::core::config::GameConfig::default();
+        for offset in [Vec3::ZERO, Vec3::X * 0.4, Vec3::new(-0.8, 0.3, 0.7)] {
+            let hardest = toss(1.0, config.schadenfreude.geyser_toss, offset);
+            assert!(
+                hardest.length() < config.mood.bop_limit,
+                "a {:.2} m/s throw against a bop limit of {}",
+                hardest.length(),
+                config.mood.bop_limit
+            );
+        }
+    }
+
+    /// Every knock a body takes from the moment a full-pressure geyser throws
+    /// it until it has come to rest, as the wallop detector sees them.
+    ///
+    /// Through the real `toss_over_geysers`, not a hand-written launch: the
+    /// detector reads velocity changes, and how the throw is composed with
+    /// whatever the body was already doing is exactly the thing in question.
+    fn knocks_from_a_ride(hop: f32) -> Vec<f32> {
+        use crate::bounce::boing::{Wallop, spot_wallops};
+        use crate::bounce::controller::{Bouncer, bounce_bodies};
+        use crate::bounce::testing::{TICK, finish, ground, physics_app};
+
+        #[derive(Resource, Default)]
+        struct Knocks(Vec<f32>);
+        fn listen(mut wallops: MessageReader<Wallop>, mut knocks: ResMut<Knocks>) {
+            knocks
+                .0
+                .extend(wallops.read().map(|wallop| wallop.severity));
+        }
+
+        let mut app = physics_app(TICK);
+        app.init_resource::<Knocks>();
+        app.add_systems(
+            Update,
+            (bounce_bodies, toss_over_geysers, spot_wallops, listen).chain(),
+        );
+        ground(&mut app);
+        let stand = crate::ai::pedestrian::STAND_HEIGHT;
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, stand, 0.0),
+                RigidBody::Dynamic,
+                Collider::capsule(crate::ai::pedestrian::RADIUS, crate::ai::pedestrian::HEIGHT),
+                LockedAxes::ROTATION_LOCKED,
+                Bouncer::new(stand),
+            ))
+            .id();
+        finish(&mut app);
+        let walk = |app: &mut App, ticks: usize| {
+            for _ in 0..ticks {
+                app.world_mut().get_mut::<Bouncer>(body).unwrap().hop_scale = hop;
+                app.update();
+            }
+        };
+        walk(&mut app, 240);
+        app.world_mut().resource_mut::<Knocks>().0.clear();
+
+        // A fresh main, a step off-centre: the stump the body blundered onto.
+        let at = app.world().get::<Transform>(body).unwrap().translation;
+        app.world_mut().spawn((
+            Geyser {
+                life: Timer::from_seconds(45.0, TimerMode::Once),
+            },
+            Transform::from_translation(at.with_y(0.1) + Vec3::X * 0.3),
+        ));
+        walk(&mut app, 240);
+        app.world().resource::<Knocks>().0.clone()
+    }
+
+    #[test]
+    fn a_geyser_ride_cheers_up_most_of_the_street_and_not_the_wutburger() {
+        // The throw is a bop and the landing is not: a body coming back down
+        // from nearly three metres arrives harder than `bop_limit`, and
+        // `feel_wallops` books that at full fuse. So the ride's delight is
+        // handed over by hand — and this is the whole ride, every knock of it,
+        // against what each kind of citizen makes of it. Both gaits, because
+        // a hopping body can be thrown on its way down, which is a bigger
+        // change in velocity than being thrown from a standstill.
+        use crate::mood::feeling::{Temperament, jolt};
+        let config = crate::core::config::GameConfig::default();
+        for gait in crate::core::config::Gait::ALL {
+            let knocks = knocks_from_a_ride(gait.hop());
+            assert!(
+                knocks.len() >= 2,
+                "{gait:?}: a throw and a landing should both register, got {knocks:?}"
+            );
+            let ride = |temper: &Temperament| {
+                config.schadenfreude.geyser_glee
+                    + knocks
+                        .iter()
+                        .map(|severity| jolt(*severity, temper, &config.mood))
+                        .sum::<f32>()
+            };
+            for temper in [
+                Temperament::serene(),
+                Temperament::easygoing(),
+                Temperament::ordinary(),
+            ] {
+                assert!(
+                    ride(&temper) > 0.0,
+                    "{gait:?}: the {} came off the geyser {:+.2} for knocks {knocks:?}",
+                    temper.name(),
+                    ride(&temper)
+                );
+            }
+            let rager = ride(&Temperament::ragemonger());
+            assert!(
+                rager < 0.0,
+                "{gait:?}: a Wutbürger enjoyed the geyser ({rager:+.2}), knocks {knocks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dying_geyser_throws_nobody_and_a_live_one_gives_a_proper_ride() {
+        let speed = 5.8;
+        assert_eq!(toss(0.0, speed, Vec3::X), Vec3::ZERO);
+        assert_eq!(toss(LIVE_PRESSURE * 0.9, speed, Vec3::X), Vec3::ZERO);
+        // Any pressure worth the name still sends somebody up properly rather
+        // than tipping them off the stump.
+        assert!(toss(LIVE_PRESSURE, speed, Vec3::ZERO).y >= speed * 0.6);
+        // Dead centre goes straight up; anywhere else lands beside the stump.
+        assert_eq!(toss(1.0, speed, Vec3::ZERO).xz(), Vec2::ZERO);
+        assert!(toss(1.0, speed, Vec3::X * 0.5).x > 0.0);
+    }
 
     #[test]
     fn a_sheared_prop_leaves_with_the_car_rather_than_against_it() {
