@@ -97,6 +97,7 @@ pub fn spawn(
                 .with_scale(size),
             RigidBody::Static,
             Collider::cuboid(1.0, 1.0, 1.0),
+            super::buildings::dead_wall(),
         ));
     };
     // And the same without one, for the arch head: it leans into the opening,

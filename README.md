@@ -506,6 +506,17 @@ they have somehow ended up inside, which makes the bug impossible rather than
 merely unlikely. Nobody is hurt; there is no health in this city. They are
 launched, and they bounce.
 
+Walls are the one thing that is not rubber. Brushing a facade at a sprint used
+to throw the player back across the pavement, which read as nagging rather
+than comedy, so a building's masonry carries a restitution of zero. Getting the
+zero heard meant changing the city's own rule: Avian settles two bodies' clash
+of combine rules by priority, the world default was `Max` so that a rubber ball
+bounced off concrete on its own elasticity, and `Max` outranks everything — the
+wall was outvoted by whatever hit it. The default is `Average` now, which for
+two defaults is exactly the same number, and the wall's `Min` wins its contact.
+A car hitting one loses the solver's rebound and keeps the scripted fling that
+was always the joke.
+
 ## Faces
 
 Every head is an emoji, and none of them came from a font. A font would have
@@ -619,6 +630,28 @@ flummi pirouettes into its neighbour, the bump reads as a bop, and both moods
 go up. Two contagions running in opposite directions out of one contact, and
 the five dispositions are sliders on the dev panel so the balance between them
 can be found by pushing rather than by arguing.
+
+And the street has an audience. Somebody else being launched used to move the
+victim's mood and turn heads, and nobody who watched it felt anything. Now a
+witness's verdict comes from the same two numbers: a good mood inclines anybody
+towards laughing, a short fuse reads the same sight as an outrage, and the
+crossover sits near an ordinary citizen in an ordinary mood, so the average
+street is split — and the split is the theatre. The amused may pirouette on the
+spot; the appalled may take up a grudge against whoever is standing nearest the
+landing, as unreliably as the victim does. A crash is alarming at the kerb it
+mounts and comedy from across the street, one continuous curve so a step
+backwards never flips anybody's afternoon; a parking meter cartwheeling off its
+bolts delights everybody, heavier and faster being funnier up to a cap. Taking
+fright costs a little, more on a short fuse, and is heard as one gasp per turn
+of the city's conversation rather than a scream from everybody a car brakes at.
+
+The flower stopped being the player's alone: a flummi that notices it is being
+hunted, and is not too cross to say so, turns and throws its pursuer one by the
+same code path, so a street can stage a feud and its reconciliation with nobody
+watching. And a live geyser throws whoever blunders onto the stump, gently
+enough that the throw reads as a bop — the landing from that height does not,
+so the ride hands its delight over explicitly, which leaves most of the street
+happier for the trip and the Wutbürger insulted as usual.
 
 ## Queues
 

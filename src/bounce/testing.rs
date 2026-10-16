@@ -50,16 +50,15 @@ pub fn physics_app(frame: f64) -> App {
     // config block. A harness without them is a city that is not made of
     // rubber: every landing is absorbed, so "the body came down hard" reads as
     // "the body is standing still", and a test cannot tell a roof drop from a
-    // kerb. The `Max` combine rule is the load-bearing half — a flummi bounces
-    // off concrete because *it* is elastic.
+    // kerb. The restitution is `world::rubber` itself rather than a copy of
+    // it, combine rule and all, because the rule is what decides whether a
+    // wall may opt out of the bounce.
     let bounce = app
         .world()
         .resource::<crate::core::config::GameConfig>()
         .bounce
         .clone();
-    app.insert_resource(DefaultRestitution(
-        Restitution::new(bounce.restitution).with_combine_rule(CoefficientCombine::Max),
-    ));
+    app.insert_resource(crate::world::rubber(&bounce));
     app.insert_resource(avian3d::dynamics::solver::SolverConfig {
         restitution_threshold: bounce.threshold,
         restitution_iterations: 4,
