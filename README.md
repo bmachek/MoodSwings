@@ -56,7 +56,7 @@ the folder it unpacked to; the game looks for `assets/` beside itself. The
 archive carries everything the game needs: the shaders, Landshüpf — the baked
 map of the real Landshut, `assets/cities/landshut.ron` — and the whole recorded
 sound bank. The scanned textures are the one thing it leaves out, because they
-are optional and the size of the rest of the archive several times over;
+are optional and would about double the download;
 `tools/fetch-materials.sh` (`.bat` on Windows) inside it fetches them in place.
 Options and quick saves go to `saves/` in the working directory.
 

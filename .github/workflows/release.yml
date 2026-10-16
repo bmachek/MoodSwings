@@ -71,8 +71,8 @@ jobs:
     # since the recordings replaced it. A player who unpacked a release heard
     # nothing until they found and ran a fetch script, and a release is the
     # one audience that should not have to. Every recording is CC0, so the
-    # archive can carry them; the scanned PBR sets stay out, because they are
-    # optional and the size of everything else several times over.
+    # archive can carry them — about 140 MB; the scanned PBR sets stay out,
+    # because they are optional and would about double the download.
     #
     # Fetched once, here, rather than in each build job: all three archives
     # then carry byte-identical files, and the people hosting them are asked
