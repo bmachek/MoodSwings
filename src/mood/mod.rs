@@ -10,6 +10,7 @@ pub mod face;
 pub mod feeling;
 pub mod grudge;
 pub mod provoke;
+pub mod schadenfreude;
 pub mod scuffle;
 pub mod voice;
 
@@ -34,12 +35,15 @@ impl Plugin for MoodPlugin {
             grudge::GrudgePlugin,
             scuffle::ScufflePlugin,
             apology::ApologyPlugin,
+            schadenfreude::SchadenfreudePlugin,
         ))
         .add_systems(Startup, build_faces)
         .add_systems(
             Update,
             // After the mood systems, which are also in `Ai`: the face is
-            // read from a mood that has already settled this frame.
+            // read from a mood that has already settled this frame — the
+            // felt half and the witnessed half both, since `schadenfreude`
+            // runs inside `Feeling` too.
             face::wear_the_mood
                 .in_set(GameSet::Ai)
                 .after(feeling::Feeling),

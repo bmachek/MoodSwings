@@ -90,12 +90,8 @@ impl Plugin for WorldPlugin {
         // to a fixed arity and the tuple above is at it.
         .add_plugins((sky::SkyPlugin, ground::GroundPlugin, signals::SignalPlugin))
         // Everything in this city is made of rubber, and the solver is where
-        // that is decided. `Max` rather than the default average: a rubber ball
-        // bounces off concrete because *it* is elastic, and asking concrete to
-        // agree would flatten every bounce against the world by half.
-        .insert_resource(DefaultRestitution(
-            Restitution::new(bounce.restitution).with_combine_rule(CoefficientCombine::Max),
-        ))
+        // that is decided — see `rubber`.
+        .insert_resource(rubber(&bounce))
         .insert_resource(avian3d::dynamics::solver::SolverConfig {
             restitution_threshold: bounce.threshold,
             // One pass leaves a body resting on a floor with several contact
@@ -112,6 +108,26 @@ impl Plugin for WorldPlugin {
     }
 }
 
+/// The restitution every collider carries unless it says otherwise.
+///
+/// `Average`, which for every pair of defaults is exactly what `Max` was:
+/// both sides carry the same number, and the average of a number with itself
+/// is itself. It used to be `Max`, so that a rubber ball would bounce off
+/// concrete on its own elasticity — and that made it the one rule nothing
+/// could opt out of. Avian settles a clash of combine rules by priority, `Max`
+/// outranks every other, and so a wall asking for no bounce at all
+/// (`buildings::dead_wall`, under `Min`) was outvoted by whatever hit it:
+/// sprinting into a facade threw the player back across the pavement. The
+/// things that are *more* rubber than the rest — the trampoline, the river —
+/// still say `Max`, and still win.
+///
+/// Public because `bounce::testing` builds the same world for headless tests,
+/// and one function is the only way the two cannot disagree.
+pub fn rubber(bounce: &crate::core::config::BounceConfig) -> DefaultRestitution {
+    DefaultRestitution(
+        Restitution::new(bounce.restitution).with_combine_rule(CoefficientCombine::Average),
+    )
+}
 fn generate_city(
     mut commands: Commands,
     config: Res<GameConfig>,

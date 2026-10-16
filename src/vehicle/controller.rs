@@ -276,8 +276,27 @@ fn update_steering(
     // Positive input is "right", which is a negative yaw about +Y.
     let target = -input.steer.clamp(-1.0, 1.0) * lock;
 
-    let blend = 1.0 - (-spec.steer_rate * dt).exp();
-    state.steer_angle += (target - state.steer_angle) * blend;
+    state.steer_angle +=
+        (target - state.steer_angle) * steer_blend(state.steer_angle, target, spec.steer_rate, dt);
+}
+
+/// How much of the gap between the wheel and where the input wants it is
+/// closed this frame, 0 to 1.
+///
+/// Asymmetric on purpose: heading back towards the centre runs
+/// [`CENTRING`](crate::vehicle::spec::CENTRING) times faster than turning in.
+/// Raising the rate wholesale was the first cure for "laggy" and overshot into
+/// twitchy — a digital key slams to full lock — whereas the release is what
+/// actually reads as direct: a wheel that comes back promptly is one a
+/// correction can be made with. A swap from full lock one way to full lock the
+/// other is a turn-in, not a release, so it keeps the calm rate.
+pub fn steer_blend(current: f32, target: f32, rate: f32, dt: f32) -> f32 {
+    let rate = if target.abs() < current.abs() {
+        rate * crate::vehicle::spec::CENTRING
+    } else {
+        rate
+    };
+    1.0 - (-rate * dt).exp()
 }
 
 /// Couples the wheels on each axle so the body resists rolling into a corner.
@@ -872,6 +891,22 @@ mod tests {
             "handbrake barely changed the slip angle: {gripping:.3} rad gripping \
              vs {sliding:.3} rad sliding"
         );
+    }
+
+    #[test]
+    fn letting_go_of_the_wheel_is_quicker_than_turning_it() {
+        let dt = 1.0 / 60.0;
+        for class in VehicleClass::ALL {
+            let rate = class.spec().steer_rate;
+            let turn_in = steer_blend(0.0, 0.5, rate, dt);
+            let release = steer_blend(0.5, 0.0, rate, dt);
+            assert!(
+                release > turn_in * 1.4,
+                "{class:?}: release {release:.3} against turn-in {turn_in:.3}"
+            );
+            // Lock to opposite lock is a turn-in, and stays calm.
+            assert_eq!(steer_blend(0.5, -0.5, rate, dt), turn_in);
+        }
     }
 
     #[test]

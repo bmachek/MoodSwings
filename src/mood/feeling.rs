@@ -78,7 +78,8 @@ pub struct Temperament {
     /// How likely they are to go after whoever did it. Read by
     /// `grudge::bears_a_grudge`, which rolls against it once per provocation:
     /// about one citizen in ten takes it personally, goes red, remembers who,
-    /// and hops after them.
+    /// and hops after them. And, since the crowd learned to watch
+    /// (`schadenfreude`), once per launch merely witnessed.
     pub grudge: f32,
 }
 
@@ -383,7 +384,7 @@ fn spread_moods(
     }
 }
 
-fn feel_wallops(
+pub(super) fn feel_wallops(
     config: Res<GameConfig>,
     mut wallops: MessageReader<Wallop>,
     mut flummis: Query<(&mut Mood, &Temperament)>,
@@ -398,7 +399,12 @@ fn feel_wallops(
 
 /// Reads the city's temperature for the HUD, and spots a rage wave going
 /// through it.
-fn read_the_room(
+///
+/// Last in [`Feeling`], and anything else that moves a mood inside the set —
+/// `schadenfreude`'s witnesses — orders itself before this. A crossing made
+/// after the room was read is never seen at all: the next frame's
+/// `drift_moods` writes the new value into `previous` before anybody looks.
+pub(super) fn read_the_room(
     time: Res<Time>,
     config: Res<GameConfig>,
     mut city: ResMut<CityMood>,

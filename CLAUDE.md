@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo run                      # debug; ~2-10s incremental after the first build
 cargo run --release            # smoother frame rate, slower to compile
 cargo run --features dev       # bevy dynamic_linking — fastest iteration
-cargo test                     # 744 unit tests (753 with --workspace), all inline #[cfg(test)]
+cargo test                     # 777 unit tests (786 with --workspace), all inline #[cfg(test)]
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
@@ -146,6 +146,26 @@ mix, resample, fade, normalise, seam-wrap), and the load pipeline itself is
 tested with fixture files. A register entry with no recording on disk prints
 as MISSING and plays in-game as a short silence with a warning.
 
+### Cutting a release
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0   # the tag must match Cargo.toml's version
+```
+
+`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the
+gate, fetches the sound bank once, builds Windows x64, macOS arm64 and Linux
+x64 — the last on Ubuntu 22.04, because the build runner's glibc is the oldest
+one the binary will start on — and drafts a release; publishing it is the human
+sign-off. An archive is the source tree's layout: the binary beside the whole
+of `assets/`, which is the shaders and Landshüpf's atlas, plus the recorded
+bank, with the scanned textures left to the fetch script it also carries.
+Each build unpacks its own archive and runs `--audition` and
+`--survey --city landshuepf` on it with the checkout's `assets/` moved aside,
+because `root()` prefers the manifest directory and would otherwise hide a
+file the archive forgot — the packaging step once copied the shaders by name
+and would have shipped Landshüpf as the generator. `workflow_dispatch` is the
+rehearsal: everything except the release.
+
 ## The instruments have agents
 
 Every instrument above — the gate, the camera, the patrol, the survey, the
@@ -199,7 +219,7 @@ bevy_egui, saves are RON.
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning, vans stopped with their hazards on and the courier unloading them (`delivery`) |
-| `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
+| `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), retaliation (`grudge`), the collar-grab (`scuffle`), making peace with a flower (`apology`), and what the crowd feels about chaos it only watches (`schadenfreude`) |
 | `ai` | Traffic, pedestrians, archetypes (the cast), shared steering, walk cycles, the figure itself, the animals among their feet, pigeon flocks that scatter (`pigeon`), umbrellas when it rains (`brolly`), a citizen who has stopped to play and the ring the city's mood gathers round them (`busker`), the one point everything ambient is kept around (`focus`), somewhere to be (`errands`), standing in line for it and minding who pushes in (`queue`), and stepping off a kerb (`crossing`) |
 | `events` | The city's calendar: scheduled parades (CSD, demos) marching graph routes; `--event` is capture's door in |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
@@ -576,7 +596,8 @@ and a fresh clone renders identically without them. Sound stopped being
 symmetrical: the synthesised bank was retired (the recordings won), so the
 CC0 sound half of `tools/fetch-materials.sh` is a REQUIRED setup step. A
 clone that has not run it still starts, but every missing sound plays as a
-short silence with a loud warning. Adding a scanned material set means adding
+short silence with a loud warning. A release archive carries the bank (see
+*Cutting a release*); a clone still has to fetch it. Adding a scanned material set means adding
 its name to both `world::material::set` and the fetch scripts; adding a sound
 means an entry in `audio::bank::REGISTER` (name, peak, shape) plus a download
 in both fetch scripts — a test fails if either script lacks one. Bevy has no runtime mip generator, so the texture

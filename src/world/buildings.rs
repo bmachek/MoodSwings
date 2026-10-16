@@ -1533,6 +1533,7 @@ fn spawn_building(
                 .with_scale(Vec3::new(frontage, height, throat)),
             RigidBody::Static,
             Collider::cuboid(1.0, 1.0, 1.0),
+            dead_wall(),
         ));
         let cap = super::roof::Pitch::plain(true, frontage, throat, height);
         super::roof::spawn(
@@ -1795,7 +1796,11 @@ fn spawn_building(
     ));
     if door_shell.is_none() {
         // Unit cube: Avian scales it by the transform above.
-        far_box.insert((RigidBody::Static, Collider::cuboid(1.0, 1.0, 1.0)));
+        far_box.insert((
+            RigidBody::Static,
+            Collider::cuboid(1.0, 1.0, 1.0),
+            dead_wall(),
+        ));
     } else {
         // An enterable building cannot be a scaled cube: its collider needs a
         // doorway. The compound stands on its own unscaled entity — its
@@ -1805,6 +1810,7 @@ fn spawn_building(
             ChunkOf(chunk),
             RigidBody::Static,
             enterable_collider(class, frontage, throat, height),
+            dead_wall(),
             Transform::from_xyz(center.x, SIDEWALK_HEIGHT, center.y)
                 .with_rotation(Quat::from_rotation_y(yaw)),
         ));
@@ -2167,6 +2173,23 @@ fn hang_sign(
     ));
 }
 
+/// What a building's wall gives back when something hits it: nothing.
+///
+/// Walls are the one thing in this city that is not rubber. Brushing a facade
+/// at a sprint flung the player back across the pavement, which read as
+/// nagging rather than comedy — the bounces worth having are the ground under
+/// a launch and body against body, and both keep the city's restitution.
+/// `Min` outranks the world's `Average` (see `world::rubber`), so the zero
+/// actually wins the contact.
+///
+/// A car loses the solver's half of its rebound off a wall too, and keeps the
+/// half that was always the joke: `vehicle::impact::fling` still throws it
+/// back. A wall is masonry only — a parking deck, a terrace of stands, a
+/// table in a shop are things to land on and keep the rubber.
+pub fn dead_wall() -> Restitution {
+    Restitution::new(0.0).with_combine_rule(CoefficientCombine::Min)
+}
+
 /// The collider for a building the player can walk into, in the door frame:
 /// `x` across the front, `+z` towards the street, `y` up from the pavement.
 ///
@@ -2257,6 +2280,59 @@ mod tests {
     }
 
     use super::*;
+
+    /// A ball thrown flat at a wall, and how fast it comes back off it.
+    ///
+    /// No gravity and no ground: the only contact is the wall, so the speed
+    /// it leaves with is the combined restitution and nothing else.
+    fn rebound_off(wall: Option<Restitution>) -> f32 {
+        use crate::bounce::testing::{TICK, finish, physics_app};
+        let mut app = physics_app(TICK);
+        app.insert_resource(Gravity(Vec3::ZERO));
+        let mut slab = app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(1.0, 6.0, 6.0),
+            Transform::from_xyz(3.0, 0.0, 0.0),
+        ));
+        if let Some(wall) = wall {
+            slab.insert(wall);
+        }
+        let ball = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Collider::sphere(0.3),
+                Transform::default(),
+                LinearVelocity(Vec3::X * 7.0),
+            ))
+            .id();
+        finish(&mut app);
+        for _ in 0..90 {
+            app.update();
+        }
+        -app.world().get::<LinearVelocity>(ball).unwrap().x
+    }
+
+    #[test]
+    fn a_building_wall_gives_nothing_back_and_the_rest_of_the_city_still_does() {
+        // The control first: a wall with no opinion is rubber, at the city's
+        // own restitution — which is what `world::rubber` changing `Max` to
+        // `Average` must not have taken away.
+        let restitution = crate::core::config::GameConfig::default()
+            .bounce
+            .restitution;
+        let rubber = rebound_off(None);
+        assert!(
+            (rubber - 7.0 * restitution).abs() < 0.7,
+            "a plain wall threw a 7 m/s ball back at {rubber:.2} m/s"
+        );
+        // And the masonry, which the `Min` rule has to actually win.
+        let dead = rebound_off(Some(dead_wall()));
+        assert!(
+            dead.abs() < 0.3,
+            "a building wall threw a 7 m/s ball back at {dead:.2} m/s"
+        );
+    }
 
     /// A ray through the middle of the doorway passes; the same ray a door's
     /// width to the side does not. Asked of the collider itself, because the

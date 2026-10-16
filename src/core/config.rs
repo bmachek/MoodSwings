@@ -33,6 +33,9 @@ pub struct GameConfig {
     pub bounce: BounceConfig,
     /// How quick this city's temper is.
     pub mood: MoodConfig,
+    /// And how much it enjoys watching things go wrong for other people.
+    #[serde(default)]
+    pub schadenfreude: SchadenfreudeConfig,
     /// How many people are on the pavements and how they move around each
     /// other. `#[serde(default)]` so an options file from before the crowd had
     /// dials still parses instead of resetting everything else in it.
@@ -695,6 +698,19 @@ pub struct CrowdConfig {
     /// running from.
     pub scare_radius: f32,
     pub scare_speed: f32,
+    /// Spin, in rad/s, above which a vehicle counts as a tumbling wreck worth
+    /// running from even when it is barely translating. A car a crash left
+    /// cartwheeling across a junction is bearing down on *somebody* whatever
+    /// its ground speed says.
+    pub wreck_spin: f32,
+    /// How far the crowd gives a live geyser, in metres. Deliberately far
+    /// short of `scare_radius`: a crowd that fled the water perfectly would
+    /// never be thrown by it, and the throw is the joke (`world::mayhem`).
+    pub geyser_scare_radius: f32,
+    /// Speed, in m/s, above which a sheared prop is still a flying phone box
+    /// and gets the full `scare_radius`. Below it, it is furniture lying in
+    /// the road again.
+    pub flying_scare_speed: f32,
     /// Personal space, in metres. Inside it a citizen leans its intent away
     /// from the neighbours so the crowd flows instead of stacking. Kept small
     /// on purpose: contact must stay possible, because a small knock is a
@@ -710,6 +726,46 @@ impl Default for CrowdConfig {
     fn default() -> Self {
         GameConfig::default().crowd
     }
+}
+
+/// How the crowd reacts to chaos it merely *witnesses*.
+///
+/// The victim's side of a wallop was always felt (`mood::feeling`); this block
+/// tunes everybody else's (`mood::schadenfreude`): who laughs at a launch, how
+/// far a crash is funny and how close it stops being, the street's delight at
+/// furniture leaving its bolts, what taking fright costs, and the geyser that
+/// throws passers-by.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchadenfreudeConfig {
+    /// How far away a launch is witnessed at all, in metres.
+    pub watch_radius: f32,
+    /// Mood lift for an amused witness standing right next to the landing.
+    pub amusement: f32,
+    /// And the dip for an appalled one. Slightly stronger than the laugh, so
+    /// a street that watches a massacre trends sour rather than giddy.
+    pub indignation: f32,
+    /// A crash is funny out to here, in metres...
+    pub crash_radius: f32,
+    /// ...and alarming inside here, where it is happening *to* you.
+    pub alarm_radius: f32,
+    /// Impact severity, in m/s lost, below which nobody even looks up.
+    pub crash_stir: f32,
+    /// Mood lift per sheared prop at full send, right next to it.
+    pub sproing_delight: f32,
+    /// Mood cost of taking fright, scaled up by the fuse.
+    pub fright_dip: f32,
+    /// Throw speed of a geyser at full pressure, in m/s. Held below
+    /// `MoodConfig::bop_limit` so the throw itself reads as a bop — there is
+    /// a test holding the two in that order.
+    pub geyser_toss: f32,
+    /// How close to the stump somebody has to blunder to be thrown, in metres.
+    pub geyser_toss_radius: f32,
+    /// Mood handed to whoever the water throws: the ride is a treat. It has
+    /// to be spelt out rather than left to the bop, because the throw ends in
+    /// a landing and a landing from that height is no bop — see
+    /// `world::mayhem::toss_over_geysers`.
+    pub geyser_glee: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -899,6 +955,9 @@ impl Default for GameConfig {
                 flee_speed: 5.4,
                 scare_radius: 14.0,
                 scare_speed: 6.0,
+                wreck_spin: 3.0,
+                geyser_scare_radius: 5.0,
+                flying_scare_speed: 4.0,
                 separation_radius: 0.9,
                 separation_push: 1.2,
             },
@@ -917,6 +976,19 @@ impl Default for GameConfig {
                 apology_balm: 0.55,
                 grudge_seconds: 7.0,
                 grudge_speed: 5.2,
+            },
+            schadenfreude: SchadenfreudeConfig {
+                watch_radius: 18.0,
+                amusement: 0.12,
+                indignation: 0.14,
+                crash_radius: 25.0,
+                alarm_radius: 6.0,
+                crash_stir: 3.0,
+                sproing_delight: 0.10,
+                fright_dip: 0.06,
+                geyser_toss: 5.8,
+                geyser_toss_radius: 1.2,
+                geyser_glee: 0.25,
             },
             camera: CameraConfig {
                 speed: 25.0,
@@ -972,6 +1044,12 @@ impl Default for BounceConfig {
 impl Default for MoodConfig {
     fn default() -> Self {
         GameConfig::default().mood
+    }
+}
+
+impl Default for SchadenfreudeConfig {
+    fn default() -> Self {
+        GameConfig::default().schadenfreude
     }
 }
 

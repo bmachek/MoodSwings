@@ -4,6 +4,8 @@
 
 An open-world sandbox about being rude to strangers, built in Rust with Bevy.
 
+*For Daniel — the best son anyone could imagine.*
+
 Everything here is made of rubber. You do not walk, you bounce; so does
 everybody else, and so do the cars. There are no weapons — the two mouse
 buttons blow a raspberry and whistle — and nobody can be hurt, because there is
@@ -38,8 +40,41 @@ generator; nothing here is authored by hand.
 
 ## Running
 
+### From a release
+
+Every tag `v*` builds the game for three platforms and attaches the archives
+to a [release](https://github.com/bmachek/MoodSwings/releases):
+
+| Platform | Archive |
+|---|---|
+| Windows 10/11, x64 | `mood-swings-<version>-windows-x64.zip` |
+| macOS 11 or later, Apple silicon | `mood-swings-<version>-macos-arm64.tar.gz` |
+| Linux, x64 (glibc 2.35 or later) | `mood-swings-<version>-linux-x64.tar.gz` |
+
+Unpack it anywhere and start `mood_swings` (`mood_swings.exe` on Windows) in
+the folder it unpacked to; the game looks for `assets/` beside itself. The
+archive carries everything the game needs: the shaders, Landshüpf — the baked
+map of the real Landshut, `assets/cities/landshut.ron` — and the whole recorded
+sound bank. The scanned textures are the one thing it leaves out, because they
+are optional and would about double the download;
+`tools/fetch-materials.sh` (`.bat` on Windows) inside it fetches them in place.
+Options and quick saves go to `saves/` in the working directory.
+
+None of the binaries is signed. Windows SmartScreen asks first (*Weitere
+Informationen → Trotzdem ausführen*); macOS refuses a downloaded binary
+outright until the quarantine flag is lifted from the unpacked folder, once:
+
 ```sh
-tools/fetch-materials.sh  # ~200 MB of CC0 textures; optional, see below
+xattr -dr com.apple.quarantine mood-swings-v0.1.0-macos-arm64
+```
+
+On Linux the game wants a Vulkan driver and the runtime libraries of ALSA and
+libudev, all of which a desktop install already has.
+
+### From source
+
+```sh
+tools/fetch-materials.sh  # the CC0 sound bank (required) and ~200 MB of textures (optional)
 cargo run                 # first build takes a few minutes; then ~2-10s
 cargo run --release       # smoother, slower to compile
 cargo run --features dev  # dynamic linking, fastest iteration
@@ -47,7 +82,9 @@ cargo run --features dev  # dynamic linking, fastest iteration
 
 The material download is optional. Without it every surface falls back to the
 procedural texture it shipped with, and the game runs exactly the same — it
-just looks worse. Nothing is checked in and nothing is required to build.
+just looks worse. Nothing is checked in and nothing is required to build. The
+sounds are the half that is not optional: a clone that has not fetched them
+still starts, and every sound in it is a short silence and a warning.
 
 ## Multiplayer (shared exploration)
 
@@ -506,6 +543,17 @@ they have somehow ended up inside, which makes the bug impossible rather than
 merely unlikely. Nobody is hurt; there is no health in this city. They are
 launched, and they bounce.
 
+Walls are the one thing that is not rubber. Brushing a facade at a sprint used
+to throw the player back across the pavement, which read as nagging rather
+than comedy, so a building's masonry carries a restitution of zero. Getting the
+zero heard meant changing the city's own rule: Avian settles two bodies' clash
+of combine rules by priority, the world default was `Max` so that a rubber ball
+bounced off concrete on its own elasticity, and `Max` outranks everything — the
+wall was outvoted by whatever hit it. The default is `Average` now, which for
+two defaults is exactly the same number, and the wall's `Min` wins its contact.
+A car hitting one loses the solver's rebound and keeps the scripted fling that
+was always the joke.
+
 ## Faces
 
 Every head is an emoji, and none of them came from a font. A font would have
@@ -619,6 +667,28 @@ flummi pirouettes into its neighbour, the bump reads as a bop, and both moods
 go up. Two contagions running in opposite directions out of one contact, and
 the five dispositions are sliders on the dev panel so the balance between them
 can be found by pushing rather than by arguing.
+
+And the street has an audience. Somebody else being launched used to move the
+victim's mood and turn heads, and nobody who watched it felt anything. Now a
+witness's verdict comes from the same two numbers: a good mood inclines anybody
+towards laughing, a short fuse reads the same sight as an outrage, and the
+crossover sits near an ordinary citizen in an ordinary mood, so the average
+street is split — and the split is the theatre. The amused may pirouette on the
+spot; the appalled may take up a grudge against whoever is standing nearest the
+landing, as unreliably as the victim does. A crash is alarming at the kerb it
+mounts and comedy from across the street, one continuous curve so a step
+backwards never flips anybody's afternoon; a parking meter cartwheeling off its
+bolts delights everybody, heavier and faster being funnier up to a cap. Taking
+fright costs a little, more on a short fuse, and is heard as one gasp per turn
+of the city's conversation rather than a scream from everybody a car brakes at.
+
+The flower stopped being the player's alone: a flummi that notices it is being
+hunted, and is not too cross to say so, turns and throws its pursuer one by the
+same code path, so a street can stage a feud and its reconciliation with nobody
+watching. And a live geyser throws whoever blunders onto the stump, gently
+enough that the throw reads as a bop — the landing from that height does not,
+so the ride hands its delight over explicitly, which leaves most of the street
+happier for the trip and the Wutbürger insulted as usual.
 
 ## Queues
 
