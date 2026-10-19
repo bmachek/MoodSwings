@@ -51,7 +51,7 @@ rodio = { version = "0.22", default-features = false, features = [
     "vorbis",
     "mp3",
 ] }
-leafwing-input-manager = "0.21"
+leafwing-input-manager = "0.22"
 bevy_egui = "0.42"
 rand = "0.10"
 rand_chacha = "0.10"
