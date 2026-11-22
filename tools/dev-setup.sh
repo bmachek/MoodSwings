@@ -221,6 +221,24 @@ case "$GPU" in
 esac
 note "gpu: $GPU"
 
+say "== agent harness =="
+# Neither of these stops a build, which is why they are reported rather than
+# fixed. Without python3 the edit and stop hooks (tools/agent_hook.py) fail on
+# every call — formatting, the docs check and the clippy gate all at once —
+# and without rust-analyzer Claude Code's LSP plugin has nothing to start.
+if command -v python3 >/dev/null 2>&1; then
+    step "python3: the edit and stop hooks can run"
+else
+    step "python3 missing: tools/agent_hook.py, the format-on-edit and the clippy gate cannot run"
+    note "hooks: python3 missing"
+fi
+if command -v rust-analyzer >/dev/null 2>&1; then
+    step "rust-analyzer: the LSP plugin has a server"
+else
+    step "rust-analyzer missing: rustup component add rust-analyzer (for the LSP plugin)"
+    note "lsp: rust-analyzer missing"
+fi
+
 if [ "$MODE" = hook ]; then
     # One line of context for the session, with nothing in it that needs
     # escaping. What an agent needs to know before it picks an instrument.

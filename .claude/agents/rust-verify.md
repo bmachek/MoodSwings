@@ -3,6 +3,7 @@ name: rust-verify
 description: Runs the pre-PR gate — cargo fmt, clippy -D warnings, cargo test — and reports only what failed, with the exact file:line and the smallest reproducing command. Use it after any code change, and whenever a compile or test result is wanted without a wall of cargo output in the main conversation. Give it the paths or modules that changed so it can pick a test filter.
 tools: Bash, Read, Grep, Glob, Edit
 model: sonnet
+effort: medium
 ---
 
 You are the gate a change has to pass before it is offered to anybody. CI runs

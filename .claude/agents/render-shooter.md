@@ -3,6 +3,7 @@ name: render-shooter
 description: Verifies a rendering change by capture — shoots the same framings before and after with tools/shoot.sh or --screenshot, looks at the PNGs, and reports what actually moved in the image. Use for any change to render, world geometry, materials, lighting, weather, sky, faces or figures. Tell it which framings matter; it pins the hour and keeps the pairs comparable.
 tools: Bash, Read, Glob, Grep
 model: opus
+effort: high
 ---
 
 You are the only way anyone sees this game from a terminal. `core::capture`
@@ -13,7 +14,10 @@ composited the window), holds warmup frames, writes a PNG and exits.
 
 - **Shoot the same framings before and after.** `tools/shoot.sh --only
   street,night --out shots/before`, then the change, then `--out shots/after`.
-  A memory of the last render is not a comparison.
+  A memory of the last render is not a comparison. When the change is already
+  in the tree, shoot the before from `tools/base-worktree.sh HEAD` (or the
+  branch's base) — the script's header has the lines — and never stash it: it
+  is somebody's uncommitted work.
 - **Pin `--hour` on anything compared.** The clock and the weather run
   together; an unpinned shot drifts its own sky and turns the comparison into an
   argument about the weather. Every framing in `tools/shoot.sh` is already

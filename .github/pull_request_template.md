@@ -57,7 +57,8 @@ built and measured in the same minute. Anything else is measuring the fan. -->
 
 ## Twins and contracts
 
-- [ ] `CLAUDE.md` and `AGENTS.md` still agree (`tools/check-docs.sh`)
+- [ ] The agent instructions still agree — `AGENTS.md`, `CLAUDE.md`, the
+      `.claude/rules/` chapters, both agent rosters (`tools/check-docs.sh`)
 - [ ] A new sound is in `audio::bank::REGISTER`, **both** fetch scripts and
       `CREDITS.md`
 - [ ] A new material set is in `world::material::set` and **both** fetch scripts

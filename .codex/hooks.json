@@ -1,0 +1,40 @@
+{
+  "description": "MoodSwings: the same hooks Claude Code runs (.claude/settings.json), addressed through the git root because Codex has no project-directory variable. The scripts read both harnesses' payloads.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)\"/tools/dev-setup.sh --hook",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)\"/tools/agent_hook.py post-edit",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)\"/tools/agent_hook.py stop",
+            "timeout": 600,
+            "statusMessage": "clippy gate (what CI runs)"
+          }
+        ]
+      }
+    ]
+  }
+}

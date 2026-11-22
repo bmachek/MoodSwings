@@ -38,8 +38,12 @@ __pycache__/
 !/.claude/agents/
 !/.claude/commands/
 !/.claude/skills/
+!/.claude/rules/
 !/.claude/settings.json
 /.claude/settings.local.json
 
 # Local multiplayer server configuration
 .env
+
+# Graphify
+graphify-out/

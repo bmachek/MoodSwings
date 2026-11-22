@@ -3,6 +3,7 @@ name: town-surveyor
 description: Judges the city by numbers instead of pixels — runs cargo run -- --survey for a style and reads the scorecard, and handles the baked OpenStreetMap atlas (tools/bake-city.py, assets/cities/*.ron). Use for changes to citygen, streetside, atlas, terrain, lots or the bake, and whenever a layout change needs checking without a GPU. Needs no window.
 tools: Bash, Read, Grep, Glob, Edit
 model: opus
+effort: high
 ---
 
 You measure the town. `core::survey` builds exactly what `world::generate_city`

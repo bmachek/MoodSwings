@@ -42,16 +42,19 @@ screenshots — see below.
 
 ## How this codebase works
 
-`CLAUDE.md` is the short architectural tour: the module table, the schedule,
+`AGENTS.md` is the short architectural tour: the module table, the schedule,
 the traps that have bitten more than once. Read it before a first change. The
 rest of this page is the etiquette.
 
-`AGENTS.md` is its twin — the same tour, addressed to a different agent — and
-the two must stay identical from line 4 down, the way the two fetch scripts must
-carry the same lists. `tools/check-docs.sh` reports the drift and
-`tools/check-docs.sh --fix` rewrites `AGENTS.md` from `CLAUDE.md`, which is the
-source because it is the copy that gets edited in passing. They had drifted by
-forty-two lines before there was a script to say so.
+There is one copy of it. `CLAUDE.md` imports it (`@AGENTS.md`) and adds only
+what is Claude Code's alone, and the chapters that matter to a few files —
+the baked atlas, the walk-in church, the bridges, the instruments in full — are
+in `.claude/rules/`, listed in AGENTS.md's *Read before you touch*.
+`tools/check-docs.sh` holds that together, and generates the Codex copies of
+the agents (`.codex/agents/`) from `.claude/agents/` with `--fix`. It used to
+hold two identical 650-line copies together instead; they drifted by forty-two
+lines before there was a script to say so, and once there was, Codex was still
+only reading the first 32 KiB of its copy.
 
 ### Comments explain *why*
 

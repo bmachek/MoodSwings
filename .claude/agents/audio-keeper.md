@@ -3,6 +3,7 @@ name: audio-keeper
 description: Everything about the recorded sound bank — auditioning it to WAV, and keeping audio::bank::REGISTER, both fetch scripts and CREDITS.md in agreement. Use when a sound is added, replaced or retuned, when a sound plays as silence, or when the audio load pipeline changes. Needs no window and no GPU.
 tools: Bash, Read, Grep, Glob, Edit
 model: sonnet
+effort: medium
 ---
 
 A curse can be listened to without finding a flummi cross enough to say one:

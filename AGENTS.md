@@ -1,6 +1,17 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+Guidance for coding agents working in this repository. Codex reads this file as
+it stands; Claude Code reads it through the `@AGENTS.md` import in `CLAUDE.md`.
+There is one copy of it, and this is the copy.
+
+## What this game is
+
+It was an open-world crime sandbox and it is now a comedy one. Everything is
+made of rubber and bounces; there are no weapons, no police, no health and no
+fail state. The verb is provocation — a raspberry and a whistle — and the
+readout is a mood that every citizen carries, wears as a face, says out loud
+and catches off the neighbours. When a change has to break a tie, break it
+towards the joke.
 
 ## Commands
 
@@ -8,7 +19,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 cargo run                      # debug; ~2-10s incremental after the first build
 cargo run --release            # smoother frame rate, slower to compile
 cargo run --features dev       # bevy dynamic_linking — fastest iteration
-cargo test                     # 777 unit tests (786 with --workspace), all inline #[cfg(test)]
+cargo test                     # every unit test, all inline #[cfg(test)]; --workspace adds the multiplayer crate
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
@@ -30,141 +41,37 @@ unconditionally because nothing attaches Bevy's `Dlss` component —
 compile-time capability probes, and CI compiles `raytracing` on every pull
 request so that at least stays true.
 
-### Verifying rendering changes
+## Verifying a change
 
-There is no way to eyeball this game from a terminal except the capture harness.
-`core::capture` renders to an offscreen texture (window capture returns black when
-the OS never composited the window), holds a few warmup frames, writes a PNG and
-exits:
+There is no way to eyeball this game from a terminal except by instrument,
+and every instrument has a protocol that is easy to get subtly wrong. The
+protocols are carried in full by the agents below and by
+`.claude/rules/verification.md`; these are the parts that get broken:
 
-```sh
-cargo run -- --screenshot shots/street.png --at-node 300 --eye 1.7 --hour 21.5
-cargo run -- --screenshot shots/city.png --at 0,620,900 --look 0,20,-200 --stream-radius 1800
-cargo run -- --screenshot shots/cast.png --lineup --hour 12
-cargo run -- --screenshot shots/minga.png --city minga --at-node 300 --hour 12
-tools/shoot.sh                 # the whole battery of framings into shots/
-tools/shoot.sh --only street,night --out shots/after
-```
+- **Capture** — `--screenshot` and `tools/shoot.sh` render one *posed* frame
+  offscreen and exit. Shoot the same framings before and after, and pin
+  `--hour` on anything compared: the clock and the weather run together.
+  `--city` builds a style the player has not selected, `--lineup` is the cast's
+  showroom, and the seed a capture builds is the *persisted* one, not the code
+  default.
+- **Patrol** — `--patrol <seconds>` plays instead of posing while `Watch` takes
+  the city's vital signs; `--film <dir>` puts a camera on it. It is the only
+  instrument for what goes wrong only while the game is running.
+- **Frame time** — `--fps-log` means `--release`, `--frames 200`, two or three
+  runs, and both commits built back to back and measured in the same minute.
+  Each of those has a false reading in this repository's history behind it.
+- **Physics** — `bounce::testing::physics_app` is a headless Avian world built
+  the way the real one is; drive it with `TimeUpdateStrategy::ManualDuration`,
+  over `Gait::ALL` (`.claude/rules/physics.md`).
+- **Audio** — `--audition <dir>` writes the processed bank as WAVs and exits
+  without starting Bevy (`.claude/rules/audio.md`).
+- **Capture mode is not just a camera.** `core::capture::is_capture_mode()`
+  gates the dev panel off and mutes audio, and anything that would spoil an
+  unattended shot should check it too.
 
-### Letting the game find its own bugs
-
-`core::capture` renders one *posed* frame. `core::patrol` plays instead:
-
-```sh
-cargo run --release -- --patrol 120        # two minutes, then a report
-cargo run --release -- --patrol 60 --city minga
-```
-
-It writes `ActionState<Action>` directly — gameplay has never read a key, only
-the action — and walks the city junction by junction, taunting, whistling and
-taking a car, while `Watch` takes the city's vital signs once a second: the
-player's position and speed, moods outside their range, entity and *asset*
-counts that only ever climb (the documented leak: a mesh built in the streaming
-path is added afresh every time a chunk comes back), audio sources being mixed,
-frame hitches, and anything that belongs on the road found above the rooftops.
-A patrol ending with no complaints is the point. It found the parked cars that
-were being fired into the sky by the kerb collider arriving inside them.
-
-`--lineup` stands one of every archetype in a row and points the camera down
-it — the cast's `--showroom`. The rare archetypes are the ones whose costume
-goes wrong and the ones a street framing cannot be relied on to contain, so
-"shoot a street and hope" is not a check on them.
-
-`tools/shoot.sh` exists so a rendering change is judged against the last render
-rather than against a memory of it: shoot the same framings before and after.
-Pin `--hour` on any shot being compared — the clock and the weather run together,
-so an unpinned shot drifts its own sky between runs. `--city` builds a given
-`CityStyle` instead of the persisted one, which is the only way to shoot a
-postcard the player has not selected. Full flag table is in README.md.
-
-`--film <dir>` records instead of posing: a numbered frame every time the
-encoder is free, for as long as the run lasts. Paired with `--patrol`, which
-drives the player, it is the game playing itself with a camera on it, and the
-frames assemble into a video with `ffmpeg`. It is the only instrument that
-catches what is wrong only while the game is *running* — the first take found
-an audio-source leak, two parked cars inside each other and a patrol that could
-not walk round a building.
-
-`--fps-log` reports median, p95 and worst frame time — over the *warmup* frames,
-and the default warmup is short enough that it is timing a half-built scene.
-Always pass `--frames 200` for a number worth quoting: the same street framing
-reads about 19ms over the default window and about 28ms once everything is
-resident and the crowd is up. Mixing the two windows has produced two false
-readings already — a "free" change and a "2ms regression" that were both noise —
-so compare like with like, and rerun two or three times, because the spread over
-a settled window is under half a millisecond and over the default one is not.
-
-Compare like with like in *time* as well. The same binary and the same framing
-measured 30.4 ms with the machine cool and 35.5 ms twenty minutes later, which
-is bigger than most changes worth making; a before/after taken half an hour
-apart is measuring the fan. Build the old commit and the new one back to back
-and shoot them in the same minute — `git stash -u`, `git checkout <base>`,
-`cargo build --release`, measure, come back. It costs three minutes of
-compiling and it is the difference between "eleven percent slower" and "twelve
-percent faster", both of which this repository has now reported about the same
-change.
-
-The seed a capture builds is the *persisted* one from the player's options file,
-not the code default — so a position probed in a citygen unit test is a position
-in a different city. Probe with a temporary `info!` in the spawn path instead.
-
-Capture mode is not just a camera: `core::capture::is_capture_mode()` gates the
-dev panel off (`ui`) and mutes audio, and several systems check it. Anything that
-would spoil an unattended shot should check it too.
-
-### Verifying physics without a window
-
-`bounce::testing::physics_app` is a headless Avian world built the way
-`world::mod` builds the real one — the same interpolation, the same
-`DefaultRestitution` and solver settings — with `ground()` and `kerb()` to put
-something under a body and `finish()` to do what `run()` would. It is the only
-instrument here that needs neither a GPU nor a window, and it answers the
-questions a screenshot cannot: where the low point of a hop is, how long a body
-takes to come down off a kerb, whether a facing written every frame costs a
-body its walk. Drive it with `TimeUpdateStrategy::ManualDuration`, and pass a
-frame *shorter* than the tick to ask what happens above the tick rate, which is
-where interpolation does the most work and where two of the bugs it has caught
-only exist.
-
-Two rules it enforces that nothing else could. Physics tests run over
-`Gait::ALL`, because the default is walking and every physics test used to
-drive the bouncing city by leaving `hop_scale` at its constructed 1.0. And
-`initialises(system)` is four lines that trip Bevy's B0001 query-conflict check
-without any of the resources the system reads — the check panics at first run,
-not at compile time, and the capture harness was the only thing catching it.
-
-### Verifying audio changes
-
-Same problem, same answer. `--audition <dir>` writes every sound in the bank to
-a WAV and exits without starting Bevy at all, so a curse can be listened to
-without finding a flummi cross enough to say one. `audio::bank::REGISTER` is
-what it enumerates — the one list of every sound, its peak and its shape, which
-the loader and the fetch-script sync tests read too, so a sound cannot exist in
-one of them and be forgotten by another. What is auditioned is the *processed*
-buffer: every recording is held to the bank's rules mechanically at load (mono
-mix, resample, fade, normalise, seam-wrap), and the load pipeline itself is
-tested with fixture files. A register entry with no recording on disk prints
-as MISSING and plays in-game as a short silence with a warning.
-
-### Cutting a release
-
-```sh
-git tag v0.1.0 && git push origin v0.1.0   # the tag must match Cargo.toml's version
-```
-
-`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the
-gate, fetches the sound bank once, builds Windows x64, macOS arm64 and Linux
-x64 — the last on Ubuntu 22.04, because the build runner's glibc is the oldest
-one the binary will start on — and drafts a release; publishing it is the human
-sign-off. An archive is the source tree's layout: the binary beside the whole
-of `assets/`, which is the shaders and Landshüpf's atlas, plus the recorded
-bank, with the scanned textures left to the fetch script it also carries.
-Each build unpacks its own archive and runs `--audition` and
-`--survey --city landshuepf` on it with the checkout's `assets/` moved aside,
-because `root()` prefers the manifest directory and would otherwise hide a
-file the archive forgot — the packaging step once copied the shaders by name
-and would have shipped Landshüpf as the generator. `workflow_dispatch` is the
-rehearsal: everything except the release.
+`cargo test`, `--survey` and `--audition` never open a window; `--screenshot`,
+`--patrol`, `--film` and `--fps-log` need a GPU. The full flag table is in
+README.md.
 
 ## The instruments have agents
 
@@ -172,39 +79,59 @@ Every instrument above — the gate, the camera, the patrol, the survey, the
 audition — is also a subagent in `.claude/agents/`, because each one produces
 either thousands of lines of compiler output or a protocol that is easy to get
 subtly wrong, and both are better kept out of the main conversation. Delegate to
-them; they carry the discipline that the section above spends its length
-explaining.
+them; they carry the discipline that the section above only summarises.
 
 | Agent | Reach for it when |
 |---|---|
 | `rust-verify` | anything changed — fmt, clippy `-D warnings`, tests, the build CI does separately |
-| `code-explorer` | the question sweeps several of the 123 modules and you want the answer, not the files |
+| `code-explorer` | the question sweeps several of the 130-odd modules and you want the answer, not the files |
 | `trap-reviewer` | before offering a change: the diff against the traps below and the conventions that are rules |
 | `town-surveyor` | `world` moved — the numeric scorecard, the atlas and the bake; no window needed |
 | `render-shooter` | anything visible moved — the same framings before and after, and a look at the PNGs |
 | `patrol-warden` | it can only go wrong while running — the patrol, the Watch, `--film` |
 | `audio-keeper` | the bank — the audition, and `REGISTER` against both fetch scripts and `CREDITS.md` |
 | `perf-scout` | a frame-time claim, held to the protocol that keeps it from being noise |
-| `docs-steward` | the written record, starting with the `CLAUDE.md`/`AGENTS.md` twins |
+| `docs-steward` | the written record — this file, the `.claude/rules/` chapters, README, CREDITS — and the Codex copies of these agents |
 
-`/ship` runs the three that every change owes — verify, traps, docs — in
-parallel, and ends with what remains *unverified*. The rest are `/verify`,
-`/shot`, `/patrol`, `/survey`, `/audition`, `/traps`, `/perf`, `/docs-sync` and
-`/setup`.
+The agents are written once, in `.claude/agents/`. `.codex/agents/` holds the
+same agents for Codex — generated from those files by `tools/check-docs.sh
+--fix` and held to them by the same script, so edit the Markdown, never the
+TOML. In Claude Code each agent is also a slash command; `CLAUDE.md` lists
+them.
 
-Two scripts hold up the parts that used to be discovered the hard way:
+Three scripts hold up the parts that used to be discovered the hard way:
 
 ```sh
 tools/dev-setup.sh          # the four things that stop a clone dead, none of them loudly
-tools/check-docs.sh         # CLAUDE.md and AGENTS.md are twins; --fix rewrites the second
+tools/check-docs.sh         # this file, CLAUDE.md, the rules and both agent rosters agree
+tools/base-worktree.sh REF  # the base of a before/after, checked out beside the tree
 ```
 
-`tools/dev-setup.sh` runs at session start (see `.claude/settings.json`) and
-reports the one fact that decides which instrument is even available: whether
-there is a GPU. `cargo test`, `--survey` and `--audition` never open a window and
+`tools/dev-setup.sh` runs at session start (see `.claude/settings.json` and
+`.codex/hooks.json`) and reports the one fact that decides which instrument is
+even available: whether there is a GPU. `cargo test`, `--survey` and `--audition` never open a window and
 work anywhere; `--screenshot`, `--patrol`, `--film` and `--fps-log` need an
 adapter, and a container has none until something installs one. An unrun check is
 never a passed one — say which it was.
+
+## Read before you touch
+
+Some chapters matter only to some files. They live beside the rest of the agent
+configuration, in `.claude/rules/`, and Claude Code loads each one by itself the
+first time a session reads a file its `paths:` names. Every other agent: open
+the chapter before you change those files. `tools/check-docs.sh` keeps this
+table, the chapters and their paths in agreement — the first column *is* each
+chapter's `paths:`.
+
+| Before you change | Read |
+|---|---|
+| `src/world/{atlas,streetside,trading,streetname,roadsign,buildings,signage}.rs`, `tools/{bake-city.py,fetch-city.sh,fetch-overture.py}`, `assets/cities/**` | `.claude/rules/atlas.md` — a postcard that is a real town, and a mapped building that is several boxes |
+| `src/world/{church,interior}.rs` | `.claude/rules/church.md` — the walk-in church, and the three things a solid nave was hiding |
+| `src/world/{river,bridge}.rs` | `.claude/rules/bridge.md` — why a bridge is free, and what that cannot give you |
+| `src/core/{capture,patrol,survey}.rs`, `tools/shoot.sh`, `src/render/**` | `.claude/rules/verification.md` — the capture, patrol, film and frame-time protocols in full |
+| `src/bounce/**`, `src/vehicle/{controller,impact,spec}.rs`, `src/player/on_foot.rs`, `src/world/mod.rs` | `.claude/rules/physics.md` — the headless Avian world, and the two rules it enforces |
+| `src/audio/**`, `tools/fetch-materials.{sh,bat}`, `CREDITS.md` | `.claude/rules/audio.md` — the audition, and what is held to the bank's rules at load |
+| `.github/workflows/release.yml`, `.github/release-notes.md`, `Cargo.toml` | `.claude/rules/release.md` — the tag, the gate, the three archives and what each one is checked for |
 
 ## Architecture
 
@@ -226,15 +153,6 @@ bevy_egui, saves are RON.
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
 | `audio` | The recorded sound bank (`bank::REGISTER`), the load-time discipline (`files`), triggers, the master limiter, the WAV audition tool |
 | `save` | RON quick save / load |
-
-### What this game is
-
-It was an open-world crime sandbox and it is now a comedy one. Everything is
-made of rubber and bounces; there are no weapons, no police, no health and no
-fail state. The verb is provocation — a raspberry and a whistle — and the
-readout is a mood that every citizen carries, wears as a face, says out loud
-and catches off the neighbours. When a change has to break a tie, break it
-towards the joke.
 
 ### Determinism is the load-bearing constraint
 
@@ -295,187 +213,6 @@ CREDITS.md before touching it.
 Anything a style decides belongs on `CityStyle`, not as a `match` at the use
 site; the layout must stay a pure function of `(seed, style)` or the chunks
 stop respawning the same city.
-
-### A postcard can also be a real town
-
-`CityStyle` is a tuning of the generator — heights, a ceiling over them
-(`height_cap`), plot width, gables, palette, whether the walls are rendered
-(`rendered`) or faced with a scanned grain, how many spires. Anything a style
-decides belongs on `CityStyle` rather than as a `match` at the use site, and
-`heights` in particular exists because the generator and the atlas both draw
-building heights and had each been applying `height_scale` on their own.
-
-A style may also name a baked OSM extract (`atlas()`), and Landshüpf does: the
-road graph is the real Landshut, the blocks are empty, and `streetside::lots`
-marches plots along every street instead. A plot there is placed square to *its*
-street and therefore at some arbitrary angle to every other one, which is why
-`streetside::Oblong` tests candidates against the road corridors with a
-separating-axis test rather than a box overlap. Street names ride beside the
-layout in `atlas::Signposts` — a name is a fact about a street and an edge is
-one segment of one.
-
-The atlas also carries the town's real buildings, each polygon cut at bake time
-into the rectangles that cover it (`Footprint::group` gathers the parts of one
-building back into one `Block` sharing a height, a palette and a kind — an L is
-two parts, a courtyard block four, and `streetside::lots` files every part), the
-roof shape where the map recorded one (`Building::roof`), and the shape of the
-ground (`atlas::Relief`, two grids of metres above the valley floor off the
-Copernicus elevation model). The bake is `tools/bake-city.py`; it reads Overture
-Maps for the polygons and the DEM tile for the relief because Overpass cannot
-supply either, and a bake of its own output is its own output — `--from-ron`
-regenerates the buildings and the relief from a committed file, so do not add a
-step that measures something the previous bake already moved (the band tidy in
-`tidy_bands` is the model: it cuts a looped band to its spine and re-attaches
-the side streets, and a second pass finds no loop and nothing loose). The tests
-on the committed file fail when the file is there and does not load; they used
-to return early, which is how a bake that wrote `group: 0` where the runtime
-wanted `Some(0)` passed every test while the game quietly fell back to the
-generator.
-
-An OSM way can be a *loop* — the Altstadt is one closed way round the market —
-and after `merge_parallel` and the recentring both of its lanes lie on one
-centreline, so the runtime would draw every edge twice and lay a pavement
-across the carriageway at each turn-round. Look at the band's polyline before
-trusting a ribbon artefact to the renderer: `runs_of` in the bake is the test.
-
-### One mapped building is several boxes
-
-The bake cuts a real building's polygon into up to six rectangles sharing a
-`group` — an L is two, a courtyard block four — and `atlas::footprints` emits
-every one of them as a `Building`, because every one of them is a wall that has
-to be drawn. Only one of them is *the* building, and `Building::annex` says
-which: the first part the bake emits is the largest, and everything a building
-has exactly one of hangs off that. The sign over the door, the door, the room
-behind it, the painted civic ground storey, the advert on the blind flank, and
-the whole structure of a kind that owns one (`BuildingKind::owns_its_structure`
-— church, gate, tower, stadium, garage). Before that existed the Stadtresidenz
-wore six identical RATHAUS plaques and the one hotel in the Altstadt advertised
-itself under four names, one per wing.
-
-Two rules ride with it. A part thinner than `buildings::SLIVER` is a jog in a
-wall rather than a wing — 490 of Landshut's 4672 parts have a side under three
-metres — so it keeps its wall and takes a flat deck instead of growing its own
-gable out of the side of the roof next to it. And `streetside::lots` drops parts
-one at a time, so whatever survives, the largest survivor is promoted back out
-of `annex`: a building whose principal part stood in a road was otherwise left
-as wings with no door and no name.
-
-A named landmark wears its own name (`signage::SignKit::landmark`), not its
-kind's plaque. The generic plaques are written for an invented city — every
-church in it is SANKT BOING, every civic building is RATHAUS — and Landshut's
-six town-hall-shaped buildings are a palace, a ministry and three courts, none
-of which is the Rathaus.
-
-What a landmark *is* comes from `KNOWN_LANDMARKS` in `tools/bake-city.py`, and
-that register is a decision rather than a measurement: it changes more often
-than the map does. `--relabel` re-applies it to the committed atlas by line
-surgery — filling a `kind` the source left blank, overriding a height that has
-a citation, touching nothing else — so a name arriving on the list costs one
-diff hunk rather than a re-download of Overpass, Overture and a DEM tile. It is
-idempotent, it measures nothing (see the `tidy_bands` rule above), and a Rust
-test fails if the committed file has not had it run.
-
-`--relabel` is one of three line-surgery modes, and they share that contract:
-each writes one kind of fact onto a committed atlas, fills rather than
-overrules, measures nothing that is written down, and writes the same file
-twice.
-
-```sh
-tools/bake-city.py --relabel assets/cities/landshut.ron
-tools/bake-city.py --reflag  assets/cities/landshut.ron roads.json
-tools/bake-city.py --rename  assets/cities/landshut.ron built.json
-```
-
-The other two exist because the bake has always held tags it never wrote down.
-One thing the map says that the game does not repeat: what the shops are
-called. `--rename` takes the OSM `name` tag so the Finanzamt and the
-Stadtresidenz wear their own, and the same tag names living companies and, in
-one case, a private person. `world::trading` sits between the extract and the
-painted sign: the town is renamed to Landshüpf wherever a name mentions it,
-and a register replaces the forty-five trading names in the committed atlas
-with invented ones. Both halves of the decision are written out — the renamed
-and the kept — and a test holds their union against the committed file
-exactly, so a re-bake that brings a new business into town fails until
-somebody has decided what the game calls it. The civic and the historic keep
-their real names, which is the whole point of reading a real map.
-
-`--reflag` takes the roads dump's `oneway` and `highway=pedestrian`: nine per
-cent of Landshut's road length is one-way and 4.8 km of it is a
-Fussgaengerzone, the Altstadt included, and `roadgraph::Rules` is what
-`ai::traffic`, `vehicle::spawn` and `world::roadsign` read. `--rename` takes
-the buildings dump's `name` and its `kind_of` tags, which Overture — where the
-footprints come from — does not carry: 81 named buildings became 171, and the
-Finanzamt, the Galeria and the Sparkasse wear their own names.
-
-Both match by geometry rather than by identity, because the bake keeps no OSM
-ids: a street by walking its polyline and letting the samples vote, a building
-by containment with a size guard in *both* directions — a forty-square-metre
-`man_made=tower` next door will otherwise hand its tags to the six-hundred-
-metre hall whose middle lands beside it, and the runtime draws a thirty-seven-
-metre pyramid of brick. A name or a kind is written per *building*, never per
-part: one wing named and its siblings blank is two buildings that touch.
-
-### A church you can walk into
-
-`world::interior` has built real rooms behind real doors for a while — floor,
-lined walls, an emissive ceiling, furniture with colliders and one member of
-staff with a full set of feelings. Churches were not on that path:
-`BuildingKind::enterable()` names four shop-shaped kinds, and `world::church`
-raised its nave as one solid box whose only door was a slab of painted shadow
-with a collider in it.
-
-They are on it now, and the route is their own rather than `enterable()`'s,
-because a church's door is its own architecture: you come in under the west
-tower. `church::spawn` draws the nave and the tower's ground storey as
-*shells* — four walls and a vault, with the pierced face built as two jambs
-and a lintel — and hands back a `Nave` that `world::buildings` furnishes
-through the same `interior::spawn` the shops use. `Doorframe` grew `clear`,
-`head` and `opening` for it: a shopfront's glass runs to the ceiling so its
-room height and its doorway are one number, and a basilica's are 13 m and
-4.6 m.
-
-Three things were invisible while the nave was solid masonry and are not any
-more, and all three are the same lesson:
-
-- **The pitched roof hangs into the room.** It is a cube turned 45° about the
-  ridge, so its lower vertex drops as far below the eaves as the ridge stands
-  above them — fifteen metres on St. Martin. The vault goes under it, with
-  `VAULT_CLEARANCE` to spare.
-- **Two of the tower's four corner buttresses stand inside the nave.** The
-  tower's back corners are past the nave's front wall by construction. A
-  walk-in church drops them; a west tower's rear buttresses are absorbed into
-  the nave anyway.
-- **The stone vault and the plaster ceiling lining were laid at the same
-  height**, two down-facing faces in one plane — `world::layer`'s rule, which
-  turns out to apply indoors too.
-
-`Shape::of` is the pure function all the proportions come out of, so every one
-of those is a `cargo test` rather than a screenshot. What it cannot check is
-what the room looks like; that is `--screenshot` with the camera inside it.
-
-### A bridge cannot be raised
-
-`world::river`'s trick is that a bridge is free: the water is laid at
-`layer::WATER`, one millimetre off the grass and thirteen under the lowest
-carriageway, so every street that crosses it is already drawn over it. Nothing
-finds the crossing, cuts the water or ramps anything up.
-
-What that cannot give you is a bridge you can *see*. The deck is flush — it has
-to be, because `Terrain::height` is exactly zero wherever anything is built —
-so there is no soffit, no arch and nowhere to hang one: anything under the deck
-is under thirteen millimetres of water. `world::bridge` therefore builds
-upward and into the river — parapet, lamp standards, and the pier heads that
-would break the surface — and that is the whole of what a low bridge shows from
-a bank anyway.
-
-The crossings are worked out once (`bridge::crossings`) because three things
-need the same answer, and two of them were wrong before there was a list: the
-bank wall was being laid straight across every deck (Landshut's six bridges
-each carried two 0.9 m stone walls over the carriageway, colliderless, so the
-traffic drove through them and nothing complained), and the river's trampoline
-took `BOUNCE_LEVEL` from the canal — whose water is at sixty millimetres, not
-one — which stood a 0.95-restitution collider two centimetres *above* the road.
-Every crossing of the Isar was a launch ramp.
 
 ### The traps
 
@@ -644,3 +381,8 @@ declaration order.
   `0.3..=1.0`). Add new sounds to `audio::bank::REGISTER` and to both fetch
   scripts; the register is what the loader, the audition tool and the
   fetch-sync tests all enumerate.
+- The agent instructions are one copy. This file is the source; `CLAUDE.md`
+  imports it and adds only what is Claude Code's alone; a chapter that matters
+  to a few files goes to `.claude/rules/` with `paths:` and a row in *Read before
+  you touch*. `tools/check-docs.sh` holds all of it, including a 32 KiB ceiling
+  on this file — the size at which Codex stops reading it.

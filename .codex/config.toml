@@ -1,0 +1,17 @@
+# Codex's half of the agent harness; .claude/settings.json is Claude Code's.
+# Both run the same hooks (.codex/hooks.json here) and the same agents
+# (.codex/agents/, generated from .claude/agents/ by tools/check-docs.sh --fix).
+#
+# AGENTS.md is kept under Codex's default `project_doc_max_bytes` (32 KiB) by
+# tools/check-docs.sh rather than by raising the cap in this file. A project
+# file only counts once the project is trusted, and the budget is what keeps
+# the always-read instructions short for every agent, not only this one. The
+# chapters that matter to a few files are in .claude/rules/; AGENTS.md's
+# *Read before you touch* says which to open before changing what.
+
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CARGO_TERM_COLOR = "never"
+RUST_BACKTRACE = "1"
