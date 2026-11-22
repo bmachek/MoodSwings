@@ -52,7 +52,7 @@ rodio = { version = "0.22", default-features = false, features = [
     "mp3",
 ] }
 leafwing-input-manager = "0.21"
-bevy_egui = "0.42"
+bevy_egui = "0.43"
 rand = "0.10"
 rand_chacha = "0.10"
 serde = { version = "1", features = ["derive"] }
