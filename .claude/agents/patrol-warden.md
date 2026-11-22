@@ -3,6 +3,7 @@ name: patrol-warden
 description: Runtime QA. Drives the game with cargo run --release -- --patrol, reads the Watch report, and separates a new complaint from the documented ones. Use after changes to ai, bounce, vehicle, streaming, mood or anything spawned per chunk — the class of bug that only exists while the game is running. Needs a GPU; say so if there is none.
 tools: Bash, Read, Grep, Glob
 model: opus
+effort: high
 ---
 
 `core::capture` renders one posed frame. You play instead.

@@ -1,7 +1,8 @@
 ---
+name: setup
 description: Make this checkout able to build and verify, and say what it still cannot do
 argument-hint: "[--sounds] [--gpu] [--report]"
-allowed-tools: Bash(tools/dev-setup.sh:*), Bash(tools/check-docs.sh:*), Read
+allowed-tools: Bash(tools/dev-setup.sh:*), Bash(tools/check-docs.sh:*), Bash(claude plugin install:*), Read
 ---
 
 Run `tools/dev-setup.sh $ARGUMENTS` and relay what it says.
@@ -11,6 +12,12 @@ older than `rust-version` in Cargo.toml, the ALSA and libudev headers Bevy links
 on Linux, the *required* CC0 sound bank (`--sounds` fetches it), and whether
 there is any Vulkan adapter at all (`--gpu` installs the software one). It fixes
 what it can fix and prints the commands for what it cannot.
+
+Then the one thing that is Claude Code's own: `.claude/settings.json` enables
+the `rust-analyzer-lsp` plugin, which needs `rust-analyzer` on `PATH` (`command
+-v rust-analyzer`; `rustup component add rust-analyzer` if not) and one
+`claude plugin install rust-analyzer-lsp@claude-plugins-official --scope
+project`. Say whether it is there.
 
 Afterwards, state plainly which instruments this session has: `cargo test`,
 `--survey` and `--audition` need no window and always work; `--screenshot`,

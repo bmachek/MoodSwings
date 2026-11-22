@@ -1,4 +1,8 @@
 {
+  "env": {
+    "CARGO_TERM_COLOR": "never",
+    "RUST_BACKTRACE": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(cargo fmt:*)",
@@ -11,19 +15,37 @@
       "Bash(cargo run -- --survey:*)",
       "Bash(cargo run -- --audition:*)",
       "Bash(cargo run -- --screenshot:*)",
+      "Bash(cargo run -- --patrol:*)",
       "Bash(cargo run --release -- --screenshot:*)",
       "Bash(cargo run --release -- --patrol:*)",
       "Bash(cargo run --release -- --survey:*)",
+      "Bash(rustfmt:*)",
       "Bash(tools/shoot.sh:*)",
       "Bash(tools/dev-setup.sh:*)",
       "Bash(tools/check-docs.sh:*)",
+      "Bash(tools/base-worktree.sh:*)",
       "Bash(python3 tools/check-multiplayer.py:*)",
+      "Bash(python3 tools/check_docs.py:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify section:*)",
+      "Bash(graphify update:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
       "Bash(git branch:*)",
       "Bash(git stash list:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
       "Bash(rg:*)",
       "Bash(grep:*)",
       "Bash(find:*)",
@@ -35,14 +57,22 @@
       "Bash(sed -n:*)",
       "Bash(awk:*)",
       "Bash(diff:*)",
+      "Bash(jq:*)",
       "Bash(pkg-config:*)",
       "Bash(rustc --version)",
       "Bash(cargo --version)"
+    ],
+    "ask": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git stash drop:*)",
+      "Bash(git stash clear:*)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore:*)"
     ]
-  },
-  "env": {
-    "CARGO_TERM_COLOR": "never",
-    "RUST_BACKTRACE": "1"
   },
   "hooks": {
     "SessionStart": [
@@ -54,6 +84,38 @@
             "timeout": 600
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard compact",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard search",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graphify hook-guard read",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -62,11 +124,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/tools/check-docs.sh --hook",
-            "timeout": 20
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/tools/agent_hook.py post-edit",
+            "timeout": 40
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/tools/agent_hook.py stop",
+            "timeout": 600,
+            "statusMessage": "clippy gate (what CI runs)"
           }
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": true
   }
 }
