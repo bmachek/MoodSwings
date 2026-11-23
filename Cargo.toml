@@ -40,7 +40,7 @@ bevy = { version = "0.19", features = [
     # `core::settings` to be written to `saves/options.ron`.
     "serialize",
 ] }
-avian3d = "0.7"
+avian3d = "0.8"
 # Already in the tree through bevy_audio; declared directly for its file
 # decoders, so `audio::files` can read the fetched CC0 recordings (see
 # tools/fetch-materials.sh) in whatever container they were published in.
@@ -51,7 +51,7 @@ rodio = { version = "0.22", default-features = false, features = [
     "vorbis",
     "mp3",
 ] }
-leafwing-input-manager = "0.21"
+leafwing-input-manager = "0.22"
 bevy_egui = "0.42"
 rand = "0.10"
 rand_chacha = "0.10"
